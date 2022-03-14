@@ -1,0 +1,23 @@
+.hg
+.hgtags
+.idea
+.DS_Store
+.lsp
+.clj-kondo
+.vscode
+tmp
+.tmp
+target*
+deploy*
+distribution*
+environments*
+
+# include
+conf/*
+environments/*/secrets/
+environments/*/target/
+environments/*/distribution/
+
+# exclude
+# exclude
+!conf/.gitkeep
