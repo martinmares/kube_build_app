@@ -105,7 +105,7 @@ module KubeBuildApp
       result = content
       @vars.each do |k, v|
         to_replace = v
-        result = result.gsub(/{{(.*)#{k}(.*)}}/, to_replace)
+        result = result.gsub(/{{(.*?)#{k}(.*?)}}/, to_replace)
       end
 
       result
