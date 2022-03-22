@@ -1,7 +1,7 @@
 module KubeBuildApp
   class Asset
 
-    attr_reader :digest, :file_name, :to, :content, :transform
+    attr_reader :digest, :file_name, :to, :content, :transform, :nfs, :server, :path
 
     require "digest"
     require "awesome_print"
@@ -23,8 +23,15 @@ module KubeBuildApp
       @transform ||= false
       @temp = content["temp"]
       @temp ||= false
+      @nfs = content["nfs"]
+      @nfs ||= false
+      if nfs?
+        @server = content["server"]
+        @path = content["path"]
+      end
       @content = File.read(@file_name) if @file_name
       @content = @to if temp?
+      @content = "#{@server}#{@path}" if nfs?
       if @binary
         content_with_env_applied = @content
       else
@@ -76,12 +83,24 @@ module KubeBuildApp
       @temp
     end
 
+    def nfs?
+      @nfs
+    end
+
     def self.build_container_assets(assets)
       result = Array.new
       assets.each do |asset|
         if asset.temp?
           result << {
             "name" => asset.simple_name
+          }
+        elsif asset.nfs?
+          result << {
+            "name" => asset.simple_name,
+            "nfs" => {
+              "server" => asset.server,
+              "path" => asset.path
+             }
           }
         else
           result << {
@@ -104,6 +123,11 @@ module KubeBuildApp
             "mountPath" => asset.to,
             "name" => asset.simple_name,
           }
+        elsif asset.nfs?
+          result << {
+            "mountPath" => asset.to,
+            "name" => asset.simple_name,
+          }
         else
           result << {
             "mountPath" => asset.to,
@@ -118,7 +142,7 @@ module KubeBuildApp
 
     def self.build_assets(assets, append_path)
       assets.each_with_index do |asset, i|
-        asset.write(i, append_path) unless asset.temp?
+        asset.write(i, append_path) unless (asset.temp? || asset.nfs?)
       end
     end
 
