@@ -1,7 +1,7 @@
 module KubeBuildApp
   class Asset
 
-    attr_reader :digest, :file_name, :to, :content, :transform, :nfs, :server, :path
+    attr_reader :digest, :file_name, :to, :content, :transform, :nfs_server, :path
 
     require "digest"
     require "awesome_print"
@@ -23,10 +23,8 @@ module KubeBuildApp
       @transform ||= false
       @temp = content["temp"]
       @temp ||= false
-      @nfs = content["nfs"]
-      @nfs ||= false
+      @nfs_server = content["nfs-server"]
       if nfs?
-        @server = content["server"]
         @path = content["path"]
       end
       @content = File.read(@file_name) if @file_name
@@ -84,7 +82,7 @@ module KubeBuildApp
     end
 
     def nfs?
-      @nfs
+      @nfs_server
     end
 
     def self.build_container_assets(assets)
@@ -98,7 +96,7 @@ module KubeBuildApp
           result << {
             "name" => asset.simple_name,
             "nfs" => {
-              "server" => asset.server,
+              "server" => asset.nfs_server,
               "path" => asset.path
              }
           }
