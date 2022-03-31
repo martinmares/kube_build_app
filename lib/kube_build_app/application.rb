@@ -7,8 +7,16 @@ module KubeBuildApp
     require_relative "container"
 
     DEFAULT_APP_LABEL = "app.kubernetes.io/name"
+    DEFAULT_STRATEGY = {
+      "rollingUpdate" => {
+        "maxSurge" => "25%",
+        "maxUnavailable" => "25%"
+      },
+      "type" => "RollingUpdate"
+    }
 
-    attr_reader :name, :file_name, :content, :containers, :replicas, :registry, :shared_assets, :env, :labels
+
+    attr_reader :name, :file_name, :content, :containers, :replicas, :registry, :shared_assets, :strategy, :env, :labels
 
     def initialize(env, shared_assets, file_name)
       if File.file? file_name
@@ -17,6 +25,22 @@ module KubeBuildApp
         @content = YAML.load_file(@file_name)
         @name = @content["name"]
         @disable_shared_assets = @content["disable_shared_assets"]
+
+        if @content.has_key? "strategy"
+
+          case @content["strategy"]
+          when "recreate"
+            @strategy = {
+              "type" => "Recreate"
+            }              
+          else
+            @strategy = DEFAULT_STRATEGY
+          end
+
+        else
+          @strategy = DEFAULT_STRATEGY
+        end
+
         @disable_shared_assets ||= false
         if @disable_shared_assets
           @shared_assets = []
@@ -97,6 +121,7 @@ module KubeBuildApp
             DEFAULT_APP_LABEL => app.name
           }
         },
+        "strategy" => app.strategy,
         "template" => {
           "metadata" => {
             "labels" => {
