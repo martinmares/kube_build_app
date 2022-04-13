@@ -18,9 +18,10 @@ module KubeBuildApp
 
     SHARED_ASSETS_FILE = "shared.assets.yml"
 
-    def initialize(name, target_dir)
+    def initialize(name, target_dir, summary)
       @name = name
       @target_dir = target_dir
+      @summary = summary
       @vars = Hash.new
       load_env_vars()
       make_12_factor()
@@ -28,6 +29,10 @@ module KubeBuildApp
 
     def environment_dir
       "#{ENVIRONMENTS_DIR}/#{@name}"
+    end
+
+    def summary?
+      @summary
     end
 
     def target_dir

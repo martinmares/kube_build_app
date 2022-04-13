@@ -8,4 +8,5 @@ gem "json"
 gem "optimist"
 gem "fileutils"
 gem "paint"
-
+gem "terminal-table"
+gem "bytesize"
