@@ -61,7 +61,7 @@ module KubeBuildApp
               cpu_min_cores = normalize_cpu(cpu_min)
               cpu_max_cores = normalize_cpu(cpu_max)
 
-              rows << [container.name, print_cpu(cpu_min_cores), print_cpu(cpu_max_cores), print_mem(mem_min_mibytes), print_mem(mem_max_mibytes)]
+              rows << [app.name, container.name, print_cpu(cpu_min_cores), print_cpu(cpu_max_cores), print_mem(mem_min_mibytes), print_mem(mem_max_mibytes)]
               sum_min_mib += mem_min_mibytes
               sum_max_mib += mem_max_mibytes
               sum_min_mb += mem_min_mbytes
@@ -70,16 +70,16 @@ module KubeBuildApp
               sum_max_cpu_cores += cpu_max_cores
             end
           end
-          table = Terminal::Table.new :headings => ["Container name", "Cpu (min)", "(max)", "Mem (min)", "(max)" ], :rows => rows
+          table = Terminal::Table.new :headings => ["App name", "Container", "Cpu (min)", "(max)", "Mem (min)", "(max)" ], :rows => rows
           puts table
-          puts "Memory:"
+          puts Paint["Memory", :yellow]
           puts " => req: #{Paint[sprintf("%10.2f", sum_min_mib), :green]} [MiB]"
-          puts " => lim: #{Paint[sprintf("%10.2f", sum_max_mib), :red]} [MiB]"
+          puts " => lim: #{Paint[sprintf("%10.2f", sum_max_mib), :magenta]} [MiB]"
           puts " => req: #{Paint[sprintf("%10.2f", sum_min_mb), :green]} [MB]"
-          puts " => lim: #{Paint[sprintf("%10.2f", sum_max_mb), :red]} [MB]"
-          puts "CPU:"
+          puts " => lim: #{Paint[sprintf("%10.2f", sum_max_mb), :magenta]} [MB]"
+          puts Paint["CPU", :yellow]
           puts " => req: #{Paint[sprintf("%10.2f", sum_min_cpu_cores), :green]} [core/s]"
-          puts " => lim: #{Paint[sprintf("%10.2f", sum_max_cpu_cores), :red]} [core/s]"
+          puts " => lim: #{Paint[sprintf("%10.2f", sum_max_cpu_cores), :magenta]} [core/s]"
         else
           puts "Build #{Paint[@shared_assets.size, :green]} shared asset/s"
           Asset::build_assets(@shared_assets, "/assets/shared")
