@@ -137,12 +137,21 @@ module KubeBuildApp
 
 =end
 
-    def self.build_health(health)
+    def self.build_health(health, type)
       if health.has_key? "http"
         http = health["http"]
+        concrete_path = nil
+        
+        if http.has_key? "path"
+          if http["path"].is_a?(Hash) && http["path"].has_key?(type.to_s)
+            concrete_path = http["path"][type.to_s]
+          end
+        end
+
+        path = concrete_path || health["http"]["path"]
 
         {
-          "httpGet" => { "path" => http["path"], "port" => http["port"] },
+          "httpGet" => { "path" => path, "port" => http["port"] },
           "initialDelaySeconds" => health["delay"],
           "periodSeconds" => health["period"],
           "timeoutSeconds" => health["timeout"],
@@ -164,11 +173,11 @@ module KubeBuildApp
     end
 
     def self.build_liveness(health)
-      build_health(health)
+      build_health(health, :live)
     end
 
     def self.build_readiness(health)
-      build_health(health)
+      build_health(health, :ready)
     end
 
     def self.build_ports(ports)
