@@ -3,7 +3,7 @@ GEM
   specs:
     awesome_print (1.9.2)
     bytesize (0.1.2)
-    cgi (0.3.1)
+    cgi (0.3.2)
     erb (2.2.3)
       cgi
     fileutils (1.6.0)
@@ -32,4 +32,4 @@ DEPENDENCIES
   tilt
 
 BUNDLED WITH
-   2.3.4
+   2.3.11
