@@ -16,7 +16,7 @@ module KubeBuildApp
     }
 
 
-    attr_reader :name, :file_name, :content, :containers, :replicas, :registry, :shared_assets, :strategy, :env, :labels
+    attr_reader :name, :file_name, :content, :containers, :replicas, :registry, :dns, :shared_assets, :strategy, :env, :labels
 
     def initialize(env, shared_assets, file_name)
       if File.file? file_name
@@ -50,6 +50,7 @@ module KubeBuildApp
         @containers = load_containers()
         @replicas = @content["replicas"]
         @registry = @content["registry"]
+        @dns = @content["dns"]
         @labels ||= @content["labels"] if @content.has_key? "labels"
       end
     end
@@ -94,6 +95,7 @@ module KubeBuildApp
       deploy = Hash.new
 
       registry_secrets = build_registry_secrets(app.registry)
+      host_aliases = build_host_aliases(app.dns)
       volumes = Container::build_volumes(app.containers, app.shared_assets)
 
       if app.labels
@@ -128,7 +130,7 @@ module KubeBuildApp
               DEFAULT_APP_LABEL => app.name
             }
           },
-          "spec" => Container::build_specs(app.containers, registry_secrets, volumes),
+          "spec" => Container::build_specs(app.containers, registry_secrets, host_aliases, volumes),
           # "imagePullSecrets" => build_registry_secrets(app.registry),
           # "volumes" => Container::build_volumes(app.containers, app.shared_assets)
         }
@@ -143,6 +145,17 @@ module KubeBuildApp
       registry.each do |reg|
         name = reg["secret_name"]
         result << { "name" => name }
+      end
+      result
+    end
+
+    def self.build_host_aliases(dns)
+      result = Array.new
+
+      if dns.is_a?(Array)
+        dns.each do |rec|
+          result << { "hostnames" => rec["hostnames"], "ip" => rec["ip"] }
+        end
       end
       result
     end

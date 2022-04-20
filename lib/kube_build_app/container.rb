@@ -39,13 +39,14 @@ module KubeBuildApp
       end
     end
 
-    def self.build_specs(containers, registry_secrets, volumes)
+    def self.build_specs(containers, registry_secrets, host_aliases, volumes)
       result = Hash.new
       result["containers"] = Array.new
       containers.each do |container|
         result["containers"] << Container::build_spec(container)
       end
       result["imagePullSecrets"] = registry_secrets
+      result["hostAliases"] = host_aliases
       result["volumes"] = volumes.uniq
       result
     end
