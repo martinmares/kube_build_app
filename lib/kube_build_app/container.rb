@@ -46,7 +46,7 @@ module KubeBuildApp
         result["containers"] << Container::build_spec(container)
       end
       result["imagePullSecrets"] = registry_secrets
-      result["hostAliases"] = host_aliases
+      result["hostAliases"] = host_aliases if host_aliases.size > 0
       result["volumes"] = volumes.uniq
       result
     end
