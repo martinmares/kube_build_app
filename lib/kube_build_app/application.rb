@@ -142,9 +142,11 @@ module KubeBuildApp
 
     def self.build_registry_secrets(registry)
       result = Array.new
-      registry.each do |reg|
-        name = reg["secret_name"]
-        result << { "name" => name }
+      if registry
+        registry.each do |reg|
+          name = reg["secret_name"]
+          result << { "name" => name }
+        end
       end
       result
     end
