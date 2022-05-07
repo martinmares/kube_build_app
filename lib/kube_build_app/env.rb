@@ -138,8 +138,10 @@ module KubeBuildApp
         @vars[Encjson::EJSON_PUBLIC_KEY_FIELD] = json[Encjson::EJSON_PUBLIC_KEY_FIELD]
       end
 
-      environment.each do |k, v|
-        @vars[k] = v.to_s
+      if environment
+        environment.each do |k, v|
+          @vars[k] = v.to_s
+        end
       end
     end
 
