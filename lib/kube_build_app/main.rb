@@ -85,6 +85,8 @@ module KubeBuildApp
           Asset::build_assets(@shared_assets, "/assets/shared")
           Application::build_apps(@apps)
         end
+      else
+        puts "I have no idea what to do, no application is defined! 😭"
       end
     end
 
@@ -129,8 +131,12 @@ module KubeBuildApp
     end
 
     def load_shared_assets
-      content = YAML.load_file(@env.shared_assets_file_name)
-      Asset::load_assets(SHARED_ASSET_APP_NAME, SHARED_ASSET_APP_NAME, @env, content["assets"]) if content.has_key?("assets")
+      if File.file?(@env.shared_assets_file_name)
+        content = YAML.load_file(@env.shared_assets_file_name)
+        Asset::load_assets(SHARED_ASSET_APP_NAME, SHARED_ASSET_APP_NAME, @env, content["assets"]) if content.has_key?("assets")
+      else
+        []
+      end
     end
 
   end
