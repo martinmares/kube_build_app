@@ -28,7 +28,7 @@ module KubeBuildApp
     end
 
     def environment_dir
-      "#{ENVIRONMENTS_DIR}/#{@name}"
+      "#{ENV['ENVIRONMENTS_DIR']}/#{@name}" || "#{ENVIRONMENTS_DIR}/#{@name}"
     end
 
     def summary?
@@ -38,10 +38,8 @@ module KubeBuildApp
     def target_dir
       if @target_dir
         @target_dir
-      elsif ENV.has_key? "TARGET_DIR"
-          ENV["TARGET_DIR"]
       else
-        "#{environment_dir}/#{TARGET_DIR}"
+        "#{ENV['TARGET_DIR']}/#{TARGET_DIR}" || "#{environment_dir}/#{TARGET_DIR}"
       end
     end
 
