@@ -4,6 +4,7 @@ module KubeBuildApp
     attr_reader :digest, :file_name, :to, :content, :transform, :nfs_server, :path
 
     require "digest"
+    require "digest/crc32"
     require "awesome_print"
     require_relative "main"
     require_relative "utils"
@@ -35,15 +36,15 @@ module KubeBuildApp
       else
         content_with_env_applied = @env.apply_vars_on_content(@content) if @content
       end
-      @digest = Digest::SHA256.hexdigest("#{@file}#{@to}#{content_with_env_applied}") if content_with_env_applied
+      @digest = Digest::CRC32.hexdigest("#{@file}#{@to}#{content_with_env_applied}") if content_with_env_applied
       @content = content_with_env_applied if transform?
     end
 
     def simple_name
       if temp?
-        "#{@app_name}-temp-#{@digest[0,7]}"
+        "#{@app_name}-temp-#{@digest}"
       else
-        "#{@container_name}-asset-#{@digest[0,7]}"
+        "#{@container_name}-asset-#{@digest}"
       end
     end
 
