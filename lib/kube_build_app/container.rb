@@ -6,7 +6,7 @@ module KubeBuildApp
     require_relative "asset"
     require_relative "service"
 
-    attr_reader :content, :name, :image, :startup, :env_vars, :assets, :ports, :services, :resources, :shared_assets, :env, :healt, :raw
+    attr_reader :content, :name, :image, :startup, :env_vars, :assets, :ports, :services, :resources, :shared_assets, :env, :health, :probe, :raw
 
     def initialize(env, app_name, shared_assets, content)
       @env = env
@@ -21,7 +21,8 @@ module KubeBuildApp
       @ports = content["ports"]
       @service = content["services"]
       @resources = content["resources"]
-      @healt = content["health"]
+      @health = content["health"]
+      @probe = content["probe"]
       @raw = content["raw"]
     end
 
@@ -68,6 +69,10 @@ module KubeBuildApp
       @content.has_key? "health"
     end
 
+    def probe?
+      @content.has_key? "probe"
+    end
+
     def has_raw?
       @content.has_key? "raw"
     end
@@ -90,8 +95,15 @@ module KubeBuildApp
       #   "capabilities" => { "drop" => ["ALL"] }
       # }
       result["volumeMounts"] = Container::build_mounts(container.assets, container.shared_assets)
-      result["livenessProbe"] = Container::build_liveness(container.healt) if container.health?
-      result["readinessProbe"] = Container::build_readiness(container.healt) if container.health?
+      result["livenessProbe"] = Container::build_liveness(container.health) if container.health?
+      result["readinessProbe"] = Container::build_readiness(container.health) if container.health?
+      probes = Container::build_probes(container.probe) if container.probe?
+
+      if probes.is_a?(Hash) && probes.any?
+        probes.each do |k,v|
+          result[k] = v
+        end
+      end
 
       # append anything other as is!
       if container.has_raw?
@@ -139,6 +151,8 @@ module KubeBuildApp
 =end
 
     def self.build_health(health, type)
+      result = {}
+
       if health.has_key? "http"
         http = health["http"]
         concrete_path = nil
@@ -150,27 +164,23 @@ module KubeBuildApp
         end
 
         path = concrete_path || health["http"]["path"]
+        result["httpGet"] = { "path" => path, "port" => http["port"] }
 
-        {
-          "httpGet" => { "path" => path, "port" => http["port"] },
-          "initialDelaySeconds" => health["delay"],
-          "periodSeconds" => health["period"],
-          "timeoutSeconds" => health["timeout"],
-          "successThreshold" => health["success"],
-          "failureThreshold" => health["failure"]
-        }
       elsif health.has_key? "command"
         cmd = health["command"]
-        
-        {
-          "exec" => { "command" => cmd },
-          "initialDelaySeconds" => health["delay"],
-          "periodSeconds" => health["period"],
-          "timeoutSeconds" => health["timeout"],
-          "successThreshold" => health["success"],
-          "failureThreshold" => health["failure"]
-        }
+        result["exec"] = { "command" => cmd }
       end
+
+      if result.any?
+        result["initialDelaySeconds"] = health["delay"] if health.has_key?("delay")
+        result["periodSeconds"] = health["period"] if health.has_key?("period")
+        result["timeoutSeconds"] = health["timeout"] if health.has_key?("timeout")
+        result["successThreshold"] = health["success"] if health.has_key?("success")
+        result["failureThreshold"] = health["failure"] if health.has_key?("failure")
+      end
+
+      result
+
     end
 
     def self.build_liveness(health)
@@ -179,6 +189,20 @@ module KubeBuildApp
 
     def self.build_readiness(health)
       build_health(health, :ready)
+    end
+
+    def self.build_probe(probe, type)
+      if probe.has_key? (type.to_s)
+        build_health(probe[type.to_s], type)
+      end
+    end
+
+    def self.build_probes(probe)
+      result = {}
+      result["livenessProbe"] = build_health(probe["live"], :live) if probe.has_key? "live"
+      result["readinessProbe"] = build_health(probe["ready"], :live) if probe.has_key? "ready"
+      result["startupProbe"] = build_health(probe["start"], :live) if probe.has_key? "start"
+      result
     end
 
     def self.build_ports(ports)
