@@ -20,7 +20,7 @@ module KubeBuildApp
 
     TEMPLATE_EXTENSION = "tpl"
     YAML_EXTENSION = "yml"
-    SHARED_ASSET_APP_NAME = "tsm-shared"
+    SHARED_ASSET_APP_NAME = "shared"
 
     def initialize()
       @args = parse_args()
