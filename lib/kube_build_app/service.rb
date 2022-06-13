@@ -54,13 +54,23 @@ module KubeBuildApp
 
     def self.write_service(env, service, app_name, namespace, append_path)
       (host_name, ports) = service
+
+      # make it compatible with runy 2.x
+      ports_without_ext = []
+      ports.each do |port|
+        port_without_ext = port.reject { |k,_| k == "external" }
+        ports_without_ext << port_without_ext
+      end
+
       svc = Hash.new
       svc["apiVersion"] = "v1"
       svc["kind"] = "Service"
       svc["metadata"] = { "name" => host_name, "namespace" => namespace }
       svc["spec"] = {
         "selector" => { "app.kubernetes.io/name" => app_name },
-        "ports" => ports.map { |port| port.except("external") }
+        # make it compatible with runy 2.x
+        # "ports" => ports.map { |port| port.except("external") }
+        "ports" => ports_without_ext
       }
       Utils::mkdir_p "#{env.target_dir}#{append_path}"
       File.write("#{env.target_dir}#{append_path}/#{host_name}-service.#{Main::YAML_EXTENSION}", svc.to_yaml)
