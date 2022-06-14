@@ -11,6 +11,7 @@ target*
 deploy*
 distribution*
 environments*
+Gemfile.lock
 
 # include
 conf/*
