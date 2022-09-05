@@ -95,10 +95,12 @@ module KubeBuildApp
       host_aliases = build_host_aliases(app.dns)
       volumes = Container::build_volumes(app.containers, app.shared_assets)
 
+      label_now = Time.now.utc.to_s.gsub(" ", "_").gsub(":", "-")
+
       if app.labels
         labels = Hash.new
         labels[DEFAULT_APP_LABEL] = app.name
-        labels[DEFAULT_CREATED_AT_LABEL] = Time.now.utc.to_s
+        labels[DEFAULT_CREATED_AT_LABEL] = label_now
 
         app.labels.each_pair do |key, val|
           labels[key] = val
@@ -106,7 +108,7 @@ module KubeBuildApp
       else
         labels = {
           DEFAULT_APP_LABEL => app.name,
-          DEFAULT_CREATED_AT_LABEL => Time.now.utc.to_s,
+          DEFAULT_CREATED_AT_LABEL => label_now,
         }
       end
 
