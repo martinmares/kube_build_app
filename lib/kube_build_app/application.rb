@@ -95,7 +95,7 @@ module KubeBuildApp
       host_aliases = build_host_aliases(app.dns)
       volumes = Container::build_volumes(app.containers, app.shared_assets)
 
-      label_now = Time.now.utc.to_s.gsub(" ", "_").gsub(":", "-")
+      label_now = Time.now.utc.to_s.gsub(" ", "_").gsub(":", ".").gsub("-", ".")
 
       if app.labels
         labels = Hash.new
