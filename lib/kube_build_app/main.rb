@@ -26,8 +26,6 @@ module KubeBuildApp
       @env = Env.new(@args[:env_name], @args[:target], @args[:summary])
       @apps = Array.new
       @shared_assets = load_shared_assets()
-      # export some interesting values
-      ENV.store("KUBE_BUILD_APP_TIMESTAMP", Time.now.utc.to_s)
     end
 
     def build

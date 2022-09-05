@@ -1,20 +1,19 @@
 module KubeBuildApp
   class Application
-
     require "yaml"
     require "paint"
     require "fileutils"
     require_relative "container"
 
     DEFAULT_APP_LABEL = "app.kubernetes.io/name"
+    DEFAULT_CREATED_AT_LABEL = "app.kubernetes.io/created-at"
     DEFAULT_STRATEGY = {
       "rollingUpdate" => {
         "maxSurge" => "25%",
-        "maxUnavailable" => "25%"
+        "maxUnavailable" => "25%",
       },
-      "type" => "RollingUpdate"
+      "type" => "RollingUpdate",
     }
-
 
     attr_reader :name, :file_name, :content, :containers, :replicas, :registry, :dns, :shared_assets, :strategy, :env, :labels
 
@@ -27,16 +26,14 @@ module KubeBuildApp
         @disable_shared_assets = @content["disable_shared_assets"]
 
         if @content.has_key? "strategy"
-
           case @content["strategy"]
           when "recreate"
             @strategy = {
-              "type" => "Recreate"
-            }              
+              "type" => "Recreate",
+            }
           else
             @strategy = DEFAULT_STRATEGY
           end
-
         else
           @strategy = DEFAULT_STRATEGY
         end
@@ -101,12 +98,16 @@ module KubeBuildApp
       if app.labels
         labels = Hash.new
         labels[DEFAULT_APP_LABEL] = app.name
+        labels[DEFAULT_CREATED_AT_LABEL] = Time.now.utc.to_s
 
         app.labels.each_pair do |key, val|
           labels[key] = val
         end
       else
-        labels = { DEFAULT_APP_LABEL => app.name }
+        labels = {
+          DEFAULT_APP_LABEL => app.name,
+          DEFAULT_CREATED_AT_LABEL => Time.now.utc.to_s,
+        }
       end
 
       deploy["apiVersion"] = "apps/v1"
@@ -114,26 +115,26 @@ module KubeBuildApp
       deploy["metadata"] = {
         "labels" => labels,
         "name" => app.name,
-        "namespace" => app.namespace
+        "namespace" => app.namespace,
       }
       deploy["spec"] = {
         "replicas" => app.replicas,
         "selector" => {
           "matchLabels" => {
-            DEFAULT_APP_LABEL => app.name
-          }
+            DEFAULT_APP_LABEL => app.name,
+          },
         },
         "strategy" => app.strategy,
         "template" => {
           "metadata" => {
             "labels" => {
-              DEFAULT_APP_LABEL => app.name
-            }
+              DEFAULT_APP_LABEL => app.name,
+            },
           },
           "spec" => Container::build_specs(app.containers, registry_secrets, host_aliases, volumes),
-          # "imagePullSecrets" => build_registry_secrets(app.registry),
-          # "volumes" => Container::build_volumes(app.containers, app.shared_assets)
-        }
+        # "imagePullSecrets" => build_registry_secrets(app.registry),
+        # "volumes" => Container::build_volumes(app.containers, app.shared_assets)
+        },
       }
 
       Utils::mkdir_p "#{app.env.target_dir}/deployments"
@@ -161,7 +162,6 @@ module KubeBuildApp
       end
       result
     end
-
   end
 end
 
