@@ -11,11 +11,9 @@ module KubeBuildApp
           when false
             build_as_ingress(env, external, namespace, append_path, host_name, port)
           when true
-            build_as_route(env, external, namespace, append_path, host_name, port)  
+            build_as_route(env, external, namespace, append_path, host_name, port)
           end
-          
         end
-
       end
     end
 
@@ -26,19 +24,24 @@ module KubeBuildApp
       name = external["name"]
       http = external["http"]
       https = external["https"]
+      annotations = external["annotations"]
 
       ing = Hash.new
 
-        ing["apiVersion"] = "networking.k8s.io/v1"
-        ing["kind"] = "Ingress"
-        ing["metadata"] = { "name" => name, "namespace" => namespace }
-  
-        http.each do |host|
-          unsecure << { "host" => host["hostname"],
-                        "http" => { "paths" => [ { "path" => host["path"],
-                                                   "backend" => { "service" => { "name" => host_name,
-                                                                                 "port" => { "number" => port["port"].to_i } } },
-                                                   "pathType" => "ImplementationSpecific" } ] } }
+      ing["apiVersion"] = "networking.k8s.io/v1"
+      ing["kind"] = "Ingress"
+      ing["metadata"] = { "name" => name, "namespace" => namespace }
+
+      if annotations && annotations.size > 0
+        ing["metadata"]["annotations"] = annotations
+      end
+
+      http.each do |host|
+        unsecure << { "host" => host["hostname"],
+                     "http" => { "paths" => [{ "path" => host["path"],
+                                              "backend" => { "service" => { "name" => host_name,
+                                                                           "port" => { "number" => port["port"].to_i } } },
+                                              "pathType" => "ImplementationSpecific" }] } }
       end
 
       spec = Hash.new
@@ -49,7 +52,7 @@ module KubeBuildApp
 
       if https
         https.each do |host|
-          secure << { "hosts" => [ host["hostname"] ],
+          secure << { "hosts" => [host["hostname"]],
                       "secretName" => host["secret_name"] }
         end
       end
@@ -78,16 +81,14 @@ module KubeBuildApp
       spec = { "host" => host["hostname"],
                "port" => { "targetPort" => port["name"] },
                "to" => { "kind" => "Service",
-                         "name" => host_name},
+                         "name" => host_name },
                "wildcardPolicy" => "None" }
       route["spec"] = spec
 
       puts "   => has external (route) #{Paint[name, :yellow]}"
       Utils::mkdir_p "#{env.target_dir}#{append_path}/external"
       File.write("#{env.target_dir}#{append_path}/external/#{name}-route.#{Main::YAML_EXTENSION}", route.to_yaml)
-
     end
-
   end
 end
 
