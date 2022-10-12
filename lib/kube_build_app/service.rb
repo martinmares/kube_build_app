@@ -1,10 +1,9 @@
 module KubeBuildApp
   class Service
-
     require "paint"
     require "awesome_print"
     require_relative "ingress"
-    
+
     def self.build_from_ports(app_name, container, append_path)
       service_names = service_names(container.ports)
       service_names.each do |(host_name, _)|
@@ -13,7 +12,7 @@ module KubeBuildApp
       service_names.each_with_index do |service, i|
         (host_name, ports) = service
         puts " => service [#{i + 1}] #{Paint[host_name, :magenta]}, has #{Paint[ports.size, :green]} port/s"
-        write_service(container.env, service,  app_name, container.namespace, append_path)
+        write_service(container.env, service, app_name, container.namespace, append_path)
       end
     end
 
@@ -25,7 +24,7 @@ module KubeBuildApp
         if port.has_key? "expose_as"
           port["expose_as"].each do |expose|
             hostname = expose["hostname"]
-            result[hostname] = nil #unless result.has_key?(hostname)    
+            result[hostname] = nil #unless result.has_key?(hostname)
           end
         end
       end
@@ -58,7 +57,7 @@ module KubeBuildApp
       # make it compatible with runy 2.x
       ports_without_ext = []
       ports.each do |port|
-        port_without_ext = port.reject { |k,_| k == "external" }
+        port_without_ext = port.reject { |k, _| k == "external" }
         ports_without_ext << port_without_ext
       end
 
@@ -70,13 +69,12 @@ module KubeBuildApp
         "selector" => { "app.kubernetes.io/name" => app_name },
         # make it compatible with runy 2.x
         # "ports" => ports.map { |port| port.except("external") }
-        "ports" => ports_without_ext
+        "ports" => ports_without_ext,
       }
       Utils::mkdir_p "#{env.target_dir}#{append_path}"
       File.write("#{env.target_dir}#{append_path}/#{host_name}-service.#{Main::YAML_EXTENSION}", svc.to_yaml)
-      Ingress::write_ingress(env, service, namespace, append_path) if ports.any? { |port| port.has_key? "external" } 
+      Ingress::write_ingress(env, service, namespace, append_path) if ports.any? { |port| port.has_key? "external" }
     end
-
   end
 end
 
