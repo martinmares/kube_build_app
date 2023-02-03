@@ -1,6 +1,5 @@
 module KubeBuildApp
   class Container
-
     require "yaml"
     require "paint"
     require_relative "asset"
@@ -35,8 +34,12 @@ module KubeBuildApp
 
     def self.build_services(app_name, containers)
       containers.each_with_index do |container, i|
-        puts " => container [#{i + 1}] #{Paint[container.name, :blue]} has #{Paint[container.ports.size, :green]} port/s"
-        Service::build_from_ports(app_name, container, "/services")
+        if container.ports
+          puts " => container [#{i + 1}] #{Paint[container.name, :blue]} has #{Paint[container.ports.size, :green]} port/s"
+          Service::build_from_ports(app_name, container, "/services")
+        else
+          puts " => container [#{i + 1}] #{Paint[container.name, :blue]} has #{Paint["NO!", :green]} port/s"
+        end
       end
     end
 
@@ -84,7 +87,7 @@ module KubeBuildApp
 
       result["name"] = container.name
       result["image"] = container.image
-      result["ports"] = Container::build_ports(container.ports)
+      result["ports"] = Container::build_ports(container.ports) if container.ports
       result["command"] = container.startup["command"] if container.startup
       result["args"] = container.startup["arguments"] if container.startup
       result["env"] = Container::build_env_vars(container.env_vars) if container.env_vars
@@ -100,14 +103,14 @@ module KubeBuildApp
       probes = Container::build_probes(container.probe) if container.probe?
 
       if probes.is_a?(Hash) && probes.any?
-        probes.each do |k,v|
+        probes.each do |k, v|
           result[k] = v
         end
       end
 
       # append anything other as is!
       if container.has_raw?
-        container.raw.each do |k,v|
+        container.raw.each do |k, v|
           result[k] = v
         end
       end
@@ -156,7 +159,7 @@ module KubeBuildApp
       if health.has_key? "http"
         http = health["http"]
         concrete_path = nil
-        
+
         if http.has_key? "path"
           if http["path"].is_a?(Hash) && http["path"].has_key?(type.to_s)
             concrete_path = http["path"][type.to_s]
@@ -165,7 +168,6 @@ module KubeBuildApp
 
         path = concrete_path || health["http"]["path"]
         result["httpGet"] = { "path" => path, "port" => http["port"] }
-
       elsif health.has_key? "command"
         cmd = health["command"]
         result["exec"] = { "command" => cmd }
@@ -180,7 +182,6 @@ module KubeBuildApp
       end
 
       result
-
     end
 
     def self.build_liveness(health)
@@ -229,12 +230,12 @@ module KubeBuildApp
       {
         "requests" => {
           "cpu" => resources["cpu"]["from"],
-          "memory" => resources["memory"]["from"]
+          "memory" => resources["memory"]["from"],
         },
         "limits" => {
           "cpu" => resources["cpu"]["to"],
-          "memory" => resources["memory"]["to"]
-        }
+          "memory" => resources["memory"]["to"],
+        },
       }
     end
 
@@ -244,7 +245,6 @@ module KubeBuildApp
       result += Asset::build_spec_assets(shared_assets)
       result
     end
-
   end
 end
 
