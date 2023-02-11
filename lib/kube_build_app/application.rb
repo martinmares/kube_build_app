@@ -21,7 +21,7 @@ module KubeBuildApp
       if File.file? file_name
         @env = env
         @file_name = file_name
-        @content = YAML.load_file(@file_name)
+        @content = apply_app_vars()
         @name = @content["name"]
         @disable_shared_assets = @content["disable_shared_assets"]
 
@@ -77,6 +77,51 @@ module KubeBuildApp
     end
 
     private
+
+    def apply_sys_ENV_on(content)
+      raw_content = content
+      ENV.each do |k, v|
+        to_replace = v.to_s
+        replaced = raw_content.gsub(/\${{env\:(.*?)#{k}(.*?)}}/, to_replace)
+        raw_content = replaced
+      end
+
+      raw_content
+    end
+
+    def apply_app_vars()
+      raw_content = File.read(@file_name)
+      raw_content = apply_sys_ENV_on(raw_content)
+
+      obj = YAML.load(raw_content)
+
+      if obj.has_key? "$vars"
+        @app_vars = obj["$vars"]
+        obj.delete("$vars")
+
+        # ! RELOAD object without $vars !
+        raw_content = obj.to_yaml
+        obj = YAML.load(raw_content)
+
+        @app_vars.each do |var|
+          k = var["name"]
+          v = var["value"]
+
+          to_replace = v.to_s
+          if (v.is_a? Integer) || (v.is_a? TrueClass) || (v.is_a? FalseClass)
+            replaced = raw_content.gsub(/\"\${{var\:(.*?)#{k}(.*?)}}\"/, to_replace)
+          elsif v.is_a? String
+            replaced = raw_content.gsub(/\${{var\:(.*?)#{k}(.*?)}}/, to_replace)
+          end
+          raw_content = replaced
+        end
+
+        # ! RELOAD object with replaced raw_content !
+        obj = YAML.load(raw_content)
+      end
+
+      obj
+    end
 
     def load_containers
       result = Array.new
