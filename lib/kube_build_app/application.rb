@@ -95,11 +95,11 @@ module KubeBuildApp
 
       obj = YAML.load(raw_content)
 
-      if obj.has_key? "$vars"
-        @app_vars = obj["$vars"]
-        obj.delete("$vars")
+      if obj.has_key? "vars"
+        @app_vars = obj["vars"]
+        obj.delete("vars")
 
-        # ! RELOAD object without $vars !
+        # ! RELOAD object without vars !
         raw_content = obj.to_yaml
         obj = YAML.load(raw_content)
 
