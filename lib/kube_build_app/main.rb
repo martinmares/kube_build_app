@@ -23,7 +23,7 @@ module KubeBuildApp
 
     def initialize()
       @args = parse_args()
-      @env = Env.new(@args[:env_name], @args[:target], @args[:summary])
+      @env = Env.new(@args[:env_name], @args[:target], @args[:summary], @args[:decrypt_secured])
       @apps = Array.new
       @shared_assets = load_shared_assets()
     end
@@ -117,6 +117,8 @@ module KubeBuildApp
     def parse_args
       opts = Optimist::options do
         opt :env_name, "Environment name", type: :string, required: true, short: "-e"
+        # ! IMPORTANT - Decrypt enc.secured.json VARS must be explicitly enabled from command line!
+        opt :decrypt_secured, "Enable explicitly \"decrypt\" vars from \"env.secured.json\" file!", type: :boolean, required: false, defult: false, short: "-d"
         opt :target, "Target directory", type: :string, short: "-t"
         opt :summary, "Summary of resources", type: :boolean, default: false, short: "-s"
         opt :debug, "Debug?", type: :boolean, default: false, short: "-b"

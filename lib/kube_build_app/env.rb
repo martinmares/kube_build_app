@@ -1,6 +1,5 @@
 module KubeBuildApp
   class Env
-
     require "json"
     require_relative "encjson"
     require_relative "asset"
@@ -18,18 +17,19 @@ module KubeBuildApp
 
     SHARED_ASSETS_FILE = "shared.assets.yml"
 
-    def initialize(name, target_dir, summary)
+    def initialize(name, target_dir, summary, decrypt_secured)
       @name = name
       @target_dir = target_dir
       @summary = summary
+      @decrypt_secured = decrypt_secured || false
       @vars = Hash.new
       load_env_vars()
       make_12_factor()
     end
 
     def environment_dir
-      if ENV.has_key? 'ENVIRONMENTS_DIR'
-        "#{ENV['ENVIRONMENTS_DIR']}/#{@name}"
+      if ENV.has_key? "ENVIRONMENTS_DIR"
+        "#{ENV["ENVIRONMENTS_DIR"]}/#{@name}"
       else
         "#{ENVIRONMENTS_DIR}/#{@name}"
       end
@@ -44,7 +44,7 @@ module KubeBuildApp
         @target_dir
       else
         if ENV.has_key? "TARGET_DIR"
-          "#{ENV['TARGET_DIR']}/#{TARGET_DIR}"
+          "#{ENV["TARGET_DIR"]}/#{TARGET_DIR}"
         else
           "#{environment_dir}/#{TARGET_DIR}"
         end
@@ -91,19 +91,20 @@ module KubeBuildApp
 
     def from_unsecured_json(file_name)
       return unless File.file? file_name
-      @unsecured_content   = File.read(file_name)
+      @unsecured_content = File.read(file_name)
       env_vars_from_json(@unsecured_content)
     end
 
     def load_env_vars
       if File.directory? environment_dir
-        from_secured_json(secured_file_name) if File.file? "#{environment_dir}/#{SECURED_FILE_NAME}"
+        # ! IMPORTANT - Decrypt enc.secured.json VARS must be explicitly enabled from command line!
+        from_secured_json(secured_file_name) if File.file? "#{environment_dir}/#{SECURED_FILE_NAME}" if @decrypt_secured
         from_unsecured_json(unsecured_file_name) if File.file? "#{environment_dir}/#{UNSECURED_FILE_NAME}"
       end
     end
 
     def print_env_vars(start_with = nil)
-      @vars.each do |k,v|
+      @vars.each do |k, v|
         if start_with
           puts "#{k} => #{v}" if k.start_with? start_with
         else
@@ -132,7 +133,7 @@ module KubeBuildApp
 
     def env_vars_from_json(content, search_public_key = false)
       json = JSON.parse(content)
-      environment = json['environment'] if json.has_key? 'environment'
+      environment = json["environment"] if json.has_key? "environment"
 
       if search_public_key && json.has_key?(Encjson::EJSON_PUBLIC_KEY_FIELD)
         @vars[Encjson::EJSON_PUBLIC_KEY_FIELD] = json[Encjson::EJSON_PUBLIC_KEY_FIELD]
@@ -144,6 +145,5 @@ module KubeBuildApp
         end
       end
     end
-
   end
 end
