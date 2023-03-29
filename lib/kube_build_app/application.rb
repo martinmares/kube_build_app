@@ -3,6 +3,7 @@ module KubeBuildApp
     require "yaml"
     require "paint"
     require "fileutils"
+    require "awesome_print"
     require_relative "container"
 
     DEFAULT_APP_LABEL = "app.kubernetes.io/name"
@@ -90,6 +91,7 @@ module KubeBuildApp
     end
 
     def apply_app_vars()
+      ap @file_name
       raw_content = File.read(@file_name)
       raw_content = apply_sys_ENV_on(raw_content)
 
