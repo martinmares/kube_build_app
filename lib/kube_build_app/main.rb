@@ -45,8 +45,11 @@ module KubeBuildApp
           sum_max_mb = ByteSize.new(0).to_mb
           sum_min_cpu_cores = 0.0
           sum_max_cpu_cores = 0.0
+          sum_min_cpu_cores_with_replicas = 0.0
+          sum_max_cpu_cores_with_replicas = 0.0
 
           @apps.each do |app|
+            replicas = app.replicas.to_i
             app.containers.each do |container|
               cpu_min = container.resources["cpu"]["from"]
               cpu_max = container.resources["cpu"]["to"]
@@ -59,17 +62,21 @@ module KubeBuildApp
               mem_max_mbytes = normalize_mem(mem_max).to_mb
               cpu_min_cores = normalize_cpu(cpu_min)
               cpu_max_cores = normalize_cpu(cpu_max)
+              cpu_min_cores_with_replicas = (cpu_min_cores * replicas)
+              cpu_max_cores_with_replicas = (cpu_max_cores * replicas)
 
-              rows << [app.name, container.name, print_cpu(cpu_min_cores), print_cpu(cpu_max_cores), print_mem(mem_min_mibytes), print_mem(mem_max_mibytes)]
+              rows << [app.name, replicas, container.name, print_cpu(cpu_min_cores), print_cpu(cpu_max_cores), print_mem(mem_min_mibytes), print_mem(mem_max_mibytes)]
               sum_min_mib += mem_min_mibytes
               sum_max_mib += mem_max_mibytes
               sum_min_mb += mem_min_mbytes
               sum_max_mb += mem_max_mbytes
               sum_min_cpu_cores += cpu_min_cores
               sum_max_cpu_cores += cpu_max_cores
+              sum_min_cpu_cores_with_replicas += cpu_min_cores_with_replicas
+              sum_max_cpu_cores_with_replicas += cpu_max_cores_with_replicas
             end
           end
-          table = Terminal::Table.new :headings => ["App name", "Container", "Cpu (min)", "(max)", "Mem (min)", "(max)"], :rows => rows
+          table = Terminal::Table.new :headings => ["App name", "Replicas", "Container", "Cpu (min)", "(max)", "Mem (min)", "(max)"], :rows => rows
           puts table
           puts Paint["Memory", :yellow]
           puts " => req: #{Paint[sprintf("%10.2f", sum_min_mib), :green]} [MiB]"
@@ -77,8 +84,24 @@ module KubeBuildApp
           puts " => req: #{Paint[sprintf("%10.2f", sum_min_mb), :green]} [MB]"
           puts " => lim: #{Paint[sprintf("%10.2f", sum_max_mb), :magenta]} [MB]"
           puts Paint["CPU", :yellow]
-          puts " => req: #{Paint[sprintf("%10.2f", sum_min_cpu_cores), :green]} [core/s]"
-          puts " => lim: #{Paint[sprintf("%10.2f", sum_max_cpu_cores), :magenta]} [core/s]"
+          real_cpu_min = ENV["REAL_CPU_MIN"]
+          if real_cpu_min
+            real_cpu_min_percent = (sum_min_cpu_cores_with_replicas * 100) / real_cpu_min.to_f
+            puts " => req: #{Paint[sprintf("%10.2f", sum_min_cpu_cores), :green]} [core]"
+            puts "         #{Paint[sprintf("%10.2f", sum_min_cpu_cores_with_replicas), :green]} [core] with replicas (#{sprintf("%.2f", real_cpu_min_percent)} %)"
+            puts "         #{Paint[sprintf("%10.2f", real_cpu_min), :cyan]} [core] real"
+          else
+            puts " => req: #{Paint[sprintf("%10.2f", sum_min_cpu_cores), :green]} [core]"
+          end
+          real_cpu_max = ENV["REAL_CPU_MAX"]
+          if real_cpu_max
+            real_cpu_max_percent = (sum_max_cpu_cores_with_replicas * 100) / real_cpu_max.to_f
+            puts " => lim: #{Paint[sprintf("%10.2f", sum_max_cpu_cores), :magenta]} [core]"
+            puts "         #{Paint[sprintf("%10.2f", sum_max_cpu_cores_with_replicas), :magenta]} [core] with replicas (#{sprintf("%.2f", real_cpu_max_percent)} %)"
+            puts "         #{Paint[sprintf("%10.2f", real_cpu_max), :cyan]} [core] real"
+          else
+            puts " => lim: #{Paint[sprintf("%10.2f", sum_max_cpu_cores), :magenta]} [core]"
+          end
         else
           puts "Build #{Paint[@shared_assets.size, :green]} shared asset/s"
           Asset::build_assets(@shared_assets, "/assets/shared")
