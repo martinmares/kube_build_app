@@ -113,13 +113,12 @@ module KubeBuildApp
       end
     end
 
-    def apply_vars_on_content(content, begin_gsub = /{{/, end_gsub = /}}/)
+    def apply_vars_on_content(content)
       result = content
       @vars.each do |k, v|
         to_replace = v
-        reg_inside = /(.*?)#{k}(.*?)/
-        reg_complete = Regexp.new(begin_gsub.source + reg_inside.source + end_gsub.source)
-        result = result.gsub(reg_complete, to_replace)
+        reg_inside = /{{(\s*)(#{k})(\s*)}}/ix
+        result = result.gsub(reg_inside, to_replace)
       end
 
       result

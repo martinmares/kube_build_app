@@ -83,7 +83,7 @@ module KubeBuildApp
       raw_content = content
       ENV.each do |k, v|
         to_replace = v.to_s
-        replaced = raw_content.gsub(/\${{env\:(.*?)#{k}(.*?)}}/, to_replace)
+        replaced = raw_content.gsub(/\${{env\:(\s*)(#{k})(\s*)}}/ix, to_replace)
         raw_content = replaced
       end
 
@@ -111,9 +111,9 @@ module KubeBuildApp
 
           to_replace = v.to_s
           if (v.is_a? Integer) || (v.is_a? TrueClass) || (v.is_a? FalseClass)
-            replaced = raw_content.gsub(/\"\${{var\:(.*?)#{k}(.*?)}}\"/, to_replace)
+            replaced = raw_content.gsub(/\"\${{var\:(\s*)(#{k})(\s*)}}\"/ix, to_replace)
           elsif v.is_a? String
-            replaced = raw_content.gsub(/\${{var\:(.*?)#{k}(.*?)}}/, to_replace)
+            replaced = raw_content.gsub(/\${{var\:(\s*)(#{k})(\s*)}}/ix, to_replace)
           end
           raw_content = replaced
         end
