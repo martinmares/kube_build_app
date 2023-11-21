@@ -32,11 +32,11 @@ module KubeBuildApp
       end
     end
 
-    def self.build_services(app_name, containers)
+    def self.build_services(app_name, containers, headless = false)
       containers.each_with_index do |container, i|
         if container.ports
           puts " => container [#{i + 1}] #{Paint[container.name, :blue]} has #{Paint[container.ports.size, :green]} port/s"
-          Service::build_from_ports(app_name, container, "/services")
+          Service::build_from_ports(app_name, container, "/services", headless)
         else
           puts " => container [#{i + 1}] #{Paint[container.name, :blue]} has #{Paint["NO!", :green]} port/s"
         end

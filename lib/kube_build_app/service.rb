@@ -4,7 +4,7 @@ module KubeBuildApp
     require "awesome_print"
     require_relative "ingress"
 
-    def self.build_from_ports(app_name, container, append_path)
+    def self.build_from_ports(app_name, container, append_path, headless = false)
       service_names = service_names(container.ports)
       service_names.each do |(host_name, _)|
         service_names[host_name] = ports_for_service(container, host_name)
@@ -12,7 +12,7 @@ module KubeBuildApp
       service_names.each_with_index do |service, i|
         (host_name, ports) = service
         puts " => service [#{i + 1}] #{Paint[host_name, :magenta]}, has #{Paint[ports.size, :green]} port/s"
-        write_service(container.env, service, app_name, container.namespace, append_path)
+        write_service(container.env, service, app_name, container.namespace, append_path, headless)
       end
     end
 
@@ -51,7 +51,7 @@ module KubeBuildApp
       result
     end
 
-    def self.write_service(env, service, app_name, namespace, append_path)
+    def self.write_service(env, service, app_name, namespace, append_path, headless = false)
       (host_name, ports) = service
 
       # make it compatible with runy 2.x
@@ -71,6 +71,14 @@ module KubeBuildApp
         # "ports" => ports.map { |port| port.except("external") }
         "ports" => ports_without_ext,
       }
+
+      if headless
+        svc["spec"]["clusterIP"] = "None"
+        svc["spec"]["ports"].each do |port|
+          port.delete("targetPort") # targetPort is unused, only port is needed!
+        end
+      end
+
       Utils::mkdir_p "#{env.target_dir}#{append_path}"
       File.write("#{env.target_dir}#{append_path}/#{host_name}-service.#{Main::YAML_EXTENSION}", svc.to_yaml)
       Ingress::write_ingress(env, service, namespace, append_path) if ports.any? { |port| port.has_key? "external" }

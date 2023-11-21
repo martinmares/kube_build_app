@@ -16,7 +16,7 @@ module KubeBuildApp
       "type" => "RollingUpdate",
     }
 
-    attr_reader :name, :file_name, :content, :containers, :replicas, :registry, :dns, :shared_assets, :strategy, :env, :labels
+    attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :replicas, :registry, :dns, :shared_assets, :strategy, :env, :labels, :disable_create_service
 
     def initialize(env, shared_assets, file_name)
       if File.file? file_name
@@ -24,7 +24,10 @@ module KubeBuildApp
         @file_name = file_name
         @content = apply_app_vars()
         @name = @content["name"]
+        @kind = @content["kind"] || "Deployment" # default kind is "Deployment"
+        @subdomain_name = @content["subdomain_name"] || @name
         @disable_shared_assets = @content["disable_shared_assets"]
+        @disable_create_service = @content["disable_create_service"] || false
 
         if @content.has_key? "strategy"
           case @content["strategy"]
@@ -58,7 +61,9 @@ module KubeBuildApp
         puts "Application #{Paint[app.name, :blue]}, with #{Paint[app.containers.size, :green]} container/s"
         # puts " => container #{Paint[app.container.name, :yellow]}, has #{Paint[app.container.assets.size, :green]} assets, bind port: #{Paint[app.container.port, :green]}"
         Container::build_assets(app.name, app.containers)
-        Container::build_services(app.name, app.containers)
+        unless app.disable_create_service
+          Container::build_services(app.name, app.containers, app.kind == "StatefulSet")
+        end
         Application::build_deploy(app)
       end
       # @containers.each do |container|
@@ -160,7 +165,7 @@ module KubeBuildApp
       end
 
       deploy["apiVersion"] = "apps/v1"
-      deploy["kind"] = "Deployment"
+      deploy["kind"] = app.kind
       deploy["metadata"] = {
         "labels" => labels,
         "name" => app.name,
@@ -185,6 +190,21 @@ module KubeBuildApp
         # "volumes" => Container::build_volumes(app.containers, app.shared_assets)
         },
       }
+
+      if app.kind == "StatefulSet"
+        deploy["spec"].delete("strategy")
+        deploy["spec"]["updateStrategy"] = {
+          "type" => "RollingUpdate",
+        }
+        # https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/
+        # As each Pod is created, it gets a matching DNS subdomain, taking the form: $(podname).$(governing service domain),
+        # where the governing service is defined by the serviceName field on the StatefulSet.
+        # PING example (if app.name == "app-container", replicas == 3):
+        # $ ping app-container-0.app-container
+        # $ ping app-container-1.app-container
+        # $ ping app-container-2.app-container
+        deploy["spec"]["serviceName"] = app.subdomain_name
+      end
 
       Utils::mkdir_p "#{app.env.target_dir}/deployments"
       File.write("#{app.env.target_dir}/deployments/#{app.name}-deployment.#{Main::YAML_EXTENSION}", deploy.to_yaml)
