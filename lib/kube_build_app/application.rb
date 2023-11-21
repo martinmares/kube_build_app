@@ -16,7 +16,8 @@ module KubeBuildApp
       "type" => "RollingUpdate",
     }
 
-    attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :replicas, :registry, :dns, :shared_assets, :strategy, :env, :labels, :disable_create_service
+    attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets, :strategy, :env, :labels, :disable_create_service
+    attr_accessor :replicas
 
     def initialize(env, shared_assets, file_name)
       if File.file? file_name
@@ -96,7 +97,7 @@ module KubeBuildApp
     end
 
     def apply_app_vars()
-      ap @file_name
+      # ap @file_name
       raw_content = File.read(@file_name)
       raw_content = apply_sys_ENV_on(raw_content)
 

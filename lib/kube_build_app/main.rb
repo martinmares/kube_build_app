@@ -34,6 +34,21 @@ module KubeBuildApp
           @apps << Application.new(@env, @shared_assets, file_name)
         end
 
+        if @args[:down_given]
+          @args[:down].each do |down|
+            @apps.each do |app|
+              if app.name == down
+                app.replicas = 0
+              end
+            end
+          end
+        end
+
+        if @args[:list]
+          puts @apps.map { |app| app.name }.join(" ")
+          return
+        end
+
         if @env.summary?
           puts Paint["Table of resources (summary)", :yellow]
 
@@ -145,6 +160,8 @@ module KubeBuildApp
         opt :target, "Target directory", type: :string, short: "-t"
         opt :summary, "Summary of resources", type: :boolean, default: false, short: "-s"
         opt :debug, "Debug?", type: :boolean, default: false, short: "-b"
+        opt :list, "App list only", type: :boolean, default: false, short: "-l"
+        opt :down, "Scale apps replicas to down (replicas: 0)", type: :strings, short: "-w"
       end
       opts
     end
