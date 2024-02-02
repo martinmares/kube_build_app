@@ -16,7 +16,7 @@ module KubeBuildApp
       "type" => "RollingUpdate",
     }
 
-    attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets, :strategy, :env, :labels, :disable_create_service
+    attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets, :strategy, :env, :labels, :disable_create_service, :min_available, :max_unavailable, :has_budget
     attr_accessor :replicas
 
     def initialize(env, shared_assets, file_name)
@@ -49,8 +49,16 @@ module KubeBuildApp
         else
           @shared_assets = shared_assets
         end
+
         @containers = load_containers()
         @replicas = @content["replicas"]
+        @has_budget = @content["min_available"] || @content["max_unavailable"]
+
+        if @has_budget
+          @min_available = @content["min_available"]
+          @max_unavailable = @content["max_unavailable"]
+        end
+
         @registry = @content["registry"]
         @dns = @content["dns"]
         @labels ||= @content["labels"] if @content.has_key? "labels"
@@ -66,6 +74,7 @@ module KubeBuildApp
           Container::build_services(app.name, app.containers, app.kind == "StatefulSet")
         end
         Application::build_deploy(app)
+        Application::build_budgets(app)
       end
       # @containers.each do |container|
       #   puts " => container #{Paint[container.name, :yellow]}, has #{Paint[container.assets.size, :green]} assets, bind port: #{Paint[container.port, :green]}"
@@ -231,6 +240,53 @@ module KubeBuildApp
         end
       end
       result
+    end
+
+    def self.build_budgets(app)
+      if app.has_budget
+        budget = Hash.new
+        label_now = Time.now.utc.to_s.gsub(" ", "_").gsub(":", ".").gsub("-", ".")
+
+        if app.labels
+          labels = Hash.new
+          labels[DEFAULT_APP_LABEL] = app.name
+          labels[DEFAULT_CREATED_AT_LABEL] = label_now
+
+          app.labels.each_pair do |key, val|
+            labels[key] = val
+          end
+        else
+          labels = {
+            DEFAULT_APP_LABEL => app.name,
+            DEFAULT_CREATED_AT_LABEL => label_now,
+          }
+        end
+
+        budget["apiVersion"] = "policy/v1"
+        budget["kind"] = "PodDisruptionBudget"
+        budget["metadata"] = {
+          "labels" => labels,
+          "name" => app.name,
+          "namespace" => app.namespace,
+        }
+
+        budget["spec"] = {
+          "selector" => {
+            "matchLabels" => {
+              DEFAULT_APP_LABEL => app.name,
+            },
+          },
+        }
+
+        if app.min_available
+          budget["spec"]["minAvailable"] = app.min_available
+        elsif app.max_unavailable
+          budget["spec"]["maxUnavailable"] = app.max_unavailable
+        end
+
+        Utils::mkdir_p "#{app.env.target_dir}/deployments"
+        File.write("#{app.env.target_dir}/deployments/#{app.name}-budget.#{Main::YAML_EXTENSION}", budget.to_yaml)
+      end
     end
   end
 end
