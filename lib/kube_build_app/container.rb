@@ -227,16 +227,35 @@ module KubeBuildApp
     end
 
     def self.build_resources(resources)
-      {
-        "requests" => {
-          "cpu" => resources["cpu"]["from"],
-          "memory" => resources["memory"]["from"],
-        },
-        "limits" => {
-          "cpu" => resources["cpu"]["to"],
-          "memory" => resources["memory"]["to"],
-        },
-      }
+      result = {}
+
+      ["cpu", "memory", "ephemeral-storage"].each do |r|
+        if resources.key?(r)
+          if resources[r].key?("from")
+            result["requests"] ||= {}
+            result["requests"][r] ||= resources[r]["from"]
+          end
+          if resources[r].key?("to")
+            result["limits"] ||= {}
+            result["limits"][r] ||= resources[r]["to"]
+          end
+        end
+      end
+
+      # {
+      #   "requests" => {
+      #     "cpu" => resources["cpu"]["from"],
+      #     "memory" => resources["memory"]["from"],
+      #     "ephemeral-storage" => resources["ephemeral-storage"]["from"],
+      #   },
+      #   "limits" => {
+      #     "cpu" => resources["cpu"]["to"],
+      #     "memory" => resources["memory"]["to"],
+      #     "ephemeral-storage" => resources["ephemeral-storage"]["to"],
+      #   },
+      # }
+
+      result
     end
 
     def self.build_mounts(assets, shared_assets)
