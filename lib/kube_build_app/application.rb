@@ -16,7 +16,8 @@ module KubeBuildApp
       "type" => "RollingUpdate",
     }
 
-    attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets, :strategy, :env, :labels, :disable_create_service, :min_available, :max_unavailable, :has_budget
+    attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets,
+                :strategy, :env, :labels, :disable_create_service, :min_available, :max_unavailable, :has_budget
     attr_accessor :replicas
 
     def initialize(env, shared_assets, file_name)
@@ -196,8 +197,8 @@ module KubeBuildApp
             },
           },
           "spec" => Container::build_specs(app.containers, registry_secrets, host_aliases, volumes),
-        # "imagePullSecrets" => build_registry_secrets(app.registry),
-        # "volumes" => Container::build_volumes(app.containers, app.shared_assets)
+          # "imagePullSecrets" => build_registry_secrets(app.registry),
+          # "volumes" => Container::build_volumes(app.containers, app.shared_assets)
         },
       }
 

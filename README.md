@@ -1,10 +1,10 @@
-# Build Kubernetes manifests easily!
+# Build Kubernetes manifests easily
 
 Simple abstraction over kubernetes manifests.
 
 ## Typical workflow
 
-You want create deployment for your awesome __brand new product__
+You want create deployment for your awesome **brand new product**
 
 ```bash
 mkdir ~/my-brand-new-product-k8s
@@ -41,7 +41,6 @@ mkdir -p production/deploy
 ```
 
 You should see the following directory structure (inside `my-brand-new-product-k8s` directory)
-
 
 ```bash
 cd ~/my-brand-new-product-k8s
@@ -126,7 +125,6 @@ server {
 
 You should see the following directory structure (inside `~/my-brand-new-product-k8s` directory)
 
-
 ```bash
 cd ~/my-brand-new-product-k8s
 tree -f
@@ -153,7 +151,7 @@ tree -f
 12 directories, 5 files
 ```
 
-__You are now ready to create your first `deployment`, run!__
+**You are now ready to create your first `deployment`, run!**
 
 ```bash
 kube_build_app -e test -t deployments/test/deploy
@@ -227,9 +225,9 @@ spec:
   selector:
     app.kubernetes.io/name: brand-new-product
   ports:
-  - name: http-80
-    port: 80
-    targetPort: 8080
+    - name: http-80
+      port: 80
+      targetPort: 8080
 ```
 
 ```yaml
@@ -241,16 +239,16 @@ metadata:
   namespace:
 spec:
   rules:
-  - host: brand-new-product.my-domain-name.io
-    http:
-      paths:
-      - path: "/"
-        backend:
-          service:
-            name: brand-new-product
-            port:
-              number: 80
-        pathType: ImplementationSpecific
+    - host: brand-new-product.my-domain-name.io
+      http:
+        paths:
+          - path: "/"
+            backend:
+              service:
+                name: brand-new-product
+                port:
+                  number: 80
+            pathType: ImplementationSpecific
 ```
 
 ```yaml
@@ -278,52 +276,52 @@ spec:
         app.kubernetes.io/name: brand-new-product
     spec:
       containers:
-      - name: brand-new-product
-        image: docker.io/library/nginx:stable
-        ports:
-        - name: http
-          containerPort: 8080
-          protocol: TCP
-        env:
-        - name: ENV_VAR
-          value: some value ...
-        - name: ANOTHER_VAR
-          value: another value ...
-        imagePullPolicy: Always
-        resources:
-          requests:
-            cpu: 100m
-            memory: 50Mi
-          limits:
-            cpu: 250m
-            memory: 100Mi
-        volumeMounts:
-        - mountPath: "/etc/nginx/conf.d/default.conf"
-          name: brand-new-product-asset-66535d3
-          readOnly: true
-          subPath: nginx.conf
-        livenessProbe:
-          httpGet:
-            path: "/index.html"
-            port: 8080
-          initialDelaySeconds:
-          periodSeconds:
-          timeoutSeconds:
-          successThreshold:
-          failureThreshold:
-        readinessProbe:
-          httpGet:
-            path: "/index.html"
-            port: 8080
-          initialDelaySeconds:
-          periodSeconds:
-          timeoutSeconds:
-          successThreshold:
-          failureThreshold:
+        - name: brand-new-product
+          image: docker.io/library/nginx:stable
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: ENV_VAR
+              value: some value ...
+            - name: ANOTHER_VAR
+              value: another value ...
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 100m
+              memory: 50Mi
+            limits:
+              cpu: 250m
+              memory: 100Mi
+          volumeMounts:
+            - mountPath: "/etc/nginx/conf.d/default.conf"
+              name: brand-new-product-asset-66535d3
+              readOnly: true
+              subPath: nginx.conf
+          livenessProbe:
+            httpGet:
+              path: "/index.html"
+              port: 8080
+            initialDelaySeconds:
+            periodSeconds:
+            timeoutSeconds:
+            successThreshold:
+            failureThreshold:
+          readinessProbe:
+            httpGet:
+              path: "/index.html"
+              port: 8080
+            initialDelaySeconds:
+            periodSeconds:
+            timeoutSeconds:
+            successThreshold:
+            failureThreshold:
       imagePullSecrets: []
       volumes:
-      - name: brand-new-product-asset-66535d3
-        configMap:
-          defaultMode: 420
-          name: brand-new-product-asset-66535d3
+        - name: brand-new-product-asset-66535d3
+          configMap:
+            defaultMode: 420
+            name: brand-new-product-asset-66535d3
 ```

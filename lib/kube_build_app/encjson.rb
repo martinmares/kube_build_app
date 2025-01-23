@@ -1,6 +1,5 @@
 module KubeBuildApp
   class Encjson
-
     ENV['ENCJSON_BIN'] ||= "encjson"
     ENCJSON_BIN ||= ENV['ENCJSON_BIN']
 
@@ -18,7 +17,7 @@ module KubeBuildApp
           content += line
         end
       }
-      
+
       content
     end
 
@@ -32,6 +31,5 @@ module KubeBuildApp
       cmd = "#{ENCJSON_BIN} decrypt -k #{ENCJSON_KEYDIR} -f #{file_name}"
       system(cmd)
     end
-
   end
 end

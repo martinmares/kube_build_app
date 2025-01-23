@@ -1,6 +1,5 @@
 module KubeBuildApp
   class KubeUtils
-
     require 'base64'
     require_relative "asset"
     require_relative "utils"
@@ -20,7 +19,6 @@ module KubeBuildApp
       }
       obj
     end
-
   end
 end
 
@@ -36,5 +34,5 @@ metadata:
   name: tsm-cache
   namespace: tsm-cetin
 
-  
+
 =end

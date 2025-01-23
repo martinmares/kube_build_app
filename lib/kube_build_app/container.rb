@@ -5,7 +5,8 @@ module KubeBuildApp
     require_relative "asset"
     require_relative "service"
 
-    attr_reader :content, :name, :image, :startup, :env_vars, :assets, :ports, :services, :resources, :shared_assets, :env, :health, :probe, :raw
+    attr_reader :content, :name, :image, :startup, :env_vars, :assets, :ports, :services, :resources, :shared_assets,
+                :env, :health, :probe, :raw
 
     def initialize(env, app_name, shared_assets, content)
       @env = env
@@ -27,7 +28,8 @@ module KubeBuildApp
 
     def self.build_assets(app_name, containers)
       containers.each_with_index do |container, i|
-        puts " => container [#{i + 1}] #{Paint[container.name, :blue]} has #{Paint[container.assets.size, :green]} asset/s"
+        puts " => container [#{i + 1}] #{Paint[container.name,
+                                               :blue]} has #{Paint[container.assets.size, :green]} asset/s"
         Asset::build_assets(container.assets, "/assets")
       end
     end
@@ -35,7 +37,8 @@ module KubeBuildApp
     def self.build_services(app_name, containers, headless = false)
       containers.each_with_index do |container, i|
         if container.ports
-          puts " => container [#{i + 1}] #{Paint[container.name, :blue]} has #{Paint[container.ports.size, :green]} port/s"
+          puts " => container [#{i + 1}] #{Paint[container.name,
+                                                 :blue]} has #{Paint[container.ports.size, :green]} port/s"
           Service::build_from_ports(app_name, container, "/services", headless)
         else
           puts " => container [#{i + 1}] #{Paint[container.name, :blue]} has #{Paint["NO!", :green]} port/s"
@@ -218,7 +221,8 @@ module KubeBuildApp
       result = Array.new
       env_vars.each do |var|
         if var.has_key? "secret_name"
-          result << { "name" => var["name"], "valueFrom" => { "secretKeyRef" => { "key" => var["key"], "name" => var["secret_name"] } } }
+          result << { "name" => var["name"],
+                      "valueFrom" => { "secretKeyRef" => { "key" => var["key"], "name" => var["secret_name"] } } }
         else
           result << { "name" => var["name"], "value" => var["value"] }
         end

@@ -1,6 +1,5 @@
 module KubeBuildApp
   class Asset
-
     attr_reader :digest, :file_name, :to, :content, :transform, :nfs_server, :path
 
     require "digest"
@@ -99,7 +98,7 @@ module KubeBuildApp
             "nfs" => {
               "server" => asset.nfs_server,
               "path" => asset.path
-             }
+            }
           }
         else
           result << {
@@ -152,6 +151,5 @@ module KubeBuildApp
       Utils::mkdir_p "#{@env.target_dir}#{append_path}"
       File.write("#{@env.target_dir}#{append_path}/#{simple_name}.#{Main::YAML_EXTENSION}", config_map.to_yaml)
     end
-
   end
 end

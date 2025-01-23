@@ -85,12 +85,14 @@ module KubeBuildApp
 
     def from_secured_json(file_name)
       return unless File.file? file_name
+
       @secured_content = Encjson::decrypt_file(file_name)
       env_vars_from_json(@secured_content, true)
     end
 
     def from_unsecured_json(file_name)
       return unless File.file? file_name
+
       @unsecured_content = File.read(file_name)
       env_vars_from_json(@unsecured_content)
     end

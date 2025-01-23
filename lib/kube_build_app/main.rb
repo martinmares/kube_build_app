@@ -80,7 +80,8 @@ module KubeBuildApp
               cpu_min_cores_with_replicas = (cpu_min_cores * replicas)
               cpu_max_cores_with_replicas = (cpu_max_cores * replicas)
 
-              rows << [app.name, replicas, container.name, print_cpu(cpu_min_cores), print_cpu(cpu_max_cores), print_mem(mem_min_mibytes), print_mem(mem_max_mibytes)]
+              rows << [app.name, replicas, container.name, print_cpu(cpu_min_cores), print_cpu(cpu_max_cores),
+                       print_mem(mem_min_mibytes), print_mem(mem_max_mibytes)]
               sum_min_mib += mem_min_mibytes
               sum_max_mib += mem_max_mibytes
               sum_min_mb += mem_min_mbytes
@@ -91,7 +92,8 @@ module KubeBuildApp
               sum_max_cpu_cores_with_replicas += cpu_max_cores_with_replicas
             end
           end
-          table = Terminal::Table.new :headings => ["App name", "Replicas", "Container", "Cpu (min)", "(max)", "Mem (min)", "(max)"], :rows => rows
+          table = Terminal::Table.new :headings => ["App name", "Replicas", "Container", "Cpu (min)", "(max)", "Mem (min)", "(max)"],
+                                      :rows => rows
           puts table
           puts Paint["Memory", :yellow]
           puts " => req: #{Paint[sprintf("%10.2f", sum_min_mib), :green]} [MiB]"
@@ -103,7 +105,8 @@ module KubeBuildApp
           if real_cpu_min
             real_cpu_min_percent = (sum_min_cpu_cores_with_replicas * 100) / real_cpu_min.to_f
             puts " => req: #{Paint[sprintf("%10.2f", sum_min_cpu_cores), :green]} [core]"
-            puts "         #{Paint[sprintf("%10.2f", sum_min_cpu_cores_with_replicas), :green]} [core] with replicas (#{sprintf("%.2f", real_cpu_min_percent)} %)"
+            puts "         #{Paint[sprintf("%10.2f", sum_min_cpu_cores_with_replicas),
+                                   :green]} [core] with replicas (#{sprintf("%.2f", real_cpu_min_percent)} %)"
             puts "         #{Paint[sprintf("%10.2f", real_cpu_min), :cyan]} [core] real"
           else
             puts " => req: #{Paint[sprintf("%10.2f", sum_min_cpu_cores), :green]} [core]"
@@ -112,7 +115,8 @@ module KubeBuildApp
           if real_cpu_max
             real_cpu_max_percent = (sum_max_cpu_cores_with_replicas * 100) / real_cpu_max.to_f
             puts " => lim: #{Paint[sprintf("%10.2f", sum_max_cpu_cores), :magenta]} [core]"
-            puts "         #{Paint[sprintf("%10.2f", sum_max_cpu_cores_with_replicas), :magenta]} [core] with replicas (#{sprintf("%.2f", real_cpu_max_percent)} %)"
+            puts "         #{Paint[sprintf("%10.2f", sum_max_cpu_cores_with_replicas),
+                                   :magenta]} [core] with replicas (#{sprintf("%.2f", real_cpu_max_percent)} %)"
             puts "         #{Paint[sprintf("%10.2f", real_cpu_max), :cyan]} [core] real"
           else
             puts " => lim: #{Paint[sprintf("%10.2f", sum_max_cpu_cores), :magenta]} [core]"
@@ -156,7 +160,8 @@ module KubeBuildApp
       opts = Optimist::options do
         opt :env_name, "Environment name", type: :string, required: true, short: "-e"
         # ! IMPORTANT - Decrypt enc.secured.json VARS must be explicitly enabled from command line!
-        opt :decrypt_secured, "Enable explicitly \"decrypt\" vars from \"env.secured.json\" file!", type: :boolean, required: false, defult: false, short: "-d"
+        opt :decrypt_secured, "Enable explicitly \"decrypt\" vars from \"env.secured.json\" file!", type: :boolean,
+                                                                                                    required: false, defult: false, short: "-d"
         opt :target, "Target directory", type: :string, short: "-t"
         opt :summary, "Summary of resources", type: :boolean, default: false, short: "-s"
         opt :debug, "Debug?", type: :boolean, default: false, short: "-b"
@@ -174,7 +179,8 @@ module KubeBuildApp
     def load_shared_assets
       if File.file?(@env.shared_assets_file_name)
         content = YAML.load_file(@env.shared_assets_file_name)
-        Asset::load_assets(SHARED_ASSET_APP_NAME, SHARED_ASSET_APP_NAME, @env, content["assets"]) if content.has_key?("assets")
+        Asset::load_assets(SHARED_ASSET_APP_NAME, SHARED_ASSET_APP_NAME, @env,
+                           content["assets"]) if content.has_key?("assets")
       else
         []
       end

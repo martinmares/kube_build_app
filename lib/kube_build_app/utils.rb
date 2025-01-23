@@ -1,6 +1,5 @@
 module KubeBuildApp
   class Utils
-
     require "fileutils"
 
     def self.name_only(file_name)
@@ -18,6 +17,5 @@ module KubeBuildApp
     def self.mkdir_p(path)
       FileUtils.mkdir_p(path)
     end
-
   end
 end

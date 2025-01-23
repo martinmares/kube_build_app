@@ -24,7 +24,7 @@ module KubeBuildApp
         if port.has_key? "expose_as"
           port["expose_as"].each do |expose|
             hostname = expose["hostname"]
-            result[hostname] = nil #unless result.has_key?(hostname)
+            result[hostname] = nil # unless result.has_key?(hostname)
           end
         end
       end
@@ -40,7 +40,7 @@ module KubeBuildApp
               attrs = { "name" => "#{port["name"]}-#{expose["port"]}", # "http-port-#{(i+1).to_s.rjust(2, '0')}", # "#{port["name"]}-port#{i+1}",
                         "port" => expose["port"],
                         "targetPort" => port["port"] }
-              #"ingress" => expose["ingress"]
+              # "ingress" => expose["ingress"]
               attrs["external"] = expose["external"] if expose.has_key? "external"
               result << attrs
             end

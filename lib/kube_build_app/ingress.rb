@@ -38,10 +38,10 @@ module KubeBuildApp
 
       http.each do |host|
         unsecure << { "host" => host["hostname"],
-                     "http" => { "paths" => [{ "path" => host["path"],
-                                              "backend" => { "service" => { "name" => host_name,
-                                                                           "port" => { "number" => port["port"].to_i } } },
-                                              "pathType" => "ImplementationSpecific" }] } }
+                      "http" => { "paths" => [{ "path" => host["path"],
+                                                "backend" => { "service" => { "name" => host_name,
+                                                                              "port" => { "number" => port["port"].to_i } } },
+                                                "pathType" => "ImplementationSpecific" }] } }
       end
 
       spec = Hash.new
