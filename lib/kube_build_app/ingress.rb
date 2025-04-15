@@ -38,10 +38,10 @@ module KubeBuildApp
 
       http.each do |host|
         unsecure << { "host" => host["hostname"],
-                      "http" => { "paths" => [{ "path" => host["path"],
-                                                "backend" => { "service" => { "name" => host_name,
-                                                                              "port" => { "number" => port["port"].to_i } } },
-                                                "pathType" => "ImplementationSpecific" }] } }
+                     "http" => { "paths" => [{ "path" => host["path"],
+                                              "backend" => { "service" => { "name" => host_name,
+                                                                           "port" => { "number" => port["port"].to_i } } },
+                                              "pathType" => "ImplementationSpecific" }] } }
       end
 
       spec = Hash.new
@@ -52,8 +52,12 @@ module KubeBuildApp
 
       if https
         https.each do |host|
-          secure << { "hosts" => [host["hostname"]],
-                      "secretName" => host["secret_name"] }
+          if host["secret_name"]
+            secure << { "hosts" => [host["hostname"]],
+                        "secretName" => host["secret_name"] }
+          else
+            secure << { "hosts" => [host["hostname"]] }
+          end
         end
       end
 
