@@ -46,8 +46,13 @@ module KubeBuildApp
       end
     end
 
-    def self.build_specs(containers, registry_secrets, host_aliases, volumes)
+    def self.build_specs(containers, registry_secrets, host_aliases, volumes, arch)
       result = Hash.new
+
+      if arch
+        result["nodeSelector"] = { "kubernetes.io/arch" => arch }
+      end
+
       result["containers"] = Array.new
       containers.each do |container|
         result["containers"] << Container::build_spec(container)

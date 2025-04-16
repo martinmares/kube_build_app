@@ -66,7 +66,7 @@ module KubeBuildApp
       svc["kind"] = "Service"
       svc["metadata"] = { "name" => host_name, "namespace" => namespace }
       svc["spec"] = {
-        "selector" => { "app.kubernetes.io/name" => app_name },
+        "selector" => { KubeBuildApp::Application::DEFAULT_APP_LABEL => app_name },
         # make it compatible with runy 2.x
         # "ports" => ports.map { |port| port.except("external") }
         "ports" => ports_without_ext,
