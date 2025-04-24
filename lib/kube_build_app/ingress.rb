@@ -46,6 +46,10 @@ module KubeBuildApp
 
       spec = Hash.new
 
+      if external.has_key? "class_name"
+        spec["ingressClassName"] = external["class_name"]
+      end
+
       if unsecure.count > 0
         spec["rules"] = unsecure
       end
