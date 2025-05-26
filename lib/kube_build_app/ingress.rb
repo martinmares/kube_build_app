@@ -86,12 +86,27 @@ module KubeBuildApp
       route["kind"] = "Route"
       route["metadata"] = { "name" => name, "namespace" => namespace }
 
+      if external.has_key? "tls"
+        tls = Hash.new
+        _tls = external["tls"]
+        if _tls.has_key? "termination"
+          tls["termination"] = _tls["termination"]
+        end
+        if _tls.has_key? "insecureEdgeTerminationPolicy"
+          tls["insecureEdgeTerminationPolicy"] = _tls["insecureEdgeTerminationPolicy"]
+        end
+      end
+
       spec = { "host" => host["hostname"],
                "port" => { "targetPort" => port["name"] },
                "to" => { "kind" => "Service",
                          "name" => host_name },
                "wildcardPolicy" => "None" }
       route["spec"] = spec
+
+      if tls
+        route["spec"]["tls"] = tls
+      end
 
       puts "   => has external (route) #{Paint[name, :yellow]}"
       Utils::mkdir_p "#{env.target_dir}#{append_path}/external"
