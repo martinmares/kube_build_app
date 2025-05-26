@@ -17,7 +17,7 @@ module KubeBuildApp
     }
 
     attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets,
-                :strategy, :env, :labels, :disable_create_service, :min_available, :max_unavailable, :has_budget,
+                :strategy, :env, :labels, :annotations, :disable_create_service, :min_available, :max_unavailable, :has_budget,
                 :arch
     attr_accessor :replicas
 
@@ -65,6 +65,7 @@ module KubeBuildApp
         @registry = @content["registry"]
         @dns = @content["dns"]
         @labels ||= @content["labels"] if @content.has_key? "labels"
+        @annotations ||= @content["annotations"] if @content.has_key? "annotations"
       end
     end
 
@@ -177,6 +178,14 @@ module KubeBuildApp
         }
       end
 
+      if app.annotations
+        annotations = Hash.new
+
+        app.annotations.each_pair do |key, val|
+          annotations[key] = val
+        end
+      end
+
       deploy["apiVersion"] = "apps/v1"
       deploy["kind"] = app.kind
       deploy["metadata"] = {
@@ -203,6 +212,10 @@ module KubeBuildApp
         # "volumes" => Container::build_volumes(app.containers, app.shared_assets)
         },
       }
+
+      if annotations
+        deploy["spec"]["template"]["metadata"]["annotations"] = annotations
+      end
 
       if app.kind == "StatefulSet"
         deploy["spec"].delete("strategy")
