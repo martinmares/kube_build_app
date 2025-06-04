@@ -17,7 +17,7 @@ module KubeBuildApp
     }
 
     attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets,
-                :strategy, :env, :labels, :annotations, :disable_create_service, :min_available, :max_unavailable, :has_budget,
+                :strategy, :env, :labels, :annotations, :pod_annotations, :disable_create_service, :min_available, :max_unavailable, :has_budget,
                 :arch
     attr_accessor :replicas
 
@@ -66,6 +66,7 @@ module KubeBuildApp
         @dns = @content["dns"]
         @labels ||= @content["labels"] if @content.has_key? "labels"
         @annotations ||= @content["annotations"] if @content.has_key? "annotations"
+        @pod_annotations ||= @content["pod_annotations"] if @content.has_key? "pod_annotations"
       end
     end
 
@@ -186,6 +187,14 @@ module KubeBuildApp
         end
       end
 
+      if app.pod_annotations
+        pod_annotations = Hash.new
+
+        app.pod_annotations.each_pair do |key, val|
+          pod_annotations[key] = val
+        end
+      end
+
       deploy["apiVersion"] = "apps/v1"
       deploy["kind"] = app.kind
       deploy["metadata"] = {
@@ -214,7 +223,11 @@ module KubeBuildApp
       }
 
       if annotations
-        deploy["spec"]["template"]["metadata"]["annotations"] = annotations
+        deploy["metadata"]["annotations"] = annotations
+      end
+
+      if pod_annotations
+        deploy["spec"]["template"]["metadata"]["annotations"] = pod_annotations
       end
 
       if app.kind == "StatefulSet"
