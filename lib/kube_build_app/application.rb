@@ -101,10 +101,9 @@ module KubeBuildApp
 
     def apply_sys_ENV_on(content)
       raw_content = content
-      ENV.each do |k, v|
-        to_replace = v.to_s
-        replaced = raw_content.gsub(/\${{env\:(\s*)(#{k})(\s*)}}/ix, to_replace)
-        raw_content = replaced
+      ENV.each do |_k, _v|
+        raw_content.gsub!(/\{\{\s*env\s*:\s*#{Regexp.escape(_k)}\s*\}\}/, _v.to_s)
+        raw_content
       end
 
       raw_content
@@ -115,32 +114,17 @@ module KubeBuildApp
       raw_content = File.read(@file_name)
       raw_content = apply_sys_ENV_on(raw_content)
 
-      obj = YAML.load(raw_content)
-
-      if obj.has_key? "vars"
-        @app_vars = obj["vars"]
-        obj.delete("vars")
-
-        # ! RELOAD object without vars !
-        raw_content = obj.to_yaml
-        obj = YAML.load(raw_content)
-
+      _obj = YAML.load(raw_content)
+      if _obj.has_key? "vars"
+        @app_vars = _obj["vars"]
         @app_vars.each do |var|
-          k = var["name"]
-          v = var["value"]
-
-          to_replace = v.to_s
-          if (v.is_a? Integer) || (v.is_a? TrueClass) || (v.is_a? FalseClass)
-            replaced = raw_content.gsub(/"\"{{var\:(\s*)(#{k})(\s*)}}\""/ix, to_replace)
-          elsif v.is_a? String
-            replaced = raw_content.gsub(/"{{var\:(\s*)(#{k})(\s*)}}"/ix, to_replace)
-          end
-          raw_content = replaced
+          _k = var["name"]
+          _v = var["value"]
+          raw_content.gsub!(/\{\{\s*var\s*:\s*#{Regexp.escape(_k)}\s*\}\}/, _v.to_s)
         end
-
-        # ! RELOAD object with replaced raw_content !
-        obj = YAML.load(raw_content)
       end
+
+      obj = YAML.load(raw_content)
 
       obj
     end
