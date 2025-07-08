@@ -25,6 +25,7 @@ module KubeBuildApp
       http = external["http"]
       https = external["https"]
       annotations = external["annotations"]
+      labels = external["labels"]
 
       ing = Hash.new
 
@@ -34,6 +35,10 @@ module KubeBuildApp
 
       if annotations && annotations.size > 0
         ing["metadata"]["annotations"] = annotations
+      end
+
+      if labels && labels.size > 0
+        ing["metadata"]["labels"] = labels
       end
 
       http.each do |host|
