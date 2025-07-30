@@ -1,6 +1,6 @@
 module KubeBuildApp
   class Asset
-    attr_reader :digest, :file_name, :to, :content, :transform, :nfs_server, :path
+    attr_reader :digest, :file_name, :to, :content, :transform, :nfs_server, :path, :pvc_name
 
     require "digest"
     require "digest/crc32"
@@ -17,18 +17,20 @@ module KubeBuildApp
         @file_name = "#{@env.environment_dir}/#{@file}"
       end
       @to = content["to"]
-      @binary = content["binary"]
-      @binary ||= false
-      @transform = content["transform"]
-      @transform ||= false
-      @temp = content["temp"]
-      @temp ||= false
+      @binary = content["binary"] || false
+      @transform = content["transform"] || false
+      @temp = content["temp"] || false
+      @pvc = content["pvc"] || false
+      if pvc?
+        @pvc_name = content["name"]
+      end
       @nfs_server = content["nfs-server"]
       if nfs?
         @path = content["path"]
       end
       @content = File.read(@file_name) if @file_name
       @content = @to if temp?
+      @content = "#{@name}#{@to}" if pvc?
       @content = "#{@server}#{@path}" if nfs?
       if @binary
         content_with_env_applied = @content
@@ -42,6 +44,10 @@ module KubeBuildApp
     def simple_name
       if temp?
         "#{@app_name}-temp-#{@digest}"
+      elsif pvc?
+        "#{@app_name}-pvc-#{@digest}"
+      elsif nfs?
+        "#{@app_name}-nfs-#{@digest}"
       else
         "#{@container_name}-asset-#{@digest}"
       end
@@ -85,28 +91,39 @@ module KubeBuildApp
       @nfs_server
     end
 
+    def pvc?
+      @pvc
+    end
+
     def self.build_container_assets(assets)
       result = Array.new
       assets.each do |asset|
         if asset.temp?
           result << {
-            "name" => asset.simple_name
+            "name" => asset.simple_name,
+          }
+        elsif asset.pvc?
+          result << {
+            "name" => asset.simple_name,
+            "persistentVolumeClaim" => {
+              "clainMame" => asset.pvc_name,
+            },
           }
         elsif asset.nfs?
           result << {
             "name" => asset.simple_name,
             "nfs" => {
               "server" => asset.nfs_server,
-              "path" => asset.path
-            }
+              "path" => asset.path,
+            },
           }
         else
           result << {
             "name" => asset.simple_name,
             "configMap" => {
               "defaultMode" => 420,
-              "name" => asset.simple_name
-            }
+              "name" => asset.simple_name,
+            },
           }
         end
       end
@@ -121,6 +138,11 @@ module KubeBuildApp
             "mountPath" => asset.to,
             "name" => asset.simple_name,
           }
+        elsif asset.pvc?
+          result << {
+            "mountPath" => asset.to,
+            "name" => asset.simple_name,
+          }
         elsif asset.nfs?
           result << {
             "mountPath" => asset.to,
@@ -131,7 +153,7 @@ module KubeBuildApp
             "mountPath" => asset.to,
             "name" => asset.simple_name,
             "readOnly" => true,
-            "subPath" => asset.config_map_key
+            "subPath" => asset.config_map_key,
           }
         end
       end
@@ -140,7 +162,7 @@ module KubeBuildApp
 
     def self.build_assets(assets, append_path)
       assets.each_with_index do |asset, i|
-        asset.write(i, append_path) unless (asset.temp? || asset.nfs?)
+        asset.write(i, append_path) unless (asset.temp? || asset.pvc? || asset.nfs?)
       end
     end
 
