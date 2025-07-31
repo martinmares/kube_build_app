@@ -106,7 +106,7 @@ module KubeBuildApp
           result << {
             "name" => asset.simple_name,
             "persistentVolumeClaim" => {
-              "clainMame" => asset.pvc_name,
+              "claimName" => asset.pvc_name,
             },
           }
         elsif asset.nfs?
