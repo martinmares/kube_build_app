@@ -15,6 +15,7 @@ module KubeBuildApp
       },
       "type" => "RollingUpdate",
     }
+    DEFAULT_METRICS_PORT = 9090
 
     attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets,
                 :strategy, :env, :labels, :annotations, :pod_annotations, :disable_create_service, :min_available, :max_unavailable, :has_budget,

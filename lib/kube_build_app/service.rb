@@ -46,7 +46,7 @@ module KubeBuildApp
 
               if (port.has_key?("metrics") && port["metrics"] == true)
                 attrs_metrics = { "name" => "metrics",
-                                  "port" => expose["port"],
+                                  "port" => KubeBuildApp::Application::DEFAULT_METRICS_PORT,
                                   "targetPort" => port["port"] }
                 attrs_metrics["external"] = expose["external"] if expose.has_key? "external"
                 result << attrs_metrics
@@ -65,7 +65,9 @@ module KubeBuildApp
 
       # make it compatible with runy 2.x
       ports_without_ext = []
+      has_metrics = false
       ports.each do |port|
+        has_metrics = true if port["name"] == "metrics"
         port_without_ext = port.reject { |k, _| k == "external" }
         ports_without_ext << port_without_ext
       end
@@ -74,9 +76,16 @@ module KubeBuildApp
       svc["apiVersion"] = "v1"
       svc["kind"] = "Service"
       svc["metadata"] = { "name" => host_name, "namespace" => namespace }
+
+      if has_metrics
+        svc["metadata"]["labels"] ||= {}
+        svc["metadata"]["labels"][KubeBuildApp::Application::DEFAULT_APP_LABEL] = app_name
+        svc["metadata"]["labels"]["metrics"] = "true"
+      end
+
       svc["spec"] = {
         "selector" => { KubeBuildApp::Application::DEFAULT_APP_LABEL => app_name },
-        # make it compatible with runy 2.x
+        # make it compatible with Ruby 2.x
         # "ports" => ports.map { |port| port.except("external") }
         "ports" => ports_without_ext,
       }
