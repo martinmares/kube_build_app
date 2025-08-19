@@ -43,11 +43,20 @@ module KubeBuildApp
               # "ingress" => expose["ingress"]
               attrs["external"] = expose["external"] if expose.has_key? "external"
               result << attrs
+
+              if (port.has_key?("metrics") && port["metrics"] == true)
+                attrs_metrics = { "name" => "metrics",
+                                  "port" => expose["port"],
+                                  "targetPort" => port["port"] }
+                attrs_metrics["external"] = expose["external"] if expose.has_key? "external"
+                result << attrs_metrics
+              end
             end
           end
         end
       end
       # puts "host_name: #{host_name} ===> result: #{result}"
+      # exit 0
       result
     end
 
