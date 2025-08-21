@@ -160,15 +160,19 @@ module KubeBuildApp
       result
     end
 
-    def self.build_assets(assets, append_path)
+    def self.build_assets(assets, append_path, argocd_wave)
       assets.each_with_index do |asset, i|
-        asset.write(i, append_path) unless (asset.temp? || asset.pvc? || asset.nfs?)
+        asset.write(i, append_path, argocd_wave) unless (asset.temp? || asset.pvc? || asset.nfs?)
       end
     end
 
-    def write(i = 0, append_path)
-      puts " => asset [#{i + 1}]: #{Paint[simple_name, :magenta]}"
-      config_map = KubeUtils::config_map_from_asset(self)
+    def write(i = 0, append_path, argocd_wave)
+      unless argocd_wave
+        puts " => asset [#{i + 1}]: #{Paint[simple_name, :magenta]}"
+      else
+        puts " => asset [#{i + 1}]: #{Paint[simple_name, :magenta]}, wave: #{Paint[argocd_wave, :cyan]}"
+      end
+      config_map = KubeUtils::config_map_from_asset(self, argocd_wave)
 
       Utils::mkdir_p "#{@env.target_dir}#{append_path}"
       File.write("#{@env.target_dir}#{append_path}/#{simple_name}.#{Main::YAML_EXTENSION}", config_map.to_yaml)

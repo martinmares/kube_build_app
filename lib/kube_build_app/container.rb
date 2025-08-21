@@ -26,11 +26,11 @@ module KubeBuildApp
       @raw = content["raw"]
     end
 
-    def self.build_assets(app_name, containers)
+    def self.build_assets(app_name, containers, argocd_wave)
       containers.each_with_index do |container, i|
         puts " => container [#{i + 1}] #{Paint[container.name,
                                                :blue]} has #{Paint[container.assets.size, :green]} asset/s"
-        Asset::build_assets(container.assets, "/assets")
+        Asset::build_assets(container.assets, "/assets", argocd_wave)
       end
     end
 

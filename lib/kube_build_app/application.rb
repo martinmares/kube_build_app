@@ -16,9 +16,11 @@ module KubeBuildApp
       "type" => "RollingUpdate",
     }
     DEFAULT_METRICS_PORT = 9090
+    ARGOCD_ANNOTATION_SYNC_WAVE = "argocd.argoproj.io/sync-wave"
+    ARGOCD_EARLIEST_SYNC_WAVE = 999
 
     attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets,
-                :strategy, :env, :labels, :annotations, :pod_annotations, :disable_create_service, :min_available, :max_unavailable, :has_budget,
+                :strategy, :env, :labels, :annotations, :argocd_wave, :pod_annotations, :disable_create_service, :min_available, :max_unavailable, :has_budget,
                 :arch
     attr_accessor :replicas
 
@@ -66,7 +68,17 @@ module KubeBuildApp
         @registry = @content["registry"]
         @dns = @content["dns"]
         @labels ||= @content["labels"] if @content.has_key? "labels"
-        @annotations ||= @content["annotations"] if @content.has_key? "annotations"
+
+        if @content.has_key? "annotations"
+          @annotations ||= @content["annotations"]
+          @argocd_wave = false
+
+          @annotations.each_pair do |key, val|
+            @argocd_wave = val.to_i if key == ARGOCD_ANNOTATION_SYNC_WAVE
+          end
+        end
+        p @argocd_wave.class
+
         @pod_annotations ||= @content["pod_annotations"] if @content.has_key? "pod_annotations"
       end
     end
@@ -75,7 +87,7 @@ module KubeBuildApp
       apps.each do |app|
         puts "Application #{Paint[app.name, :blue]}, with #{Paint[app.containers.size, :green]} container/s"
         # puts " => container #{Paint[app.container.name, :yellow]}, has #{Paint[app.container.assets.size, :green]} assets, bind port: #{Paint[app.container.port, :green]}"
-        Container::build_assets(app.name, app.containers)
+        Container::build_assets(app.name, app.containers, @argocd_wave)
         unless app.disable_create_service
           Container::build_services(app.name, app.containers, app.kind == "StatefulSet")
         end
@@ -96,6 +108,10 @@ module KubeBuildApp
 
     def shared_assets?
       @shared_assets
+    end
+
+    def argocd_wave?
+      @argocd_wave || false
     end
 
     private

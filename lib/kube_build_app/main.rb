@@ -123,7 +123,19 @@ module KubeBuildApp
           end
         else
           puts "Build #{Paint[@shared_assets.size, :green]} shared asset/s"
-          Asset::build_assets(@shared_assets, "/assets/shared")
+
+          has_some_argocd_wave = false
+          @apps.each do |app|
+            if app.argocd_wave?
+              has_some_argocd_wave = true
+            end
+          end
+
+          unless has_some_argocd_wave
+            Asset::build_assets(@shared_assets, "/assets/shared", false)
+          else
+            Asset::build_assets(@shared_assets, "/assets/shared", Application::ARGOCD_EARLIEST_SYNC_WAVE)
+          end
           Application::build_apps(@apps)
         end
       else
