@@ -77,7 +77,6 @@ module KubeBuildApp
             @argocd_wave = val.to_i if key == ARGOCD_ANNOTATION_SYNC_WAVE
           end
         end
-        p @argocd_wave.class
 
         @pod_annotations ||= @content["pod_annotations"] if @content.has_key? "pod_annotations"
       end
