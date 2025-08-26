@@ -109,7 +109,7 @@ module KubeBuildApp
                                    :green]} [core] with replicas (#{sprintf("%.2f", real_cpu_min_percent)} %)"
             puts "         #{Paint[sprintf("%10.2f", real_cpu_min), :cyan]} [core] real"
           else
-            puts " => req: #{Paint[sprintf("%10.2f", sum_min_cpu_cores), :green]} [core]"
+            puts " => req: #{Paint[sprintf("%10.2f", sum_min_cpu_cores_with_replicas), :green]} [core]"
           end
           real_cpu_max = ENV["REAL_CPU_MAX"]
           if real_cpu_max
@@ -119,7 +119,7 @@ module KubeBuildApp
                                    :magenta]} [core] with replicas (#{sprintf("%.2f", real_cpu_max_percent)} %)"
             puts "         #{Paint[sprintf("%10.2f", real_cpu_max), :cyan]} [core] real"
           else
-            puts " => lim: #{Paint[sprintf("%10.2f", sum_max_cpu_cores), :magenta]} [core]"
+            puts " => lim: #{Paint[sprintf("%10.2f", sum_max_cpu_cores_with_replicas), :magenta]} [core]"
           end
         else
           puts "Build #{Paint[@shared_assets.size, :green]} shared asset/s"
