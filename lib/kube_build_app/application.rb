@@ -86,7 +86,7 @@ module KubeBuildApp
       apps.each do |app|
         puts "Application #{Paint[app.name, :blue]}, with #{Paint[app.containers.size, :green]} container/s"
         # puts " => container #{Paint[app.container.name, :yellow]}, has #{Paint[app.container.assets.size, :green]} assets, bind port: #{Paint[app.container.port, :green]}"
-        Container::build_assets(app.name, app.containers, @argocd_wave)
+        Container::build_assets(app.name, app.containers, app.argocd_wave)
         unless app.disable_create_service
           Container::build_services(app.name, app.containers, app.kind == "StatefulSet")
         end

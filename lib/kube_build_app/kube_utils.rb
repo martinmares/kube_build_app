@@ -20,7 +20,7 @@ module KubeBuildApp
 
       if argocd_wave
         obj["metadata"]["annotations"] ||= {}
-        obj["metadata"]["annotations"] = { "argocd.argoproj.io/sync-wave" => (argocd_wave * -1).to_s }
+        obj["metadata"]["annotations"] = { Application::ARGOCD_ANNOTATION_SYNC_WAVE => (argocd_wave * -1).to_s }
       end
 
       obj
