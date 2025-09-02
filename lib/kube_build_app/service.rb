@@ -81,6 +81,8 @@ module KubeBuildApp
         svc["metadata"]["labels"] ||= {}
         svc["metadata"]["labels"][KubeBuildApp::Application::DEFAULT_APP_LABEL] = app_name
         svc["metadata"]["labels"]["metrics"] = "true"
+        svc["metadata"]["labels"]["application"] = app_name
+        svc["metadata"]["labels"]["environment"] = env.name
       end
 
       svc["spec"] = {
