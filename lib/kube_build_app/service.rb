@@ -48,6 +48,9 @@ module KubeBuildApp
                 attrs_metrics = { "name" => "metrics",
                                   "port" => KubeBuildApp::Application::DEFAULT_METRICS_PORT,
                                   "targetPort" => port["port"] }
+                if port.has_key?("metricsPathFor")
+                  attrs_metrics["metricsPathFor"] = host_name
+                end
                 attrs_metrics["external"] = expose["external"] if expose.has_key? "external"
                 result << attrs_metrics
               end
@@ -66,8 +69,15 @@ module KubeBuildApp
       # make it compatible with runy 2.x
       ports_without_ext = []
       has_metrics = false
+      metrics_path_for = false
       ports.each do |port|
-        has_metrics = true if port["name"] == "metrics"
+        if port["name"] == "metrics"
+          has_metrics = true
+          if port.has_key?("metricsPathFor")
+            metrics_path_for = port["metricsPathFor"]
+            port.delete("metricsPathFor")
+          end
+        end
         port_without_ext = port.reject { |k, _| k == "external" }
         ports_without_ext << port_without_ext
       end
@@ -81,6 +91,9 @@ module KubeBuildApp
         svc["metadata"]["labels"] ||= {}
         svc["metadata"]["labels"][KubeBuildApp::Application::DEFAULT_APP_LABEL] = app_name
         svc["metadata"]["labels"]["metrics"] = "true"
+        if metrics_path_for
+          svc["metadata"]["labels"]["metricsPathFor"] = metrics_path_for
+        end
         svc["metadata"]["labels"]["application"] = app_name
         svc["metadata"]["labels"]["environment"] = env.name
       end
