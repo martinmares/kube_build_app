@@ -1,6 +1,6 @@
 module KubeBuildApp
   class Asset
-    attr_reader :digest, :file_name, :to, :content, :transform, :nfs_server, :path, :pvc_name
+    attr_reader :digest, :file_name, :to, :content, :transform, :nfs_server, :path, :pvc_name, :host_path
 
     require "digest"
     require "digest/crc32"
@@ -28,10 +28,12 @@ module KubeBuildApp
       if nfs?
         @path = content["path"]
       end
+      @host_path = content["host-path"]
       @content = File.read(@file_name) if @file_name
       @content = @to if temp?
       @content = "#{@name}#{@to}" if pvc?
       @content = "#{@server}#{@path}" if nfs?
+      @content = "#{@host_path}#{@to}" if host_path?
       if @binary
         content_with_env_applied = @content
       else
@@ -48,6 +50,8 @@ module KubeBuildApp
         "#{@app_name}-pvc-#{@digest}"
       elsif nfs?
         "#{@app_name}-nfs-#{@digest}"
+      elsif host_path?
+        "#{@app_name}-host-#{@digest}"
       else
         "#{@container_name}-asset-#{@digest}"
       end
@@ -91,6 +95,10 @@ module KubeBuildApp
       @nfs_server
     end
 
+    def host_path?
+      @host_path
+    end
+
     def pvc?
       @pvc
     end
@@ -115,6 +123,14 @@ module KubeBuildApp
             "nfs" => {
               "server" => asset.nfs_server,
               "path" => asset.path,
+            },
+          }
+        elsif asset.host_path?
+          result << {
+            "name" => asset.simple_name,
+            "hostPath" => {
+              "path" => asset.host_path,
+              "type" => "Directory",
             },
           }
         else
@@ -148,6 +164,11 @@ module KubeBuildApp
             "mountPath" => asset.to,
             "name" => asset.simple_name,
           }
+        elsif asset.host_path?
+          result << {
+            "mountPath" => asset.to,
+            "name" => asset.simple_name,
+          }
         else
           result << {
             "mountPath" => asset.to,
@@ -162,7 +183,7 @@ module KubeBuildApp
 
     def self.build_assets(assets, append_path, argocd_wave)
       assets.each_with_index do |asset, i|
-        asset.write(i, append_path, argocd_wave) unless (asset.temp? || asset.pvc? || asset.nfs?)
+        asset.write(i, append_path, argocd_wave) unless (asset.temp? || asset.pvc? || asset.nfs? || asset.host_path?)
       end
     end
 
