@@ -21,7 +21,7 @@ module KubeBuildApp
 
     attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets,
                 :strategy, :env, :labels, :annotations, :argocd_wave, :pod_annotations, :disable_create_service, :min_available, :max_unavailable, :has_budget,
-                :arch, :node_selector
+                :arch, :node_selector, :tolerations
     attr_accessor :replicas
 
     def initialize(env, shared_assets, file_name)
@@ -58,6 +58,7 @@ module KubeBuildApp
         @containers = load_containers()
         @arch = @content["arch"] || nil
         @node_selector = @content["node_selector"] || nil
+        @tolerations = @content["tolerations"] || nil
         @replicas = @content["replicas"]
         @has_budget = @content["min_available"] || @content["max_unavailable"]
 

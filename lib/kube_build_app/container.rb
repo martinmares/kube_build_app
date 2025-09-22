@@ -50,6 +50,7 @@ module KubeBuildApp
       containers = app.containers
       arch = app.arch
       node_selector = app.node_selector
+      tolerations = app.tolerations
 
       result = Hash.new
 
@@ -60,6 +61,10 @@ module KubeBuildApp
       if node_selector
         result["nodeSelector"] ||= {}
         result["nodeSelector"].merge!(node_selector)
+      end
+
+      if tolerations
+        result["tolerations"] = tolerations
       end
 
       result["containers"] = Array.new
