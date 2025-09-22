@@ -21,7 +21,7 @@ module KubeBuildApp
 
     attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets,
                 :strategy, :env, :labels, :annotations, :argocd_wave, :pod_annotations, :disable_create_service, :min_available, :max_unavailable, :has_budget,
-                :arch
+                :arch, :node_selector
     attr_accessor :replicas
 
     def initialize(env, shared_assets, file_name)
@@ -57,6 +57,7 @@ module KubeBuildApp
 
         @containers = load_containers()
         @arch = @content["arch"] || nil
+        @node_selector = @content["node_selector"] || nil
         @replicas = @content["replicas"]
         @has_budget = @content["min_available"] || @content["max_unavailable"]
 
@@ -131,6 +132,7 @@ module KubeBuildApp
       raw_content = apply_sys_ENV_on(raw_content)
 
       _obj = YAML.load(raw_content)
+
       if _obj.has_key? "vars"
         @app_vars = _obj["vars"]
         @app_vars.each do |var|
@@ -216,7 +218,7 @@ module KubeBuildApp
               DEFAULT_APP_LABEL => app.name,
             },
           },
-          "spec" => Container::build_specs(app.containers, registry_secrets, host_aliases, volumes, app.arch),
+          "spec" => Container::build_specs(app, registry_secrets, host_aliases, volumes),
         # "imagePullSecrets" => build_registry_secrets(app.registry),
         # "volumes" => Container::build_volumes(app.containers, app.shared_assets)
         },

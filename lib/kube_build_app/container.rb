@@ -46,11 +46,20 @@ module KubeBuildApp
       end
     end
 
-    def self.build_specs(containers, registry_secrets, host_aliases, volumes, arch)
+    def self.build_specs(app, registry_secrets, host_aliases, volumes)
+      containers = app.containers
+      arch = app.arch
+      node_selector = app.node_selector
+
       result = Hash.new
 
       if arch
         result["nodeSelector"] = { "kubernetes.io/arch" => arch }
+      end
+
+      if node_selector
+        result["nodeSelector"] ||= {}
+        result["nodeSelector"].merge!(node_selector)
       end
 
       result["containers"] = Array.new
