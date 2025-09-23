@@ -10,6 +10,7 @@ module KubeBuildApp
     TARGET_DIR = "target"
     ASSETS_DIR = "assets"
     APPS_DIR = "apps"
+    APPS_DEFAULTS_FILE_NAME = "_defaults.yml"
     NAMESPACE_KEY = "NAMESPACE"
 
     SECURED_FILE_NAME = "env.secured.json"

@@ -30,7 +30,7 @@ module KubeBuildApp
 
     def build
       if @env.apps_dir?
-        Dir.glob("#{@env.apps_dir}/*.#{YAML_EXTENSION}").select.each do |file_name|
+        Dir.glob(File.join(@env.apps_dir, "[!_]*.#{YAML_EXTENSION}")).each do |file_name|
           @apps << Application.new(@env, @shared_assets, file_name)
         end
 

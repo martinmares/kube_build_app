@@ -130,6 +130,16 @@ module KubeBuildApp
     def apply_app_vars()
       # ap @file_name
       raw_content = File.read(@file_name)
+
+      # append _defaults.yml
+      Dir.glob(File.join(@env.apps_dir, "_*.#{Main::YAML_EXTENSION}")).each do |file_name|
+        if File.basename(file_name) == Env::APPS_DEFAULTS_FILE_NAME
+          path = File.join(@env.apps_dir, Env::APPS_DEFAULTS_FILE_NAME)
+          defaults_content = File.read(path)
+          raw_content = "#{raw_content}\n#{defaults_content}"
+        end
+      end
+
       raw_content = apply_sys_ENV_on(raw_content)
 
       _obj = YAML.load(raw_content)
