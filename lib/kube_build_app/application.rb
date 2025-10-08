@@ -20,7 +20,7 @@ module KubeBuildApp
         "maxSurge" => 0,
         "maxUnavailable" => 1,
       },
-      " type" => "RollingUpdate",
+      "type" => "RollingUpdate",
     }
     DEFAULT_METRICS_PORT = 9090
     ARGOCD_ANNOTATION_SYNC_WAVE = "argocd.argoproj.io/sync-wave"
