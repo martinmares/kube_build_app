@@ -15,6 +15,13 @@ module KubeBuildApp
       },
       "type" => "RollingUpdate",
     }
+    DEFAULT_STRATEGY_ONE_BY_ONE = {
+      "rollingUpdate" => {
+        "maxSurge" => 0,
+        "maxUnavailable" => 1,
+      },
+      " type" => "RollingUpdate",
+    }
     DEFAULT_METRICS_PORT = 9090
     ARGOCD_ANNOTATION_SYNC_WAVE = "argocd.argoproj.io/sync-wave"
     ARGOCD_EARLIEST_SYNC_WAVE = 999
@@ -41,6 +48,8 @@ module KubeBuildApp
             @strategy = {
               "type" => "Recreate",
             }
+          when "one-by-one"
+            @strategy = DEFAULT_STRATEGY_ONE_BY_ONE
           else
             @strategy = DEFAULT_STRATEGY
           end
