@@ -76,20 +76,25 @@ module KubeBuildApp
               mem_min_mbytes = normalize_mem(mem_min).to_mb
               mem_max_mbytes = normalize_mem(mem_max).to_mb
               cpu_min_cores = normalize_cpu(cpu_min)
-              cpu_max_cores = normalize_cpu(cpu_max)
+              cpu_max_cores = normalize_cpu(cpu_max) if cpu_max
               cpu_min_cores_with_replicas = (cpu_min_cores * replicas)
-              cpu_max_cores_with_replicas = (cpu_max_cores * replicas)
+              cpu_max_cores_with_replicas = (cpu_max_cores * replicas) if cpu_max
 
-              rows << [app.name, replicas, container.name, print_cpu(cpu_min_cores), print_cpu(cpu_max_cores),
-                       print_mem(mem_min_mibytes), print_mem(mem_max_mibytes)]
+              if cpu_max
+                rows << [app.name, replicas, container.name, print_cpu(cpu_min_cores), print_cpu(cpu_max_cores),
+                         print_mem(mem_min_mibytes), print_mem(mem_max_mibytes)]
+              else
+                rows << [app.name, replicas, container.name, print_cpu(cpu_min_cores), nil,
+                         print_mem(mem_min_mibytes), print_mem(mem_max_mibytes)]
+              end
               sum_min_mib += mem_min_mibytes
               sum_max_mib += mem_max_mibytes
               sum_min_mb += mem_min_mbytes
               sum_max_mb += mem_max_mbytes
               sum_min_cpu_cores += cpu_min_cores
-              sum_max_cpu_cores += cpu_max_cores
+              sum_max_cpu_cores += cpu_max_cores if cpu_max
               sum_min_cpu_cores_with_replicas += cpu_min_cores_with_replicas
-              sum_max_cpu_cores_with_replicas += cpu_max_cores_with_replicas
+              sum_max_cpu_cores_with_replicas += cpu_max_cores_with_replicas if cpu_max
             end
           end
           table = Terminal::Table.new :headings => ["App name", "Replicas", "Container", "Cpu (min)", "(max)", "Mem (min)", "(max)"],
