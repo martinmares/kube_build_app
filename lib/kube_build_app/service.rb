@@ -4,7 +4,7 @@ module KubeBuildApp
     require "awesome_print"
     require_relative "ingress"
 
-    def self.build_from_ports(app_name, container, append_path, headless = false)
+    def self.build_from_ports(app_name, container, append_path)
       service_names = service_names(container.ports)
       service_names.each do |(host_name, _)|
         service_names[host_name] = ports_for_service(container, host_name)
@@ -12,7 +12,7 @@ module KubeBuildApp
       service_names.each_with_index do |service, i|
         (host_name, ports) = service
         puts " => service [#{i + 1}] #{Paint[host_name, :magenta]}, has #{Paint[ports.size, :green]} port/s"
-        write_service(container.env, service, app_name, container.namespace, append_path, headless)
+        write_service(container.env, service, app_name, container.namespace, append_path)
       end
     end
 
@@ -37,9 +37,11 @@ module KubeBuildApp
         if port.has_key? "expose_as"
           port["expose_as"].each do |expose|
             if expose["hostname"] == host_name
+              type = expose.has_key?("type") ? expose["type"] : "clusterip"
               attrs = { "name" => "#{port["name"]}-#{expose["port"]}", # "http-port-#{(i+1).to_s.rjust(2, '0')}", # "#{port["name"]}-port#{i+1}",
                         "port" => expose["port"],
-                        "targetPort" => port["port"] }
+                        "targetPort" => port["port"],
+                        "type" => type }
               # "ingress" => expose["ingress"]
               attrs["external"] = expose["external"] if expose.has_key? "external"
               result << attrs
@@ -63,12 +65,13 @@ module KubeBuildApp
       result
     end
 
-    def self.write_service(env, service, app_name, namespace, append_path, headless = false)
+    def self.write_service(env, service, app_name, namespace, append_path)
       (host_name, ports) = service
 
       # make it compatible with runy 2.x
-      ports_without_ext = []
+      ports_cleaned = []
       has_metrics = false
+      headless = ports.any? { |port| port["type"] == "headless" }
       metrics_path_for = false
       ports.each do |port|
         if port["name"] == "metrics"
@@ -78,8 +81,9 @@ module KubeBuildApp
             port.delete("metricsPathFor")
           end
         end
-        port_without_ext = port.reject { |k, _| k == "external" }
-        ports_without_ext << port_without_ext
+        cleanup_irelevant_fields = port.reject { |k, _| k == "external" }
+        cleanup_irelevant_fields = port.reject { |k, _| k == "type" }
+        ports_cleaned << cleanup_irelevant_fields
       end
 
       svc = Hash.new
@@ -102,14 +106,14 @@ module KubeBuildApp
         "selector" => { KubeBuildApp::Application::DEFAULT_APP_LABEL => app_name },
         # make it compatible with Ruby 2.x
         # "ports" => ports.map { |port| port.except("external") }
-        "ports" => ports_without_ext,
+        "ports" => ports_cleaned,
       }
 
       if headless
         svc["spec"]["clusterIP"] = "None"
-        svc["spec"]["ports"].each do |port|
-          port.delete("targetPort") # targetPort is unused, only port is needed!
-        end
+        # svc["spec"]["ports"].each do |port|
+        #   port.delete("targetPort") # targetPort is unused, only port is needed!
+        # end
       end
 
       Utils::mkdir_p "#{env.target_dir}#{append_path}"
