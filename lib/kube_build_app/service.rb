@@ -81,9 +81,9 @@ module KubeBuildApp
             port.delete("metricsPathFor")
           end
         end
-        cleanup_irelevant_fields = port.reject { |k, _| k == "external" }
-        cleanup_irelevant_fields = port.reject { |k, _| k == "type" }
-        ports_cleaned << cleanup_irelevant_fields
+        reject_externals = port.reject { |k, _| k == "external" }
+        reject_types = reject_externals.reject { |k, _| k == "type" }
+        ports_cleaned << reject_types
       end
 
       svc = Hash.new
