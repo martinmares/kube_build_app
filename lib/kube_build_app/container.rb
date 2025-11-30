@@ -242,6 +242,9 @@ module KubeBuildApp
         if var.has_key? "secret_name"
           result << { "name" => var["name"],
                       "valueFrom" => { "secretKeyRef" => { "key" => var["key"], "name" => var["secret_name"] } } }
+        elsif var.has_key? "resource_name"
+          result << { "name" => var["name"],
+                      "valueFrom" => { "resourceFieldRef" => { "resource" => var["resource_name"], "divisor" => var["divisor"] } } }
         else
           result << { "name" => var["name"], "value" => var["value"] }
         end
