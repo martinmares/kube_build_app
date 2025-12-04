@@ -245,6 +245,9 @@ module KubeBuildApp
         elsif var.has_key? "resource_name"
           result << { "name" => var["name"],
                       "valueFrom" => { "resourceFieldRef" => { "resource" => var["resource_name"], "divisor" => var["divisor"] } } }
+        elsif var.has_key? "field_path"
+          result << { "name" => var["name"],
+                      "valueFrom" => { "fieldRef" => { "fieldPath" => var["field_path"] } } }
         else
           result << { "name" => var["name"], "value" => var["value"] }
         end
