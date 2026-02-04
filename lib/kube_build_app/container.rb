@@ -5,8 +5,9 @@ module KubeBuildApp
     require_relative "asset"
     require_relative "service"
 
-    attr_reader :content, :name, :image, :startup, :env_vars, :assets, :ports, :services, :resources, :shared_assets,
+    attr_reader :content, :name, :startup, :env_vars, :assets, :ports, :services, :resources, :shared_assets,
                 :env, :health, :probe, :raw
+    attr_accessor :image
 
     def initialize(env, app_name, shared_assets, content)
       @env = env

@@ -31,7 +31,7 @@ module KubeBuildApp
                 :arch, :node_selector, :tolerations
     attr_accessor :replicas
 
-    def initialize(env, shared_assets, file_name)
+    def initialize(env, shared_assets, file_name, release_manifest = nil)
       if File.file? file_name
         @env = env
         @file_name = file_name
@@ -65,6 +65,7 @@ module KubeBuildApp
         end
 
         @containers = load_containers()
+        apply_release_manifest(release_manifest) if release_manifest
         @arch = @content["arch"] || nil
         @node_selector = @content["node_selector"] || nil
         @tolerations = @content["tolerations"] || nil
@@ -175,6 +176,16 @@ module KubeBuildApp
         end
       end
       result
+    end
+
+    def apply_release_manifest(release_manifest)
+      return if release_manifest.nil?
+      @containers.each do |container|
+        override = release_manifest.image_for(@name, container.name)
+        if override && !override.to_s.strip.empty?
+          container.image = override
+        end
+      end
     end
 
     def self.build_deploy(app)

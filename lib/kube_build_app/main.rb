@@ -16,6 +16,7 @@ module KubeBuildApp
     require_relative "utils"
     require_relative "asset"
     require_relative "kube_utils"
+    require_relative "release_manifest"
 
     TEMPLATE_EXTENSION = "tpl"
     YAML_EXTENSION = "yml"
@@ -26,12 +27,13 @@ module KubeBuildApp
       @env = Env.new(@args[:env_name], @args[:target], @args[:summary], @args[:decrypt_secured])
       @apps = Array.new
       @shared_assets = load_shared_assets()
+      @release_manifest = load_release_manifest(@args[:release_manifest])
     end
 
     def build
       if @env.apps_dir?
         Dir.glob(File.join(@env.apps_dir, "[!_]*.#{YAML_EXTENSION}")).each do |file_name|
-          @apps << Application.new(@env, @shared_assets, file_name)
+          @apps << Application.new(@env, @shared_assets, file_name, @release_manifest)
         end
 
         if @args[:down_given]
@@ -184,6 +186,7 @@ module KubeBuildApp
         opt :debug, "Debug?", type: :boolean, default: false, short: "-b"
         opt :list, "App list only", type: :boolean, default: false, short: "-l"
         opt :down, "Scale apps replicas to down (replicas: 0)", type: :strings, short: "-w"
+        opt :release_manifest, "Release manifest YAML (app/container -> image override)", type: :string, short: "-r"
       end
       opts
     end
@@ -201,6 +204,11 @@ module KubeBuildApp
       else
         []
       end
+    end
+
+    def load_release_manifest(path)
+      return nil if path.nil? || path.to_s.strip.empty?
+      ReleaseManifest.new(path)
     end
   end
 end
