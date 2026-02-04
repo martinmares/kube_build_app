@@ -7,7 +7,6 @@ module KubeBuildApp
     require_relative "container"
 
     DEFAULT_APP_LABEL = "app.kubernetes.io/name"
-    DEFAULT_CREATED_AT_LABEL = "app.kubernetes.io/created-at"
     DEFAULT_STRATEGY = {
       "rollingUpdate" => {
         "maxSurge" => "25%",
@@ -195,12 +194,9 @@ module KubeBuildApp
       host_aliases = build_host_aliases(app.dns)
       volumes = Container::build_volumes(app.containers, app.shared_assets)
 
-      label_now = Time.now.utc.to_s.gsub(" ", "_").gsub(":", ".").gsub("-", ".")
-
       if app.labels
         labels = Hash.new
         labels[DEFAULT_APP_LABEL] = app.name
-        labels[DEFAULT_CREATED_AT_LABEL] = label_now
 
         app.labels.each_pair do |key, val|
           labels[key] = val
@@ -208,7 +204,6 @@ module KubeBuildApp
       else
         labels = {
           DEFAULT_APP_LABEL => app.name,
-          DEFAULT_CREATED_AT_LABEL => label_now,
         }
       end
 
@@ -307,12 +302,9 @@ module KubeBuildApp
     def self.build_budgets(app)
       if app.has_budget
         budget = Hash.new
-        label_now = Time.now.utc.to_s.gsub(" ", "_").gsub(":", ".").gsub("-", ".")
-
         if app.labels
           labels = Hash.new
           labels[DEFAULT_APP_LABEL] = app.name
-          labels[DEFAULT_CREATED_AT_LABEL] = label_now
 
           app.labels.each_pair do |key, val|
             labels[key] = val
@@ -320,7 +312,6 @@ module KubeBuildApp
         else
           labels = {
             DEFAULT_APP_LABEL => app.name,
-            DEFAULT_CREATED_AT_LABEL => label_now,
           }
         end
 
