@@ -7,6 +7,7 @@ module KubeBuildApp
     require "tilt"
     require "fileutils"
     require "digest"
+    require "yaml"
     require "paint"
     require "awesome_print"
     require "terminal-table"
@@ -21,6 +22,7 @@ module KubeBuildApp
     TEMPLATE_EXTENSION = "tpl"
     YAML_EXTENSION = "yml"
     SHARED_ASSET_APP_NAME = "shared"
+    PROFILES_DEFAULT_FILE_NAME = "replica-profiles.yml"
 
     def initialize()
       @args = parse_args()
@@ -35,6 +37,8 @@ module KubeBuildApp
         Dir.glob(File.join(@env.apps_dir, "[!_]*.#{YAML_EXTENSION}")).each do |file_name|
           @apps << Application.new(@env, @shared_assets, file_name, @release_manifest)
         end
+
+        apply_deployment_profile
 
         if @args[:down_given]
           @args[:down].each do |down|
@@ -187,6 +191,8 @@ module KubeBuildApp
         opt :list, "App list only", type: :boolean, default: false, short: "-l"
         opt :down, "Scale apps replicas to down (replicas: 0)", type: :strings, short: "-w"
         opt :release_manifest, "Release manifest YAML (app/container -> image override)", type: :string, short: "-r"
+        opt :profile, "Profile name (loaded from replica-profiles.yml)", type: :string, short: "-p"
+        opt :profiles_file, "Profiles file path (default: environments/<env>/replica-profiles.yml)", type: :string
       end
       opts
     end
@@ -209,6 +215,71 @@ module KubeBuildApp
     def load_release_manifest(path)
       return nil if path.nil? || path.to_s.strip.empty?
       ReleaseManifest.new(path)
+    end
+
+    def profiles_file_name
+      if @args[:profiles_file] && !@args[:profiles_file].to_s.strip.empty?
+        @args[:profiles_file]
+      else
+        "#{@env.environment_dir}/#{PROFILES_DEFAULT_FILE_NAME}"
+      end
+    end
+
+    def apply_deployment_profile
+      path = profiles_file_name
+      return unless File.file?(path)
+
+      raw = File.read(path)
+      data = YAML.safe_load(
+        raw,
+        permitted_classes: [Time, Date, DateTime],
+        permitted_symbols: [],
+        aliases: false,
+      ) || {}
+
+      profile_name = @args[:profile]
+      if profile_name.nil? || profile_name.to_s.strip.empty?
+        profile_name = ENV["REPLICA_PROFILE"]
+      end
+      if profile_name.nil? || profile_name.to_s.strip.empty?
+        profile_name = data.dig("defaults", "profile")
+      end
+      return if profile_name.nil? || profile_name.to_s.strip.empty?
+
+      profiles = data["profiles"] || {}
+      profile = profiles[profile_name]
+      unless profile.is_a?(Hash)
+        puts "Deployment profile '#{profile_name}' not found in #{path}"
+        return
+      end
+
+      puts "Apply deployment profile '#{profile_name}' from #{path}"
+
+      if profile.has_key?("all")
+        all_value = profile["all"].to_i
+        @apps.each do |app|
+          app.replicas = all_value
+        end
+      end
+
+      app_overrides = profile["apps"]
+      if app_overrides.nil?
+        app_overrides = profile.reject { |k, _| k == "all" }
+      end
+
+      unless app_overrides.is_a?(Hash)
+        puts "Deployment profile '#{profile_name}' has invalid 'apps' format, expected mapping"
+        return
+      end
+
+      app_overrides.each do |app_name, replicas|
+        app = @apps.find { |item| item.name == app_name }
+        if app
+          app.replicas = replicas.to_i
+        else
+          puts " => deployment profile: unknown app '#{app_name}', skip"
+        end
+      end
     end
   end
 end

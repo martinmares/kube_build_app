@@ -325,3 +325,46 @@ spec:
             defaultMode: 420
             name: brand-new-product-asset-66535d3
 ```
+
+## Deployment profiles (maintenance / normal mode)
+
+You can keep app-level replicas in `apps/*.yml`, but override them using one profile file:
+
+`environments/<env>/replica-profiles.yml`
+
+```yaml
+defaults:
+  profile: normal
+
+profiles:
+  normal:
+    apps:
+      tsm-gateway: 2
+      tsm-ticket: 2
+
+  db-maintenance:
+    all: 0
+    apps:
+      tsm-log-server: 1
+      tsm-health-checker: 1
+```
+
+Run with explicit profile:
+
+```bash
+kube_build_app -e test -p db-maintenance -t deployments/test/deploy
+```
+
+Or choose file manually:
+
+```bash
+kube_build_app -e test -p normal --profiles-file /some/path/replica-profiles.yml
+```
+
+Priority order:
+
+1. Profile selected by `-p/--profile`
+2. Profile selected by `REPLICA_PROFILE` env var
+3. `defaults.profile` from `replica-profiles.yml`
+
+`-w/--down` still works and is applied after profile overrides.
