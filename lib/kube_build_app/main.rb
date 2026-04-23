@@ -63,7 +63,7 @@ module KubeBuildApp
         validate_apps!
 
         if @args[:inventory]
-          puts JSON.generate(build_inventory)
+          puts JSON.pretty_generate(build_inventory)
           return
         end
 
@@ -304,6 +304,7 @@ module KubeBuildApp
             "app" => app_name,
             "app_kind" => app.kind,
             "replicas" => app.replicas,
+            "rollout_checksums" => app.rollout_checksum_annotations || {},
             "container" => container_name,
             "image" => container.image,
             "simple_init_enabled" => container.simple_init_enabled?,

@@ -3,6 +3,7 @@ module KubeBuildApp
     require "yaml"
     require "paint"
     require "fileutils"
+    require "digest"
     require "awesome_print"
     require_relative "container"
 
@@ -27,7 +28,7 @@ module KubeBuildApp
 
     attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets,
                 :strategy, :env, :labels, :annotations, :argocd_wave, :pod_annotations, :disable_create_service, :min_available, :max_unavailable, :has_budget,
-                :arch, :node_selector, :tolerations, :tools
+                :arch, :node_selector, :tolerations, :tools, :rollout_checksum_annotations
     attr_accessor :replicas
 
     def initialize(env, shared_assets, file_name, release_manifest = nil)
@@ -92,6 +93,7 @@ module KubeBuildApp
         end
 
         @pod_annotations ||= @content["pod_annotations"] if @content.has_key? "pod_annotations"
+        @rollout_checksum_annotations = build_rollout_checksum_annotations
       end
     end
 
@@ -404,6 +406,85 @@ module KubeBuildApp
       result
     end
 
+    def build_rollout_checksum_annotations
+      rollout_on = @content["rollout_on"]
+      return nil if rollout_on.nil?
+      raise ArgumentError, "#{@file_name}: 'rollout_on' must be a mapping" unless rollout_on.is_a?(Hash)
+
+      checksums = rollout_on["checksums"]
+      return nil if checksums.nil?
+      raise ArgumentError, "#{@file_name}: 'rollout_on.checksums' must be a mapping" unless checksums.is_a?(Hash)
+
+      result = {}
+
+      checksums.each_pair do |group_name, group_config|
+        group_name = normalize_rollout_group_name(group_name)
+        raise ArgumentError, "#{@file_name}: 'rollout_on.checksums.#{group_name}' must be a mapping" unless group_config.is_a?(Hash)
+
+        files = group_config["files"]
+        raise ArgumentError, "#{@file_name}: 'rollout_on.checksums.#{group_name}.files' must be an array" unless files.is_a?(Array)
+        raise ArgumentError, "#{@file_name}: 'rollout_on.checksums.#{group_name}.files' must not be empty" if files.empty?
+
+        normalized_files = files.map do |relative_path|
+          normalize_rollout_relative_path(relative_path, group_name)
+        end
+
+        digest = Digest::SHA256.new
+        normalized_files.sort.each do |relative_path|
+          full_path = resolve_rollout_file_path(relative_path, group_name)
+          digest.update(relative_path)
+          digest.update("\0")
+          digest.update(File.binread(full_path))
+          digest.update("\0")
+        end
+
+        result["checksum/#{group_name}"] = digest.hexdigest
+      end
+
+      result
+    end
+
+    def normalize_rollout_group_name(group_name)
+      value = group_name.to_s.strip
+      if value.empty? || !value.match?(/\A[a-z0-9]([a-z0-9._-]*[a-z0-9])?\z/)
+        raise ArgumentError, "#{@file_name}: invalid rollout checksum group '#{group_name}'"
+      end
+
+      value
+    end
+
+    def normalize_rollout_relative_path(relative_path, group_name)
+      value = relative_path.to_s.strip
+      if value.empty?
+        raise ArgumentError, "#{@file_name}: 'rollout_on.checksums.#{group_name}.files' contains empty path"
+      end
+      if value.start_with?("/")
+        raise ArgumentError, "#{@file_name}: rollout checksum path must be relative: #{value}"
+      end
+
+      segments = value.split("/")
+      if segments.any? { |segment| segment == ".." || segment.empty? }
+        raise ArgumentError, "#{@file_name}: invalid rollout checksum path: #{value}"
+      end
+
+      value
+    end
+
+    def resolve_rollout_file_path(relative_path, group_name)
+      env_root = File.expand_path(@env.environment_dir)
+      full_path = File.expand_path(File.join(env_root, relative_path))
+
+      unless full_path == env_root || full_path.start_with?("#{env_root}/")
+        raise ArgumentError, "#{@file_name}: rollout checksum path escapes environment root: #{relative_path}"
+      end
+
+      unless File.file?(full_path)
+        raise ArgumentError, "#{@file_name}: rollout checksum file not found for '#{group_name}': #{relative_path}"
+      end
+
+      full_path
+    end
+
     def apply_release_manifest(release_manifest)
       return if release_manifest.nil?
       @containers.each do |container|
@@ -446,6 +527,16 @@ module KubeBuildApp
         pod_annotations = Hash.new
 
         app.pod_annotations.each_pair do |key, val|
+          pod_annotations[key] = val
+        end
+      end
+
+      if app.rollout_checksum_annotations
+        pod_annotations ||= {}
+        app.rollout_checksum_annotations.each_pair do |key, val|
+          if pod_annotations.has_key?(key) && pod_annotations[key] != val
+            raise ArgumentError, "#{app.file_name}: pod annotation '#{key}' conflicts with computed rollout checksum"
+          end
           pod_annotations[key] = val
         end
       end

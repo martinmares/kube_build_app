@@ -1,4 +1,5 @@
 require_relative "test_helper"
+require "digest"
 
 class ComprehensiveFeaturesTest < Minitest::Test
   def setup
@@ -473,8 +474,84 @@ class ComprehensiveFeaturesTest < Minitest::Test
     assert_equal 2, deployment.dig("spec", "replicas")
   end
 
+  def test_rollout_on_checksums_adds_pod_template_annotations
+    write_minimal_env
+    write_file(File.join(@env_dir, "env.secured.json"), %({"_public_key":"dummy","environment":{"SECRET_VALUE":"abc"}}))
+    write_file(File.join(@env_dir, "assets", "config.tpl"), "url={{EPAP_URL}}\n")
+    write_file(
+      File.join(@env_dir, "apps", "rollout.yml"),
+      <<~YAML,
+        name: rollout
+        rollout_on:
+          checksums:
+            config:
+              files:
+                - env.unsecured.json
+                - env.secured.json
+            mtls:
+              files:
+                - assets/config.tpl
+        replicas: 1
+        containers:
+          - name: rollout
+            image: "{{TSM_REGISTRY_URL}}/rollout:{{TSM_RELEASE_ID}}"
+            startup:
+              command: ["/bin/sh"]
+              arguments: ["-c", "echo ok"]
+            resources:
+              cpu: { from: "100m", to: "200m" }
+              memory: { from: "128Mi", to: "256Mi" }
+      YAML
+    )
+
+    out, err, status = run_kube_build_app("-e", "test", "-R", @root_dir, "-t", @target_dir)
+    assert status.success?, "build failed\nstdout:\n#{out}\nstderr:\n#{err}"
+
+    deployment = load_deployment("rollout")
+    annotations = deployment.dig("spec", "template", "metadata", "annotations") || {}
+    expected_config = checksum_for_files(
+      "env.secured.json",
+      "env.unsecured.json"
+    )
+    expected_mtls = checksum_for_files("assets/config.tpl")
+
+    assert_equal expected_config, annotations["checksum/config"]
+    assert_equal expected_mtls, annotations["checksum/mtls"]
+  end
+
+  def test_rollout_on_checksums_fails_for_missing_file
+    write_minimal_env
+    write_file(
+      File.join(@env_dir, "apps", "rollout-invalid.yml"),
+      <<~YAML,
+        name: rollout-invalid
+        rollout_on:
+          checksums:
+            config:
+              files:
+                - env.unsecured.json
+                - missing.file
+        replicas: 1
+        containers:
+          - name: rollout-invalid
+            image: "{{TSM_REGISTRY_URL}}/rollout-invalid:{{TSM_RELEASE_ID}}"
+            startup:
+              command: ["/bin/sh"]
+              arguments: ["-c", "echo ok"]
+            resources:
+              cpu: { from: "100m", to: "200m" }
+              memory: { from: "128Mi", to: "256Mi" }
+      YAML
+    )
+
+    _out, err, status = run_kube_build_app("-e", "test", "-R", @root_dir, "-t", @target_dir)
+    refute status.success?
+    assert_includes err, "rollout checksum file not found"
+  end
+
   def test_inventory_contains_profiles_and_mtls_paths
     write_minimal_env
+    write_file(File.join(@env_dir, "assets", "inventory.cfg"), "value=1\n")
     write_file(
       File.join(@env_dir, "replica-profiles.yml"),
       <<~YAML,
@@ -493,6 +570,12 @@ class ComprehensiveFeaturesTest < Minitest::Test
           - name: APP_NAME
             value: "tsm-deco"
         name: {{var:APP_NAME}}
+        rollout_on:
+          checksums:
+            config:
+              files:
+                - env.unsecured.json
+                - assets/inventory.cfg
         replicas: 1
         containers:
           - name: "{{var:APP_NAME}}"
@@ -527,6 +610,7 @@ class ComprehensiveFeaturesTest < Minitest::Test
     assert_equal "test/mtls/tsm-deco/tsm-deco.secured.json", item.dig("mtls_paths", "secured_json")
     assert_equal "test/mtls/tsm-deco/tsm-deco.secured.schema.json", item.dig("mtls_paths", "schema_json")
     assert_equal "/app/mtls.enc", item.dig("mtls_paths", "mount_target")
+    assert_equal checksum_for_files("assets/inventory.cfg", "env.unsecured.json"), item.dig("rollout_checksums", "checksum/config")
   end
 
   def test_ignore_true_skips_app_from_build_outputs
@@ -588,5 +672,16 @@ class ComprehensiveFeaturesTest < Minitest::Test
   def load_deployment(app_name)
     path = File.join(@target_dir, "deployments", "#{app_name}-deployment.yml")
     YAML.load_file(path)
+  end
+
+  def checksum_for_files(*relative_paths)
+    digest = Digest::SHA256.new
+    relative_paths.sort.each do |relative_path|
+      digest.update(relative_path)
+      digest.update("\0")
+      digest.update(File.binread(File.join(@env_dir, relative_path)))
+      digest.update("\0")
+    end
+    digest.hexdigest
   end
 end
