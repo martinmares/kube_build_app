@@ -7,6 +7,7 @@ module KubeBuildApp
     require "tilt"
     require "fileutils"
     require "digest"
+    require "json"
     require "yaml"
     require "paint"
     require "awesome_print"
@@ -24,19 +25,49 @@ module KubeBuildApp
     SHARED_ASSET_APP_NAME = "shared"
     PROFILES_DEFAULT_FILE_NAME = "replica-profiles.yml"
 
-    def initialize()
+    class ValidationError < StandardError; end
+
+    def initialize(mode = :build)
+      @mode = mode
       @args = parse_args()
-      @env = Env.new(@args[:env_name], @args[:target], @args[:summary], @args[:decrypt_secured])
+      effective_env_loading = effective_env_loading_args
+      @env = Env.new(
+        @args[:env_name],
+        @args[:root_dir],
+        @args[:target],
+        @args[:summary],
+        effective_env_loading[:decrypt_secured],
+        effective_env_loading[:env_file],
+        effective_env_loading[:vars_source],
+        @args[:helm_escape_assets],
+      )
       @apps = Array.new
       @shared_assets = load_shared_assets()
       @release_manifest = load_release_manifest(@args[:release_manifest])
     end
 
+    def validate
+      unless @env.apps_dir?
+        raise ValidationError, "No applications directory found: #{@env.apps_dir}"
+      end
+
+      load_apps
+      validate_apps!
+      print_vars_sources_info
+      puts Paint["Validation OK (#{@apps.size} apps)", :green]
+    end
+
     def build
       if @env.apps_dir?
-        Dir.glob(File.join(@env.apps_dir, "[!_]*.#{YAML_EXTENSION}")).each do |file_name|
-          @apps << Application.new(@env, @shared_assets, file_name, @release_manifest)
+        load_apps
+        validate_apps!
+
+        if @args[:inventory]
+          puts JSON.generate(build_inventory)
+          return
         end
+
+        print_vars_sources_info
 
         apply_deployment_profile
 
@@ -156,6 +187,50 @@ module KubeBuildApp
 
     private
 
+    def load_apps
+      return unless @apps.empty?
+      Dir.glob(File.join(@env.apps_dir, "[!_]*.#{YAML_EXTENSION}")).each do |file_name|
+        app = Application.new(@env, @shared_assets, file_name, @release_manifest)
+        next if app.ignored?
+        @apps << app
+      end
+    end
+
+    def validate_apps!
+      errors = []
+
+      @apps.each do |app|
+        app.containers.each do |container|
+          startup_present = container.startup.is_a?(Hash)
+          simple_init_enabled = container.simple_init_enabled?
+          if startup_present && simple_init_enabled
+            errors << "#{app.file_name}: container '#{container.name}' has both 'startup' and 'simple_init.enabled=true' (XOR violation)"
+          end
+
+          if simple_init_enabled
+            unless container.simple_init.is_a?(Hash)
+              errors << "#{app.file_name}: container '#{container.name}' has invalid 'simple_init' block (expected mapping)"
+              next
+            end
+
+            exec = container.simple_init["exec"]
+            unless exec.is_a?(Hash)
+              errors << "#{app.file_name}: container '#{container.name}' has 'simple_init.enabled=true' but missing 'simple_init.exec'"
+              next
+            end
+
+            command = exec["command"]
+            if command.nil? || !command.is_a?(Array) || command.empty?
+              errors << "#{app.file_name}: container '#{container.name}' requires 'simple_init.exec.command' as non-empty array"
+            end
+          end
+
+        end
+      end
+
+      raise ValidationError, errors.join("\n") unless errors.empty?
+    end
+
     def normalize_mem(s)
       ByteSize.new("#{s.strip.downcase}b")
     end
@@ -182,6 +257,7 @@ module KubeBuildApp
     def parse_args
       opts = Optimist::options do
         opt :env_name, "Environment name", type: :string, required: true, short: "-e"
+        opt :root_dir, "Environment root directory (contains <env>/apps, <env>/assets, ...)", type: :string, short: "-R"
         # ! IMPORTANT - Decrypt enc.secured.json VARS must be explicitly enabled from command line!
         opt :decrypt_secured, "Enable explicitly \"decrypt\" vars from \"env.secured.json\" file!", type: :boolean,
                                                                                                     required: false, defult: false, short: "-d"
@@ -189,12 +265,143 @@ module KubeBuildApp
         opt :summary, "Summary of resources", type: :boolean, default: false, short: "-s"
         opt :debug, "Debug?", type: :boolean, default: false, short: "-b"
         opt :list, "App list only", type: :boolean, default: false, short: "-l"
+        opt :inventory, "Print detailed inventory JSON and exit", type: :boolean, default: false, short: "-i"
         opt :down, "Scale apps replicas to down (replicas: 0)", type: :strings, short: "-w"
         opt :release_manifest, "Release manifest YAML (app/container -> image override)", type: :string, short: "-r"
         opt :profile, "Profile name (loaded from replica-profiles.yml)", type: :string, short: "-p"
         opt :profiles_file, "Profiles file path (default: environments/<env>/replica-profiles.yml)", type: :string
+        opt :env_file, "Load variables only from explicit .env file path and disable json/process ENV sources", type: :string, short: "-E"
+        opt :vars_source, "Variable source(s), repeatable: env | json | dot-env (dot-env uses <environment_dir>/.env)", type: :string, multi: true
+        opt :helm_escape_assets, "Escape remaining {{VAR}} placeholders in text assets to Helm-safe {{`{{ VAR }}`}}", type: :boolean, default: false
       end
       opts
+    end
+
+    def print_vars_sources_info
+      effective = effective_env_loading_args
+
+      if effective[:vars_source] && effective[:vars_source].size > 0
+        puts "Using vars-source: #{effective[:vars_source].join(', ')}"
+      end
+      if effective[:env_file] && !effective[:env_file].to_s.strip.empty?
+        puts "Using env file: #{effective[:env_file]}"
+      elsif effective[:vars_source] && effective[:vars_source].include?("dot-env")
+        puts "Using env file: #{@env.environment_dir}/.env"
+      end
+    end
+
+    def build_inventory
+      profiles_payload = load_profiles_payload
+      items = []
+
+      @apps.each do |app|
+        app.containers.each do |container|
+          app_name = normalize_inventory_app_name(app, container)
+          container_name = normalize_inventory_string(container.name, File.basename(app.file_name, ".#{YAML_EXTENSION}"))
+
+          items << {
+            "env" => @env.name,
+            "app" => app_name,
+            "app_kind" => app.kind,
+            "replicas" => app.replicas,
+            "container" => container_name,
+            "image" => container.image,
+            "simple_init_enabled" => container.simple_init_enabled?,
+            "enable_cgroup_exporter" => container.enable_cgroup_exporter?,
+            "mtls_enabled" => container.mtls_enabled?,
+            "resources" => container.resources,
+            "mtls_paths" => {
+              "secured_json" => "#{@env.name}/#{container.mtls_secured_relative_path}",
+              "schema_json" => "#{@env.name}/#{container.mtls_schema_relative_path}",
+              "mount_target" => container.mtls_mount_dir,
+              "files" => ["tls.crt", "tls.key", "ca.crt"],
+            },
+          }
+        end
+      end
+
+      items.sort_by! { |item| [item["app"].to_s, item["container"].to_s] }
+      {
+        "env" => @env.name,
+        "apps_count" => @apps.size,
+        "containers_count" => items.size,
+        "profiles" => profiles_payload,
+        "items" => items,
+      }
+    end
+
+    def load_profiles_payload
+      path = profiles_file_name
+      return nil unless File.file?(path)
+
+      raw = File.read(path)
+      data = YAML.safe_load(
+        raw,
+        permitted_classes: [Time, Date, DateTime],
+        permitted_symbols: [],
+        aliases: false,
+      ) || {}
+
+      {
+        "file" => path,
+        "defaults" => data["defaults"] || {},
+        "profiles" => data["profiles"] || {},
+      }
+    rescue StandardError => e
+      {
+        "file" => path,
+        "error" => e.message,
+      }
+    end
+
+    def normalize_inventory_app_name(app, container)
+      app_name = normalize_inventory_string(app.name, nil)
+      if !app_name.nil? && !app_name.empty?
+        return app_name unless app_name.include?("{{var:")
+      end
+
+      container_name = normalize_inventory_string(container.name, nil)
+      return container_name unless container_name.nil? || container_name.empty?
+
+      File.basename(app.file_name, ".#{YAML_EXTENSION}")
+    end
+
+    def normalize_inventory_string(value, fallback)
+      if value.is_a?(String)
+        trimmed = value.strip
+        return trimmed unless trimmed.empty?
+      elsif value.is_a?(Hash)
+        template = template_from_yaml_hash(value)
+        unless template.nil?
+          rendered = @env.apply_vars_on_content(template)
+          trimmed = rendered.to_s.strip
+          return trimmed unless trimmed.empty?
+        end
+      elsif !value.nil?
+        rendered = @env.apply_vars_on_content(value.to_s)
+        trimmed = rendered.to_s.strip
+        return trimmed unless trimmed.empty?
+      end
+      fallback
+    end
+
+    def template_from_yaml_hash(value)
+      return nil unless value.is_a?(Hash) && value.size == 1
+      key, val = value.first
+      return nil unless val.nil?
+
+      if key.is_a?(String)
+        return "{{#{key}}}"
+      end
+
+      if key.is_a?(Hash) && key.size == 1
+        inner_key, inner_val = key.first
+        if inner_key.is_a?(String) && inner_val.nil?
+          return "{{#{inner_key}}}"
+        end
+      end
+
+      nil
     end
 
     def render_template(template)
@@ -280,6 +487,30 @@ module KubeBuildApp
           puts " => deployment profile: unknown app '#{app_name}', skip"
         end
       end
+    end
+
+    def effective_env_loading_args
+      if @args[:env_file] && !@args[:env_file].to_s.strip.empty?
+        if @args[:decrypt_secured]
+          raise ArgumentError, "-E/--env-file cannot be combined with -d/--decrypt-secured"
+        end
+
+        if @args[:vars_source] && @args[:vars_source].any?
+          raise ArgumentError, "-E/--env-file cannot be combined with --vars-source"
+        end
+
+        return {
+          decrypt_secured: false,
+          env_file: @args[:env_file],
+          vars_source: ["dot-env"],
+        }
+      end
+
+      return {
+        decrypt_secured: @args[:decrypt_secured],
+        env_file: @args[:env_file],
+        vars_source: @args[:vars_source],
+      }
     end
   end
 end

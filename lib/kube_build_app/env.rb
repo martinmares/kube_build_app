@@ -1,10 +1,11 @@
 module KubeBuildApp
   class Env
     require "json"
+    require "yaml"
     require_relative "encjson"
     require_relative "asset"
 
-    attr_reader :name, :target_dir, :vars
+    attr_reader :name, :target_dir, :vars, :helm_escape_assets
 
     ENVIRONMENTS_DIR = "environments"
     TARGET_DIR = "target"
@@ -15,21 +16,27 @@ module KubeBuildApp
 
     SECURED_FILE_NAME = "env.secured.json"
     UNSECURED_FILE_NAME = "env.unsecured.json"
-
     SHARED_ASSETS_FILE = "shared.assets.yml"
 
-    def initialize(name, target_dir, summary, decrypt_secured)
+    VALID_VARS_SOURCES = %w[env json dot-env].freeze
+
+    def initialize(name, root_dir, target_dir, summary, decrypt_secured, env_file = nil, vars_sources = nil, helm_escape_assets = false)
       @name = name
+      @root_dir = root_dir
       @target_dir = target_dir
       @summary = summary
       @decrypt_secured = decrypt_secured || false
+      @env_file = env_file
+      @vars_sources = normalize_vars_sources(vars_sources, env_file)
+      @helm_escape_assets = helm_escape_assets || false
       @vars = Hash.new
       load_env_vars()
-      make_12_factor()
     end
 
     def environment_dir
-      if ENV.has_key? "ENVIRONMENTS_DIR"
+      if @root_dir && !@root_dir.to_s.strip.empty?
+        "#{@root_dir}/#{@name}"
+      elsif ENV.has_key? "ENVIRONMENTS_DIR"
         "#{ENV["ENVIRONMENTS_DIR"]}/#{@name}"
       else
         "#{ENVIRONMENTS_DIR}/#{@name}"
@@ -99,10 +106,19 @@ module KubeBuildApp
     end
 
     def load_env_vars
-      if File.directory? environment_dir
-        # ! IMPORTANT - Decrypt enc.secured.json VARS must be explicitly enabled from command line!
-        from_secured_json(secured_file_name) if File.file? "#{environment_dir}/#{SECURED_FILE_NAME}" if @decrypt_secured
-        from_unsecured_json(unsecured_file_name) if File.file? "#{environment_dir}/#{UNSECURED_FILE_NAME}"
+      @vars_sources.each do |source|
+        case source
+        when "env"
+          from_process_env()
+        when "json"
+          from_json_files()
+        when "dot-env"
+          file_name = dot_env_file_name
+          unless File.file?(file_name)
+            raise ArgumentError, "vars-source 'dot-env' selected but file not found: #{file_name}"
+          end
+          from_env_file(file_name)
+        end
       end
     end
 
@@ -127,11 +143,64 @@ module KubeBuildApp
       result
     end
 
+    def apply_env_vars_on_content(content)
+      result = content
+      @vars.each do |k, v|
+        to_replace = v
+        reg_inside = /\{\{\s*env\s*:\s*#{Regexp.escape(k)}\s*\}\}/
+        result = result.gsub(reg_inside, to_replace)
+      end
+      result
+    end
+
     private
 
-    def make_12_factor
-      @vars.each do |k, v|
-        ENV[k] = v
+    def normalize_vars_sources(vars_sources, env_file)
+      result = []
+
+      if vars_sources && vars_sources.is_a?(Array) && vars_sources.size > 0
+        vars_sources.each do |value|
+          value.to_s.split(",").each do |part|
+            source = part.to_s.strip
+            next if source.empty?
+            unless VALID_VARS_SOURCES.include?(source)
+              raise ArgumentError, "Invalid --vars-source '#{source}', expected one of: #{VALID_VARS_SOURCES.join(', ')}"
+            end
+            result << source
+          end
+        end
+      end
+
+      if result.empty?
+        # backward compatible default behavior:
+        # - json files
+        # - process ENV
+        # - if --env-file is provided, apply it as highest priority override
+        result = ["json", "env"]
+        result << "dot-env" if env_file && !env_file.to_s.strip.empty?
+      end
+
+      result
+    end
+
+    def from_process_env
+      ENV.each do |k, v|
+        @vars[k] = v.to_s
+      end
+    end
+
+    def from_json_files
+      return unless File.directory? environment_dir
+      # ! IMPORTANT - Decrypt env.secured.json VARS must be explicitly enabled from command line!
+      from_secured_json(secured_file_name) if File.file?("#{environment_dir}/#{SECURED_FILE_NAME}") && @decrypt_secured
+      from_unsecured_json(unsecured_file_name) if File.file? "#{environment_dir}/#{UNSECURED_FILE_NAME}"
+    end
+
+    def dot_env_file_name
+      if @env_file && !@env_file.to_s.strip.empty?
+        @env_file
+      else
+        "#{environment_dir}/.env"
       end
     end
 
@@ -149,5 +218,32 @@ module KubeBuildApp
         end
       end
     end
+
+    def from_env_file(file_name)
+      return unless File.file? file_name
+
+      File.read(file_name).lines.each_with_index do |line, index|
+        trimmed = line.strip
+        next if trimmed.empty? || trimmed.start_with?("#")
+
+        without_export = trimmed.start_with?("export ") ? trimmed.sub(/\Aexport\s+/, "") : trimmed
+        key, value = without_export.split("=", 2)
+        if key.nil? || key.strip.empty?
+          warn "WARNING: ignoring malformed line #{index + 1} in env file #{file_name}"
+          next
+        end
+
+        key = key.strip
+        value = (value || "").strip
+
+        if (value.start_with?("\"") && value.end_with?("\"")) ||
+           (value.start_with?("'") && value.end_with?("'"))
+          value = value[1..-2]
+        end
+
+        @vars[key] = value
+      end
+    end
+
   end
 end

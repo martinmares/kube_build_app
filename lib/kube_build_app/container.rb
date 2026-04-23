@@ -5,9 +5,22 @@ module KubeBuildApp
     require_relative "asset"
     require_relative "service"
 
-    attr_reader :content, :name, :startup, :env_vars, :assets, :ports, :services, :resources, :shared_assets,
+    attr_reader :content, :name, :startup, :simple_init, :mtls, :env_vars, :assets, :ports, :services, :resources, :shared_assets,
                 :env, :health, :probe, :raw
     attr_accessor :image
+    TOOLS_VOLUME_NAME = "app-tools"
+    TOOLS_MOUNT_PATH = "/app/tools"
+    MTLS_ENC_MOUNT_DIR = "/app/mtls.enc"
+    CGROUP_EXPORTER_DEFAULT_ENV_VARS = [
+      { "name" => "CGROUP_EXPORTER_METRICS_PREFIX", "value" => "{{TSM_METRICS_PREFIX}}" },
+      { "name" => "CGROUP_EXPORTER_METRICS_STATIC_LABELS", "value" => "cluster_name={{TSM_CLUSTER_NAME}}" },
+      { "name" => "CGROUP_EXPORTER_LISTEN", "value" => "0.0.0.0:9393" },
+      { "name" => "CGROUP_EXPORTER_CPU_REQUESTS_MCPU", "resource_name" => "requests.cpu", "divisor" => "1m" },
+      { "name" => "CGROUP_EXPORTER_CPU_LIMITS_MCPU", "resource_name" => "limits.cpu", "divisor" => "1m" },
+      { "name" => "CGROUP_EXPORTER_MEMORY_REQUESTS_MIB", "resource_name" => "requests.memory", "divisor" => "1Mi" },
+      { "name" => "CGROUP_EXPORTER_MEMORY_LIMITS_MIB", "resource_name" => "limits.memory", "divisor" => "1Mi" },
+      { "name" => "CGROUP_EXPORTER_NODE_NAME", "field_path" => "spec.nodeName" },
+    ].freeze
 
     def initialize(env, app_name, shared_assets, content)
       @env = env
@@ -17,14 +30,18 @@ module KubeBuildApp
       @name = content["name"]
       @image = content["image"]
       @startup = content["startup"]
+      @simple_init = content["simple_init"]
+      @mtls = content["mtls"]
       @env_vars = content["env_vars"]
       @assets = Asset::load_assets(@app_name, @name, @env, content["assets"])
+      append_mtls_assets! if mtls_enabled?
       @ports = content["ports"]
       @service = content["services"]
       @resources = content["resources"]
       @health = content["health"]
       @probe = content["probe"]
       @raw = content["raw"]
+      @enable_cgroup_exporter = content["enable_cgroup_exporter"]
     end
 
     def self.build_assets(app_name, containers, argocd_wave)
@@ -49,6 +66,7 @@ module KubeBuildApp
 
     def self.build_specs(app, registry_secrets, host_aliases, volumes)
       containers = app.containers
+      tools = app.tools
       arch = app.arch
       node_selector = app.node_selector
       tolerations = app.tolerations
@@ -70,19 +88,26 @@ module KubeBuildApp
 
       result["containers"] = Array.new
       containers.each do |container|
-        result["containers"] << Container::build_spec(container)
+        result["containers"] << Container::build_spec(container, tools)
       end
+      result["initContainers"] = Container::build_tools_init_containers(tools) if tools && tools.size > 0
       result["imagePullSecrets"] = registry_secrets
       result["hostAliases"] = host_aliases if host_aliases.size > 0
       result["volumes"] = volumes.uniq
       result
     end
 
-    def self.build_volumes(containers, shared_assets)
+    def self.build_volumes(containers, shared_assets, tools = nil)
       result = Array.new
       result += Asset::build_container_assets(shared_assets)
       containers.each do |container|
         result += Asset::build_container_assets(container.assets)
+      end
+      if tools && tools.size > 0
+        result << {
+          "name" => TOOLS_VOLUME_NAME,
+          "emptyDir" => {},
+        }
       end
       result
     end
@@ -103,9 +128,60 @@ module KubeBuildApp
       @content.has_key? "raw"
     end
 
+    def enable_cgroup_exporter?
+      @enable_cgroup_exporter == true || @enable_cgroup_exporter.to_s.strip.downcase == "true"
+    end
+
+    def simple_init_enabled?
+      return false unless @simple_init.is_a?(Hash)
+      enabled = @simple_init["enabled"]
+      enabled == true || enabled.to_s.strip.downcase == "true"
+    end
+
+    def mtls_enabled?
+      return false unless @mtls.is_a?(Hash)
+      enabled = @mtls["enabled"]
+      enabled == true || enabled.to_s.strip.downcase == "true"
+    end
+
+    def mtls_mount_dir
+      if @mtls.is_a?(Hash) && @mtls["mount_dir"].is_a?(String) && !@mtls["mount_dir"].strip.empty?
+        @mtls["mount_dir"].strip
+      else
+        MTLS_ENC_MOUNT_DIR
+      end
+    end
+
+    def mtls_secured_relative_path
+      "mtls/#{@app_name}/#{@name}.secured.json"
+    end
+
+    def mtls_schema_relative_path
+      "mtls/#{@app_name}/#{@name}.secured.schema.json"
+    end
+
     private
 
-    def self.build_spec(container)
+    def append_mtls_assets!
+      mtls_assets = [
+        {
+          "file" => mtls_secured_relative_path,
+          "to" => "#{mtls_mount_dir}/mtls.secured.json",
+          "transform" => false,
+          "binary" => false,
+        },
+        {
+          "file" => mtls_schema_relative_path,
+          "to" => "#{mtls_mount_dir}/mtls.secured.schema.json",
+          "transform" => false,
+          "binary" => false,
+        },
+      ]
+
+      @assets += Asset::load_assets(@app_name, @name, @env, mtls_assets)
+    end
+
+    def self.build_spec(container, tools = nil)
       result = Hash.new
 
       result["name"] = container.name
@@ -113,14 +189,15 @@ module KubeBuildApp
       result["ports"] = Container::build_ports(container.ports) if container.ports
       result["command"] = container.startup["command"] if container.startup
       result["args"] = container.startup["arguments"] if container.startup
-      result["env"] = Container::build_env_vars(container.env_vars) if container.env_vars
+      effective_env_vars = Container::build_effective_env_vars(container)
+      result["env"] = Container::build_env_vars(effective_env_vars) if effective_env_vars && effective_env_vars.size > 0
       result["imagePullPolicy"] = "Always"
       result["resources"] = Container::build_resources(container.resources)
       # result["securityContext"] = {
       #   "allowPrivilegeEscalation" => false,
       #   "capabilities" => { "drop" => ["ALL"] }
       # }
-      result["volumeMounts"] = Container::build_mounts(container.assets, container.shared_assets)
+      result["volumeMounts"] = Container::build_mounts(container.assets, container.shared_assets, tools)
       result["livenessProbe"] = Container::build_liveness(container.health) if container.health?
       result["readinessProbe"] = Container::build_readiness(container.health) if container.health?
       probes = Container::build_probes(container.probe) if container.probe?
@@ -256,6 +333,34 @@ module KubeBuildApp
       result
     end
 
+    def self.build_effective_env_vars(container)
+      result = []
+
+      if container.enable_cgroup_exporter?
+        CGROUP_EXPORTER_DEFAULT_ENV_VARS.each do |var|
+          result << var.dup
+        end
+      end
+
+      if container.env_vars.is_a?(Array)
+        container.env_vars.each do |var|
+          result << var
+        end
+      end
+
+      return result if result.empty?
+
+      # keep last item for same env var name => explicit app env_vars override defaults
+      dedup = {}
+      result.each do |var|
+        next unless var.is_a?(Hash)
+        next unless var.has_key?("name")
+        dedup[var["name"]] = var
+      end
+
+      dedup.values
+    end
+
     def self.build_resources(resources)
       result = {}
 
@@ -288,11 +393,67 @@ module KubeBuildApp
       result
     end
 
-    def self.build_mounts(assets, shared_assets)
+    def self.build_mounts(assets, shared_assets, tools = nil)
       result = Array.new
       result += Asset::build_spec_assets(assets)
       result += Asset::build_spec_assets(shared_assets)
+      if tools && tools.size > 0
+        result << {
+          "name" => TOOLS_VOLUME_NAME,
+          "mountPath" => TOOLS_MOUNT_PATH,
+          "readOnly" => true,
+        }
+      end
       result
+    end
+
+    def self.build_tools_init_containers(tools)
+      result = []
+      tools.each do |item|
+        next unless item.is_a?(Hash)
+        expose_bin = item["expose_bin"]
+        next if expose_bin.nil? || expose_bin.to_s.strip.empty?
+
+        image = item["image"] || item["name"]
+        next if image.nil? || image.to_s.strip.empty?
+
+        rel_target = tools_target_relative(item)
+        script = [
+          "set -eu",
+          "mkdir -p /work/tools/#{File.dirname(rel_target)}",
+          "cp #{shell_escape(expose_bin)} /work/tools/#{shell_escape(rel_target)}",
+          "chmod +x /work/tools/#{shell_escape(rel_target)}",
+        ].join("; ")
+
+        result << {
+          "name" => (item["name"] || "tool-#{File.basename(rel_target)}"),
+          "image" => image,
+          "imagePullPolicy" => "IfNotPresent",
+          "command" => ["/bin/sh", "-ec", script],
+          "volumeMounts" => [
+            {
+              "name" => TOOLS_VOLUME_NAME,
+              "mountPath" => "/work/tools",
+            },
+          ],
+        }
+      end
+      result
+    end
+
+    def self.tools_target_relative(item)
+      target = item["as"] || "#{TOOLS_MOUNT_PATH}/#{File.basename(item["expose_bin"])}"
+      if target.start_with?("#{TOOLS_MOUNT_PATH}/")
+        rel = target.sub("#{TOOLS_MOUNT_PATH}/", "")
+        rel.empty? ? File.basename(item["expose_bin"]) : rel
+      else
+        # convention-over-configuration: everything is exposed under /app/tools
+        File.basename(target)
+      end
+    end
+
+    def self.shell_escape(value)
+      "'" + value.to_s.gsub("'", %q('"'"')) + "'"
     end
   end
 end

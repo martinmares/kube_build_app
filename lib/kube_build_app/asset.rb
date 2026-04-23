@@ -19,6 +19,11 @@ module KubeBuildApp
       @to = content["to"]
       @binary = content["binary"] || false
       @transform = content["transform"] || false
+      @helm_escape = if content.has_key?("helm_escape")
+                       bool_value(content["helm_escape"])
+                     else
+                       bool_value(@env.helm_escape_assets)
+                     end
       @temp = content["temp"] || false
       @pvc = content["pvc"] || false
       if pvc?
@@ -34,13 +39,16 @@ module KubeBuildApp
       @content = "#{@name}#{@to}" if pvc?
       @content = "#{@server}#{@path}" if nfs?
       @content = "#{@host_path}#{@to}" if host_path?
-      if @binary
-        content_with_env_applied = @content
-      else
-        content_with_env_applied = @env.apply_vars_on_content(@content) if @content
+      content_result = @content
+      if !@binary && transform? && content_result
+        content_result = @env.apply_vars_on_content(content_result)
       end
-      @digest = Digest::CRC32.hexdigest("#{@file}#{@to}#{content_with_env_applied}") if content_with_env_applied
-      @content = content_with_env_applied if transform?
+      if !@binary && @helm_escape && content_result
+        content_result = helm_escape_placeholders(content_result)
+      end
+
+      @digest = Digest::CRC32.hexdigest("#{@file}#{@to}#{content_result}") if content_result
+      @content = content_result if (transform? || @helm_escape)
     end
 
     def simple_name
@@ -101,6 +109,42 @@ module KubeBuildApp
 
     def pvc?
       @pvc
+    end
+
+    def bool_value(value)
+      value == true || value.to_s.strip.downcase == "true"
+    end
+
+    def helm_escape_placeholders(content)
+      pattern = /(\{\{\s*)(\w+)(\s*\}\})/
+      result = +""
+      last_index = 0
+
+      content.to_enum(:scan, pattern).each do
+        match = Regexp.last_match
+        start_idx = match.begin(0)
+        end_idx = match.end(0)
+        original = match[0]
+
+        result << content[last_index...start_idx]
+        if helm_wrapped?(content, start_idx, end_idx)
+          result << original
+        else
+          result << "{{`#{original}`}}"
+        end
+        last_index = end_idx
+      end
+
+      result << content[last_index..] if last_index < content.length
+      result
+    end
+
+    def helm_wrapped?(content, start_idx, end_idx)
+      return false if start_idx < 3
+      return false if (end_idx + 3) > content.length
+
+      content[(start_idx - 3)...start_idx] == "{{`" &&
+        content[end_idx...(end_idx + 3)] == "`}}"
     end
 
     def self.build_container_assets(assets)

@@ -3,5 +3,21 @@
 require_relative "../lib/kube_build_app/main"
 require_relative "../lib/kube_build_app/application"
 
-release = KubeBuildApp::Main.new
-release.build
+mode = :build
+if ARGV.first == "validate"
+  ARGV.shift
+  mode = :validate
+end
+
+release = KubeBuildApp::Main.new(mode)
+
+begin
+  if mode == :validate
+    release.validate
+  else
+    release.build
+  end
+rescue KubeBuildApp::Main::ValidationError => e
+  warn e.message
+  exit 1
+end
