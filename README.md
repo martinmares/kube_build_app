@@ -231,6 +231,45 @@ When enabled, these defaults are injected automatically (only if not already pre
 - `CGROUP_EXPORTER_MEMORY_LIMITS_MIB`
 - `CGROUP_EXPORTER_NODE_NAME`
 
+### Rollout checksums (pod template annotations)
+
+You can force Kubernetes/ArgoCD rollout when selected environment files change.
+
+Define app-level checksum groups:
+
+```yaml
+rollout_on:
+  checksums:
+    config:
+      files:
+        - env.unsecured.json
+        - env.secured.json
+    mtls:
+      files:
+        - assets/infrastructure/mtls-gateway-config.tpl
+```
+
+Generated deployment pod template will contain:
+
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        checksum/config: "..."
+        checksum/mtls: "..."
+```
+
+Behavior:
+
+- paths are relative to `<environment_dir>`
+- checksum is computed from `relative_path + file_content`
+- files are processed in stable sorted order
+- changing checksum annotation changes pod template and triggers rollout
+- missing files fail fast
+
+This is intended for deterministic declarative inputs only. Do not use it for values that are injected later at runtime outside of `kube_build_app`.
+
 Create file with name `nginx.conf` (inside directory `~/my-brand-new-product-k8s/environments/test/assets`). With the following content
 
 ```nginx
@@ -607,7 +646,7 @@ Notes:
 
 ## Inventory mode (`-i`)
 
-Print detailed app/container inventory JSON and exit:
+Print detailed pretty-formatted app/container inventory JSON and exit:
 
 ```bash
 kube_build_app -i -e test
@@ -624,6 +663,16 @@ Output is JSON on stdout, intended for piping:
 
 ```bash
 kube_build_app -i -e test | simple-spiffe-pki generate -
+```
+
+Inventory items also include app-level rollout checksum annotations when configured:
+
+```json
+{
+  "rollout_checksums": {
+    "checksum/config": "..."
+  }
+}
 ```
 
 When container has:
