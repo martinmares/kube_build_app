@@ -1,0 +1,16 @@
+.git
+.gitignore
+.idea
+.vscode
+.tmp
+.lsp
+.ruby-lsp
+.clj-kondo
+coverage
+deploy
+deploy.dev
+deploy.tst
+images
+test
+TODO.md
+README.local.md
