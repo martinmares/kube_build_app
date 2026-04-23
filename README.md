@@ -93,7 +93,6 @@ containers:
         from: "50Mi"
         to: "100Mi"
     health:
-    health:
       http:
         path:
           live: /index.html
@@ -266,8 +265,6 @@ tree -f
 │   │   └── ./deployments/production/deploy
 │   └── ./deployments/test
 │       └── ./deployments/test/deploy
-├── ./env.secured.json
-├── ./env.unsecured.json
 ├── ./environments
 │   ├── ./environments/production
 │   │   ├── ./environments/production/apps
@@ -275,9 +272,11 @@ tree -f
 │   └── ./environments/test
 │       ├── ./environments/test/apps
 │       │   └── ./environments/test/apps/brand-new-product.yml
+│       ├── ./environments/test/env.secured.json
+│       ├── ./environments/test/env.unsecured.json
+│       ├── ./environments/test/shared.assets.yml
 │       └── ./environments/test/assets
 │           └── ./environments/test/assets/nginx.conf
-└── ./shared.assets.yml
 
 12 directories, 5 files
 ```
