@@ -23,6 +23,11 @@ ruby-test:
 test: go-test ruby-test
 
 [unix]
+readme-smoke:
+    just build
+    scripts/readme-smoke ./dist/kube-build-app
+
+[unix]
 build:
     mkdir -p dist
     mkdir -p .tmp/go-build-cache

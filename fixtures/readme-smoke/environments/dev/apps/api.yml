@@ -1,0 +1,50 @@
+vars:
+  - name: APP_NAME
+    value: api
+name: "{{var:APP_NAME}}"
+replicas: 2
+rollout_on:
+  checksums:
+    config:
+      files:
+        - env.unsecured.json
+        - assets/config/app.conf.tpl
+containers:
+  - name: api
+    image: "{{env:TSM_REGISTRY_URL}}/{{var:APP_NAME}}:{{env:TSM_RELEASE_ID}}"
+    env_vars:
+      - name: GLOBAL_FLAG
+        value: "false"
+      - name: REMOVE_ME
+        remove: true
+      - name: APP_MODE
+        value: demo
+    assets:
+      - file: assets/config/app.conf.tpl
+        to: /app/config/app.conf
+        transform: true
+    resources:
+      cpu:
+        from: "100m"
+        to: "500m"
+      memory:
+        from: "128Mi"
+        to: "512Mi"
+    ports:
+      - name: http
+        port: 8080
+        metrics: true
+        expose_as:
+          - hostname: api
+            port: 80
+            external:
+              - name: api-public
+                http:
+                  - hostname: "{{env:PUBLIC_API_HOST}}"
+                    path: /
+    health:
+      http:
+        path:
+          live: /actuator/health/liveness
+          ready: /actuator/health/readiness
+        port: 8080

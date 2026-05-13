@@ -1,0 +1,16 @@
+vars:
+  - name: TEAM
+    value: platform
+labels:
+  team: "{{var:TEAM}}"
+container_env_vars:
+  - name: "*"
+    env_vars:
+      - name: GLOBAL_FLAG
+        value: "true"
+      - name: REMOVE_ME
+        value: "from-defaults"
+  - name: api
+    env_vars:
+      - name: API_DEFAULT
+        value: "from-container-defaults"

@@ -788,6 +788,22 @@ Build release binaries with version metadata and SHA256 checksums:
 just release 0.1.0
 ```
 
+Run README smoke fixture:
+
+```bash
+just readme-smoke
+```
+
+The fixture lives in `fixtures/readme-smoke/environments/dev` and verifies the documented CLI flow against a small environment repository:
+
+```bash
+kube-build-app validate -e dev -R fixtures/readme-smoke/environments
+kube-build-app list -e dev -R fixtures/readme-smoke/environments
+kube-build-app summary -e dev -R fixtures/readme-smoke/environments
+kube-build-app inventory -e dev -R fixtures/readme-smoke/environments
+kube-build-app build -e dev -R fixtures/readme-smoke/environments -t /tmp/kube-build-app-readme-smoke
+```
+
 Run parity against Ruby reference implementation:
 
 ```bash

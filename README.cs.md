@@ -788,6 +788,22 @@ Release binárky s version metadata a SHA256 checksumy:
 just release 0.1.0
 ```
 
+README smoke fixture:
+
+```bash
+just readme-smoke
+```
+
+Fixture je v `fixtures/readme-smoke/environments/dev` a ověřuje dokumentovaný CLI flow nad malým environment repozitářem:
+
+```bash
+kube-build-app validate -e dev -R fixtures/readme-smoke/environments
+kube-build-app list -e dev -R fixtures/readme-smoke/environments
+kube-build-app summary -e dev -R fixtures/readme-smoke/environments
+kube-build-app inventory -e dev -R fixtures/readme-smoke/environments
+kube-build-app build -e dev -R fixtures/readme-smoke/environments -t /tmp/kube-build-app-readme-smoke
+```
+
 Parity proti Ruby referenci:
 
 ```bash

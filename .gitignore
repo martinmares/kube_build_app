@@ -11,6 +11,10 @@ target*
 deploy*
 distribution*
 environments*
+!fixtures/
+!fixtures/readme-smoke/
+!fixtures/readme-smoke/environments/
+!fixtures/readme-smoke/environments/**
 Gemfile.lock
 dist/
 .qlty/

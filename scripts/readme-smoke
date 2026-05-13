@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+bin="${1:-./dist/kube-build-app}"
+root="${2:-fixtures/readme-smoke/environments}"
+env_name="${3:-dev}"
+target="$(mktemp -d "${TMPDIR:-/tmp}/kube-build-app-readme-smoke.XXXXXX")"
+
+if [[ ! -x "$bin" ]]; then
+  echo "README smoke failed: binary is not executable: $bin" >&2
+  exit 1
+fi
+
+run() {
+  echo "+ $*" >&2
+  "$@"
+}
+
+assert_file() {
+  if [[ ! -f "$1" ]]; then
+    echo "README smoke failed: expected file not found: $1" >&2
+    exit 1
+  fi
+}
+
+assert_glob() {
+  local pattern="$1"
+  local matches=( $pattern )
+  if [[ ${#matches[@]} -eq 0 || ! -e "${matches[0]}" ]]; then
+    echo "README smoke failed: expected file matching: $pattern" >&2
+    exit 1
+  fi
+}
+
+assert_contains() {
+  local file="$1"
+  local needle="$2"
+  if ! grep -Fq "$needle" "$file"; then
+    echo "README smoke failed: expected '$needle' in $file" >&2
+    exit 1
+  fi
+}
+
+run "$bin" validate -e "$env_name" -R "$root"
+
+list_out="$target/list.txt"
+run "$bin" list -e "$env_name" -R "$root" > "$list_out"
+assert_contains "$list_out" "api"
+assert_contains "$list_out" "worker"
+
+summary_out="$target/summary.txt"
+run "$bin" summary -e "$env_name" -R "$root" > "$summary_out"
+assert_contains "$summary_out" "Resource summary for environment: $env_name"
+assert_contains "$summary_out" "api"
+assert_contains "$summary_out" "worker"
+assert_contains "$summary_out" "Totals"
+
+inventory_out="$target/inventory.json"
+run "$bin" inventory -e "$env_name" -R "$root" > "$inventory_out"
+assert_contains "$inventory_out" '"apps_count": 2'
+assert_contains "$inventory_out" '"containers_count": 2'
+assert_contains "$inventory_out" '"rollout_checksums"'
+
+run "$bin" build -e "$env_name" -R "$root" -t "$target/out" --verbose --color never
+assert_file "$target/out/deployments/api-deployment.yml"
+assert_file "$target/out/deployments/worker-deployment.yml"
+assert_file "$target/out/services/api-service.yml"
+assert_file "$target/out/services/external/api-public-ingress.yml"
+assert_glob "$target/out/assets/api-asset-*.yml"
+asset_files=( "$target"/out/assets/api-asset-*.yml )
+assert_contains "$target/out/deployments/api-deployment.yml" "checksum/config"
+assert_contains "$target/out/deployments/api-deployment.yml" "API_DEFAULT"
+assert_contains "$target/out/deployments/api-deployment.yml" "GLOBAL_FLAG"
+assert_contains "${asset_files[0]}" "release=2026.05.13.1"
+
+printf 'README smoke OK: %s\n' "$target/out"

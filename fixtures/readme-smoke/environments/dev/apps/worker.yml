@@ -1,0 +1,22 @@
+name: worker
+replicas: 1
+disable_create_service: true
+containers:
+  - name: worker
+    image: "{{env:TSM_REGISTRY_URL}}/worker:{{env:TSM_RELEASE_ID}}"
+    env_vars:
+      - name: WORKER_QUEUE
+        value: default
+    resources:
+      cpu:
+        from: "50m"
+        to: "200m"
+      memory:
+        from: "64Mi"
+        to: "256Mi"
+    startup:
+      command:
+        - /bin/sh
+      arguments:
+        - -c
+        - echo worker
