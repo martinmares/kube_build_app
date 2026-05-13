@@ -1,5 +1,6 @@
 require_relative "test_helper"
 require "digest"
+require "digest/crc32"
 
 class ComprehensiveFeaturesTest < Minitest::Test
   def setup
@@ -406,6 +407,76 @@ class ComprehensiveFeaturesTest < Minitest::Test
     refute_includes rendered, "{{`{{`{{ ALREADY }}`}}`}}"
   end
 
+  def test_asset_config_map_digest_uses_raw_content_when_transform_is_disabled
+    write_minimal_env(extra_env: { "DYNAMIC_VALUE" => "resolved" })
+    raw_content = "value={{DYNAMIC_VALUE}}\n"
+    write_file(File.join(@env_dir, "assets", "raw.conf"), raw_content)
+    write_file(
+      File.join(@env_dir, "apps", "raw-asset.yml"),
+      <<~YAML,
+        name: raw-asset
+        replicas: 1
+        containers:
+          - name: raw-asset
+            image: "{{TSM_REGISTRY_URL}}/raw-asset:{{TSM_RELEASE_ID}}"
+            startup:
+              command: ["/bin/sh"]
+              arguments: ["-c", "echo ok"]
+            assets:
+              - file: assets/raw.conf
+                to: /app/raw.conf
+                transform: false
+            resources:
+              cpu: { from: "100m", to: "200m" }
+              memory: { from: "128Mi", to: "256Mi" }
+      YAML
+    )
+
+    out, err, status = run_kube_build_app("-e", "test", "-R", @root_dir, "-t", @target_dir)
+    assert status.success?, "build failed\nstdout:\n#{out}\nstderr:\n#{err}"
+
+    expected_digest = asset_crc("assets/raw.conf", "/app/raw.conf", raw_content)
+    asset = load_single_asset_config_map
+
+    assert_equal "raw-asset-asset-#{expected_digest}", asset.dig("metadata", "name")
+    assert_equal raw_content, asset.dig("data", "raw.conf")
+  end
+
+  def test_asset_config_map_digest_uses_rendered_content_when_transform_is_enabled
+    write_minimal_env(extra_env: { "DYNAMIC_VALUE" => "resolved" })
+    write_file(File.join(@env_dir, "assets", "rendered.conf.tpl"), "value={{DYNAMIC_VALUE}}\n")
+    write_file(
+      File.join(@env_dir, "apps", "rendered-asset.yml"),
+      <<~YAML,
+        name: rendered-asset
+        replicas: 1
+        containers:
+          - name: rendered-asset
+            image: "{{TSM_REGISTRY_URL}}/rendered-asset:{{TSM_RELEASE_ID}}"
+            startup:
+              command: ["/bin/sh"]
+              arguments: ["-c", "echo ok"]
+            assets:
+              - file: assets/rendered.conf.tpl
+                to: /app/rendered.conf
+                transform: true
+            resources:
+              cpu: { from: "100m", to: "200m" }
+              memory: { from: "128Mi", to: "256Mi" }
+      YAML
+    )
+
+    out, err, status = run_kube_build_app("-e", "test", "-R", @root_dir, "-t", @target_dir)
+    assert status.success?, "build failed\nstdout:\n#{out}\nstderr:\n#{err}"
+
+    rendered_content = "value=resolved\n"
+    expected_digest = asset_crc("assets/rendered.conf.tpl", "/app/rendered.conf", rendered_content)
+    asset = load_single_asset_config_map
+
+    assert_equal "rendered-asset-asset-#{expected_digest}", asset.dig("metadata", "name")
+    assert_equal rendered_content, asset.dig("data", "rendered.conf")
+  end
+
   def test_validate_fails_for_startup_and_simple_init_xor_violation
     write_minimal_env
     write_file(
@@ -549,6 +620,37 @@ class ComprehensiveFeaturesTest < Minitest::Test
     assert_includes err, "rollout checksum file not found"
   end
 
+  def test_rollout_on_checksums_rejects_conflicting_pod_annotation
+    write_minimal_env
+    write_file(
+      File.join(@env_dir, "apps", "rollout-conflict.yml"),
+      <<~YAML,
+        name: rollout-conflict
+        pod_annotations:
+          checksum/config: "manual-value"
+        rollout_on:
+          checksums:
+            config:
+              files:
+                - env.unsecured.json
+        replicas: 1
+        containers:
+          - name: rollout-conflict
+            image: "{{TSM_REGISTRY_URL}}/rollout-conflict:{{TSM_RELEASE_ID}}"
+            startup:
+              command: ["/bin/sh"]
+              arguments: ["-c", "echo ok"]
+            resources:
+              cpu: { from: "100m", to: "200m" }
+              memory: { from: "128Mi", to: "256Mi" }
+      YAML
+    )
+
+    _out, err, status = run_kube_build_app("-e", "test", "-R", @root_dir, "-t", @target_dir)
+    refute status.success?
+    assert_includes err, "pod annotation 'checksum/config' conflicts with computed rollout checksum"
+  end
+
   def test_inventory_contains_profiles_and_mtls_paths
     write_minimal_env
     write_file(File.join(@env_dir, "assets", "inventory.cfg"), "value=1\n")
@@ -672,6 +774,16 @@ class ComprehensiveFeaturesTest < Minitest::Test
   def load_deployment(app_name)
     path = File.join(@target_dir, "deployments", "#{app_name}-deployment.yml")
     YAML.load_file(path)
+  end
+
+  def load_single_asset_config_map
+    asset_paths = Dir.glob(File.join(@target_dir, "assets", "*.yml"))
+    assert_equal 1, asset_paths.size
+    YAML.load_file(asset_paths.first)
+  end
+
+  def asset_crc(relative_file, target_path, content)
+    Digest::CRC32.hexdigest("#{relative_file}#{target_path}#{content}")
   end
 
   def checksum_for_files(*relative_paths)

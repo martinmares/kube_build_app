@@ -12,8 +12,10 @@ deploy*
 distribution*
 environments*
 Gemfile.lock
+dist/
 .qlty/
 images/
+.deploy/
 
 # include
 conf/*

@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  scripts/parity-build --name CASE --root ENV_ROOT --env ENV --release-id RELEASE_ID [--ruby-bin PATH] [--go-bin PATH]
+
+This is the initial parity harness for the Go rewrite.
+
+Current behavior:
+  - builds the selected environment with the Ruby kube_build_app reference implementation
+  - if --go-bin exists, builds the same environment with the Go candidate
+  - compares generated file sets
+  - compares YAML/JSON files semantically and other files byte-for-byte
+  - leaves outputs in /tmp/kube-build-app-parity/CASE/{ruby,go}
+USAGE
+}
+
+name=""
+root=""
+env_name=""
+release_id=""
+ruby_bin="bin/kube_build_app"
+go_bin=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --name)
+      name="${2:-}"
+      shift 2
+      ;;
+    --root)
+      root="${2:-}"
+      shift 2
+      ;;
+    --env)
+      env_name="${2:-}"
+      shift 2
+      ;;
+    --release-id)
+      release_id="${2:-}"
+      shift 2
+      ;;
+    --ruby-bin)
+      ruby_bin="${2:-}"
+      shift 2
+      ;;
+    --go-bin)
+      go_bin="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -z "$name" || -z "$root" || -z "$env_name" || -z "$release_id" ]]; then
+  usage >&2
+  exit 2
+fi
+
+case_dir="/tmp/kube-build-app-parity/${name}"
+ruby_out="${case_dir}/ruby"
+go_out="${case_dir}/go"
+
+rm -rf "$case_dir"
+mkdir -p "$ruby_out" "$go_out"
+
+export TSM_ENV="$env_name"
+export TSM_RELEASE_ID="$release_id"
+
+echo "case:       $name"
+echo "root:       $root"
+echo "env:        $env_name"
+echo "release:    $release_id"
+echo "ruby out:   $ruby_out"
+echo "go out:     $go_out"
+
+echo
+echo "== Ruby reference build =="
+"$ruby_bin" -e "$env_name" -R "$root" -t "$ruby_out"
+
+if [[ -n "$go_bin" && -x "$go_bin" ]]; then
+  echo
+  echo "== Go candidate build =="
+  "$go_bin" -e "$env_name" -R "$root" -t "$go_out"
+
+  echo
+  echo "== Compare file set =="
+  ruby_list="${case_dir}/ruby.files"
+  go_list="${case_dir}/go.files"
+  (cd "$ruby_out" && find . -type f | sed 's#^\./##' | sort) > "$ruby_list"
+  (cd "$go_out" && find . -type f | sed 's#^\./##' | sort) > "$go_list"
+  diff -u "$ruby_list" "$go_list"
+
+  echo
+  echo "== Compare content semantically =="
+  ruby - "$ruby_out" "$go_out" <<'RUBY'
+require "json"
+require "yaml"
+require "date"
+
+ruby_dir, go_dir = ARGV
+files = Dir.chdir(ruby_dir) { Dir.glob("**/*").select { |p| File.file?(p) }.sort }
+
+def load_semantic(path)
+  ext = File.extname(path).downcase
+  case ext
+  when ".json"
+    JSON.parse(File.read(path))
+  when ".yml", ".yaml"
+    YAML.safe_load(
+      File.read(path),
+      permitted_classes: [Time, Date, DateTime],
+      permitted_symbols: [],
+      aliases: true,
+    )
+  else
+    File.binread(path)
+  end
+end
+
+files.each do |rel|
+  left_path = File.join(ruby_dir, rel)
+  right_path = File.join(go_dir, rel)
+  left = load_semantic(left_path)
+  right = load_semantic(right_path)
+  next if left == right
+
+  warn "content differs: #{rel}"
+  warn "ruby: #{JSON.pretty_generate(left) rescue left.inspect}"
+  warn "go:   #{JSON.pretty_generate(right) rescue right.inspect}"
+  exit 1
+end
+
+puts "semantic content OK (#{files.size} files)"
+RUBY
+else
+  echo
+  echo "Go candidate build skipped; pass --go-bin PATH after the Go renderer is implemented."
+fi
+
+echo
+echo "Parity outputs are available in: $case_dir"
