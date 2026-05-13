@@ -210,8 +210,11 @@ unknown marker    -> ENCJSON_BIN or legacy fallback
 Key directory:
 
 ```text
-ENCJSON_KEYDIR or ~/.encjson
+if ENCJSON_KEYDIR is set: decrypt -k "$ENCJSON_KEYDIR" -f env.secured.json
+otherwise:                 decrypt -f env.secured.json
 ```
+
+When `ENCJSON_KEYDIR` is not set, key directory selection is delegated to the EncJson utility itself.
 
 Explicit source selection:
 
@@ -801,3 +804,35 @@ Run representative smoke parity cases:
 ```bash
 just parity-smoke
 ```
+
+## GitLab Release Pipeline
+
+The GitLab pipeline uses `VERSION` as the release trigger.
+
+On default branch, changing `VERSION` runs:
+
+- release notes generation from git history
+- cross-platform `kube-build-app` builds
+- `tar.gz` package creation
+- `SHA256SUMS` generation
+- GitLab Release creation/update
+- upload to GitLab Generic Package Registry
+
+Release package names:
+
+```text
+kube-build-app-<version>-darwin-arm64.tar.gz
+kube-build-app-<version>-darwin-amd64.tar.gz
+kube-build-app-<version>-linux-amd64.tar.gz
+kube-build-app-<version>-linux-arm64.tar.gz
+kube-build-app-<version>-windows-amd64.tar.gz
+SHA256SUMS
+```
+
+Optional `CHANGELOG.md` push:
+
+```text
+RELEASE_PUSH_TOKEN
+```
+
+When `RELEASE_PUSH_TOKEN` is set in GitLab CI/CD variables, the publish job updates `CHANGELOG.md` and pushes it back with `[skip ci]`.

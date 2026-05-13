@@ -210,8 +210,11 @@ neznámý marker    -> ENCJSON_BIN nebo legacy fallback
 Adresář s klíči:
 
 ```text
-ENCJSON_KEYDIR nebo ~/.encjson
+pokud je ENCJSON_KEYDIR nastavené: decrypt -k "$ENCJSON_KEYDIR" -f env.secured.json
+jinak:                              decrypt -f env.secured.json
 ```
+
+Když `ENCJSON_KEYDIR` není nastavené, výběr keydir se nechává na samotné EncJson utilitě.
 
 Explicitní výběr zdrojů:
 
@@ -801,3 +804,35 @@ Reprezentativní smoke parity cases:
 ```bash
 just parity-smoke
 ```
+
+## GitLab Release Pipeline
+
+GitLab pipeline používá soubor `VERSION` jako release trigger.
+
+Při změně `VERSION` na default branch se spustí:
+
+- vygenerování release notes z git historie
+- cross-platform build `kube-build-app`
+- vytvoření `tar.gz` balíčků
+- vygenerování `SHA256SUMS`
+- vytvoření nebo aktualizace GitLab Release
+- upload do GitLab Generic Package Registry
+
+Názvy release balíčků:
+
+```text
+kube-build-app-<version>-darwin-arm64.tar.gz
+kube-build-app-<version>-darwin-amd64.tar.gz
+kube-build-app-<version>-linux-amd64.tar.gz
+kube-build-app-<version>-linux-arm64.tar.gz
+kube-build-app-<version>-windows-amd64.tar.gz
+SHA256SUMS
+```
+
+Volitelný push `CHANGELOG.md`:
+
+```text
+RELEASE_PUSH_TOKEN
+```
+
+Pokud je `RELEASE_PUSH_TOKEN` nastavený v GitLab CI/CD variables, publish job aktualizuje `CHANGELOG.md` a pushne změnu zpět s `[skip ci]`.
