@@ -1,153 +1,548 @@
-# Snadné generování Kubernetes manifestů
+# kube-build-app
 
-Jednoduchá abstrakce nad Kubernetes manifesty.
+`kube-build-app` generuje Kubernetes manifesty z environment repozitáře.
 
-## Typický workflow
+Nástroj má jednoduchý runtime: načte deklarativní metadata prostředí, app modely a assety, a zapíše Kubernetes YAML do cílového adresáře. Ruby implementace je historická reference; Go implementace je produktizované CLI jako single binary, s Cobra commandy a shell completion.
 
-Chcete vytvořit deployment pro svůj nový produkt.
+## Rychlý Start
 
-```bash
-mkdir ~/my-brand-new-product-k8s
-cd ~/my-brand-new-product-k8s
+Minimální struktura repozitáře:
+
+```text
+environments/
+  test/
+    env.unsecured.json
+    apps/
+      api.yml
+    assets/
 ```
 
-V adresáři `my-brand-new-product-k8s` vytvořte základní strukturu:
+`environments/test/env.unsecured.json`:
 
-```bash
-mkdir environments
-mkdir deployments
+```json
+{
+  "environment": {
+    "NAMESPACE": "demo-test",
+    "TSM_REGISTRY_URL": "registry.example.com/demo",
+    "TSM_RELEASE_ID": "2026.05.13.1"
+  }
+}
 ```
 
-V `environments` si připravte dvě prostředí, například `test` a `production`:
-
-```bash
-cd ~/my-brand-new-product-k8s/environments
-
-mkdir -p test/apps
-mkdir -p production/apps
-mkdir -p test/assets
-mkdir -p production/assets
-```
-
-V `deployments` si připravte cílové výstupní adresáře:
-
-```bash
-cd ~/my-brand-new-product-k8s/deployments
-
-mkdir -p test/deploy
-mkdir -p production/deploy
-```
-
-Výsledná struktura:
-
-```bash
-cd ~/my-brand-new-product-k8s
-tree -d
-
-.
-├── deployments
-│   ├── production
-│   │   └── deploy
-│   └── test
-│       └── deploy
-└── environments
-    ├── production
-    │   ├── apps
-    │   └── assets
-    └── test
-        ├── apps
-        └── assets
-
-12 directories
-```
-
-Vytvořte ukázkový app soubor `brand-new-product.yml` v `~/my-brand-new-product-k8s/environments/test/apps`:
+`environments/test/apps/api.yml`:
 
 ```yaml
-name: brand-new-product
-disable_shared_assets: true
+name: api
 replicas: 1
 containers:
-  - name: brand-new-product
-    image: docker.io/library/nginx:stable
-    env_vars:
-      - name: ENV_VAR
-        value: "some value ..."
-      - name: ANOTHER_VAR
-        value: "another value ..."
-    assets:
-      - file: assets/nginx.conf
-        to: /etc/nginx/conf.d/default.conf
-    ports:
-      - name: http
-        port: 8080
-    resources:
-      cpu:
-        from: "100m"
-        to: "250m"
-      memory:
-        from: "50Mi"
-        to: "100Mi"
-    health:
-      http:
-        path:
-          live: /index.html
-          ready: /index.html
-        port: 8080
+  - name: api
+    image: "{{env:TSM_REGISTRY_URL}}/api:{{env:TSM_RELEASE_ID}}"
 ```
 
-## Utility binárky přes `tools:` (initContainers + `/app/tools`)
+Vygenerování manifestů:
 
-Do appky můžete přidat statické utility binárky z pomocných image.
+```bash
+kube-build-app build -e test -R environments -t deploy/test
+```
+
+Výstup:
+
+```text
+deploy/test/
+  deployments/api-deployment.yml
+  services/
+  assets/
+```
+
+Pokud chybí `-t/--target`, výchozí výstupní adresář je:
+
+```text
+<root>/<environment>/target
+```
+
+## CLI
+
+Preferované moderní commandy:
+
+```bash
+kube-build-app build -e test -R environments -t deploy/test
+kube-build-app validate -e test -R environments
+kube-build-app summary -e test -R environments
+kube-build-app summary --summary-format json -e test -R environments
+kube-build-app inventory -e test -R environments
+kube-build-app list -e test -R environments
+kube-build-app completion zsh
+```
+
+Legacy root flagy zůstávají kvůli kompatibilitě:
+
+```bash
+kube-build-app -e test -R environments -t deploy/test
+kube-build-app -s -e test -R environments
+kube-build-app -i -e test -R environments
+kube-build-app -l -e test -R environments
+```
+
+Nemíchejte action subcommandy s legacy action flagy. Tohle je záměrně nevalidní:
+
+```bash
+kube-build-app build -e test -s
+```
+
+Použijte:
+
+```bash
+kube-build-app summary -e test
+```
+
+Verbose build logování:
+
+```bash
+kube-build-app build -e test -R environments -t deploy/test --verbose
+kube-build-app build -e test -R environments -t deploy/test --verbose --log-format json
+kube-build-app build -e test -R environments -t deploy/test --verbose --color always
+```
+
+Build logy se zapisují na `stderr`. Normální výstup příkazu zůstává na `stdout`.
+
+Užitečné flagy:
+
+```text
+-e, --environment        název prostředí
+-R, --root               root adresář environments, výchozí: environments
+-t, --target             výstupní adresář
+-p, --profile            název replica profilu
+    --profiles-file      cesta k replica profiles souboru
+-r, --release-manifest   cesta k release manifest YAML
+-w, --down               nastaví vybraným appkám replicas na 0
+-E, --env-file           explicitní .env soubor
+    --vars-source        env, json, dot-env; opakovatelné nebo comma-separated
+-d, --decrypt-secured    zapne proměnné z env.secured.json
+    --helm-escape-assets escapuje zbývající {{VAR}} placeholdery v textových assetech
+    --verbose            vypíše build render eventy na stderr
+    --log-format         formát verbose build logu: text nebo json
+    --color              barvy ve verbose text logu: auto, always nebo never
+```
+
+## Kontrakt Placeholderů
+
+Existují tři formy placeholderů. Mají odlišný scope a odlišný čas vyhodnocení.
+
+| Placeholder | Kdo řeší | Kdy | Význam |
+| --- | --- | --- | --- |
+| `{{VAR}}` | `apply-env`, CI/CD, deploy fáze, Helm-safe post-processing | později | Runtime/deploy placeholder. `kube-build-app` ho v app YAML nechá beze změny. |
+| `{{env:VAR}}` | `kube-build-app` | build time | Build-time environment proměnná načtená z env JSON, `.env` nebo process env podle nastavených zdrojů. |
+| `{{var:VAR}}` | `kube-build-app` | build time | App-local proměnná z bloku `vars:` v aktuálním `<app>.yml`, po mergi `_defaults.yml`. |
+
+Pravidlo:
+
+```text
+prefixovaný placeholder = vyřešit při kube-build-app
+holý placeholder        = nechat na pozdější deploy/render fázi
+```
 
 Příklad:
 
 ```yaml
-tools:
-  - name: util-encjson-rs
-    image: your-registry/util-encjson-rs:latest
-    expose_bin: /usr/bin/encjson-rs
-    as: /app/tools/encjson
+vars:
+  - name: APP_NAME
+    value: api
 
+name: "{{var:APP_NAME}}"
+containers:
+  - name: "{{var:APP_NAME}}"
+    image: "{{env:TSM_REGISTRY_URL}}/{{var:APP_NAME}}:{{env:TSM_RELEASE_ID}}"
+    env_vars:
+      - name: RUNTIME_VALUE
+        value: "{{RUNTIME_VALUE}}"
+```
+
+Ve výsledném deploymentu zůstane jen holý runtime placeholder:
+
+```yaml
+containers:
+  - name: api
+    image: registry.example.com/demo/api:2026.05.13.1
+    env:
+      - name: RUNTIME_VALUE
+        value: "{{RUNTIME_VALUE}}"
+```
+
+## Zdroje Proměnných
+
+Výchozí chování je zpětně kompatibilní:
+
+```text
+env.unsecured.json + env.secured.json při -d, potom process environment
+```
+
+Explicitní `.env` soubor:
+
+```bash
+kube-build-app build -e test -E /path/to/release.env
+```
+
+V tomto režimu je explicitní `.env` jediný zdroj proměnných. Nelze ho kombinovat s `-d` ani s `--vars-source`.
+
+Explicitní výběr zdrojů:
+
+```bash
+kube-build-app build -e test --vars-source json
+kube-build-app build -e test --vars-source env
+kube-build-app build -e test --vars-source json --vars-source env
+kube-build-app build -e test --vars-source json,env
+```
+
+Podporované zdroje:
+
+```text
+json     env.unsecured.json a env.secured.json při -d
+env      process environment
+dot-env  <environment_dir>/.env, pokud není použité -E/--env-file
+```
+
+## App Model Skládáním
+
+App model je jeden YAML soubor v:
+
+```text
+<environment>/apps/<app>.yml
+```
+
+Soubory začínající `_` jsou speciální soubory, ne appky. Například:
+
+```text
+<environment>/apps/_defaults.yml
+```
+
+### 1. Minimální App
+
+```yaml
+name: api
+containers:
+  - name: api
+    image: nginx:stable
+```
+
+Výsledný deployment obsahuje jeden container:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          image: nginx:stable
+```
+
+### 2. Repliky
+
+Přidejte:
+
+```yaml
+replicas: 3
+```
+
+Výsledný deployment obsahuje:
+
+```yaml
+spec:
+  replicas: 3
+```
+
+### 3. Resources
+
+Přidejte container resources:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    resources:
+      cpu:
+        from: "100m"
+        to: "500m"
+      memory:
+        from: "128Mi"
+        to: "512Mi"
+```
+
+Výsledný deployment obsahuje:
+
+```yaml
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+```
+
+Summary command tyto hodnoty používá a celkové součty násobí počtem replik:
+
+```bash
+kube-build-app summary -e test -R environments
+```
+
+### 4. Container Environment Variables
+
+Přidejte:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    env_vars:
+      - name: JAVA_OPTS
+        value: "-Xms256m -Xmx512m"
+      - name: POD_NAME
+        field_path: metadata.name
+```
+
+Výsledný deployment obsahuje:
+
+```yaml
+env:
+  - name: JAVA_OPTS
+    value: "-Xms256m -Xmx512m"
+  - name: POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+```
+
+### 5. Porty a Services
+
+Přidejte container port:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    ports:
+      - name: http
+        port: 8080
+```
+
+Deployment dostane `containerPort: 8080`.
+
+Service vznikne přes `expose_as`:
+
+```yaml
+ports:
+  - name: http
+    port: 8080
+    expose_as:
+      - hostname: api
+        port: 80
+```
+
+Výsledný service:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  ports:
+    - name: http-80
+      port: 80
+      targetPort: 8080
+```
+
+Externí vystavení se přidává pod `expose_as[].external` a podle modelu generuje Ingress nebo OpenShift Route.
+
+### 6. Health Probes
+
+Přidejte:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    health:
+      http:
+        path:
+          live: /health/live
+          ready: /health/ready
+        port: 8080
+```
+
+Výsledný deployment obsahuje liveness a readiness probes.
+
+### 7. Assets
+
+Soubor vložte do:
+
+```text
+<environment>/assets/nginx.conf
+```
+
+A referencujte ho z appky:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    assets:
+      - file: assets/nginx.conf
+        to: /etc/nginx/conf.d/default.conf
+```
+
+Výstup obsahuje:
+
+```text
+assets/api-asset-<crc>.yml
+```
+
+Deployment dostane volume mount:
+
+```yaml
+volumeMounts:
+  - mountPath: /etc/nginx/conf.d/default.conf
+    name: api-asset-<crc>
+    readOnly: true
+    subPath: nginx.conf
+volumes:
+  - name: api-asset-<crc>
+    configMap:
+      name: api-asset-<crc>
+```
+
+Digest v názvu assetu vychází z reálného asset vstupu a cílové mount cesty. ConfigMap jméno je stabilní a mění se jen při změně mountovaného obsahu.
+
+Textové assety mohou použít build-time transform:
+
+```yaml
+assets:
+  - file: assets/application.yml.tpl
+    to: /app/config/application.yml
+    transform: true
+```
+
+### 8. Shared Assets
+
+`<environment>/shared.assets.yml` slouží pro assety mountované do více appek.
+
+Appka je může vypnout:
+
+```yaml
+disable_shared_assets: true
+```
+
+### 9. Tools
+
+Statické utility binárky lze vystavit přes initContainers a mount do `/app/tools`:
+
+```yaml
+tools:
   - name: util-apply-env
-    image: your-registry/util-apply-env:latest
+    image: registry.example.com/tools/apply-env:latest
     expose_bin: /usr/bin/apply-env
+    as: /app/tools/apply-env
 ```
 
 Chování:
 
-- položky `tools` se generují jako `initContainers`
-- každý initContainer zkopíruje `expose_bin` do sdíleného `emptyDir`
-- všechny aplikační containery dostanou tento volume read-only namountovaný do `/app/tools`
-- pokud `as` chybí, použije se výchozí `/app/tools/<basename(expose_bin)>`
-- pokud `as` míří mimo `/app/tools`, použije se stejně jen basename pod `/app/tools`
-- `tools` lze definovat globálně v `apps/_defaults.yml`
-- app soubor má vyšší prioritu; `tools: null` v appce inherited defaults vypne
+- každý tool se generuje jako initContainer
+- initContainer zkopíruje `expose_bin` do sdíleného `emptyDir`
+- app containery mountují volume read-only pod `/app/tools`
+- pokud `as` chybí, cíl je `/app/tools/<basename(expose_bin)>`
 
-## App defaults přes `apps/_defaults.yml`
+### 10. Scheduling a Pod Metadata
 
-`apps/_defaults.yml` je jediný env-level defaults soubor pro načítání app modelu.
+Časté app-level fields:
 
-Není to samostatně buildovaná app. Naopak se načte a mergne do každého `apps/*.yml`.
+```yaml
+labels:
+  team: tsm
+annotations:
+  app.example.com/owner: l2
+pod_annotations:
+  prometheus.io/scrape: "true"
+arch: amd64
+node_selector:
+  node-role.kubernetes.io/worker: ""
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: tsm
+    effect: NoSchedule
+```
 
-Použití:
+Renderují se do deployment metadata a pod template.
 
-- `tools`
-- `vars`
-- `container_env_vars`
+### 11. Raw Container Fields
+
+Raw passthrough používejte jen tehdy, když model nemá dedikované pole:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    raw:
+      securityContext:
+        runAsNonRoot: true
+```
+
+Dedikovaná modelová pole jsou lepší, protože se dají validovat a zobrazit v UI nástrojích.
+
+### 12. Cgroup Exporter Defaults
+
+Na úrovni containeru lze zapnout automatické vkládání env var pro cgroup exporter:
+
+```yaml
+containers:
+  - name: api
+    image: api:latest
+    enable_cgroup_exporter: true
+```
+
+Vkládají se jen chybějící proměnné:
+
+```text
+CGROUP_EXPORTER_METRICS_PREFIX
+CGROUP_EXPORTER_METRICS_STATIC_LABELS
+CGROUP_EXPORTER_LISTEN
+CGROUP_EXPORTER_CPU_REQUESTS_MCPU
+CGROUP_EXPORTER_CPU_LIMITS_MCPU
+CGROUP_EXPORTER_MEMORY_REQUESTS_MIB
+CGROUP_EXPORTER_MEMORY_LIMITS_MIB
+CGROUP_EXPORTER_NODE_NAME
+```
+
+### 13. Ignorované Appky
+
+Vynechání appky z buildu:
+
+```yaml
+ignore: true
+name: experimental-api
+```
+
+Pro ignorované appky se negeneruje deployment, service ani assety.
+
+## App Defaults
+
+`apps/_defaults.yml` se merguje do každého app modelu v daném prostředí.
 
 Příklad:
 
 ```yaml
 tools:
-  - name: util-encjson-rs
-    image: your-registry/util-encjson-rs:latest
-    expose_bin: /usr/bin/encjson-rs
-    as: /app/tools/encjson
+  - name: util-apply-env
+    image: registry.example.com/tools/apply-env:latest
+    expose_bin: /usr/bin/apply-env
 
 vars:
-  - name: GLOBAL_FOO
-    value: "bar"
+  - name: LOG_LEVEL
+    value: INFO
 
 container_env_vars:
   - name: "*"
@@ -155,82 +550,77 @@ container_env_vars:
       - name: GLOBAL_FLAG
         value: "true"
 
-  - name: "tsm-dms"
+  - name: api
     env_vars:
       - name: JAVA_OPTS
         value: "-Xms256m"
 ```
 
-Semantika `vars`:
+Semantika:
 
-- páruje se podle `name`
-- app-level položka plně nahradí default položku se stejným `name`
-- neexistuje field-level merge
-
-Semantika `container_env_vars`:
-
-- validní jen v `apps/_defaults.yml`
-- aplikují se na containery podle `container.name`
-- `name: "*"` znamená wildcard defaults pro všechny containery
-- potom se aplikují defaults pro konkrétní `container.name`
-- nakonec se aplikují lokální `containers[].env_vars` z app YAML
-- párování je podle `env var name`
-- vyšší vrstva vždy plně nahradí nižší vrstvu
+- obecné map klíče se rekurzivně mergují, app hodnoty vítězí
+- `vars` se párují podle `name`; app položka plně nahradí default položku
+- `container_env_vars` se aplikují podle `container.name`
+- `name: "*"` se aplikuje na všechny containery jako první
+- concrete container defaults se aplikují potom
+- lokální `containers[].env_vars` se aplikují poslední
+- shodné env vars se plně nahrazují podle `name`
 
 Mazání / tombstone:
 
 ```yaml
 vars:
-  - name: GLOBAL_FOO
+  - name: LOG_LEVEL
     remove: true
 ```
 
 ```yaml
 containers:
-  - name: tsm-dms
+  - name: api
     env_vars:
       - name: GLOBAL_FLAG
         remove: true
 ```
 
-Pravidla pro `remove: true`:
+`remove: true` položku úplně odstraní a nesmí být kombinováno s dalšími datovými poli.
 
-- položka se úplně odstraní z finálního modelu
-- nesmí být kombinována s dalšími datovými poli
-- nevalidní kombinace failnou hned
+## Replica Profily
 
-Shrnutí precedence:
+Env-level profily umožní změnit repliky bez editace app souborů:
 
-- obecné hash klíče: rekurzivní merge `_defaults.yml`, app hodnoty vítězí
-- `vars`: whole-object replace podle `name`
-- `container_env_vars` -> `containers[].env_vars`: whole-object replace podle `name`
-
-## Cgroup Exporter defaults (container-level)
-
-Na úrovni containeru lze zapnout automatické vkládání env var pro cgroup exporter:
+`<environment>/replica-profiles.yml`:
 
 ```yaml
-containers:
-  - name: your-app
-    enable_cgroup_exporter: true
+defaults:
+  profile: normal
+
+profiles:
+  normal:
+    apps:
+      api: 2
+      worker: 1
+
+  maintenance:
+    all: 0
+    apps:
+      api: 1
 ```
 
-Automaticky se doplní pouze chybějící env var:
+Spuštění:
 
-- `CGROUP_EXPORTER_METRICS_PREFIX`
-- `CGROUP_EXPORTER_METRICS_STATIC_LABELS`
-- `CGROUP_EXPORTER_LISTEN`
-- `CGROUP_EXPORTER_CPU_REQUESTS_MCPU`
-- `CGROUP_EXPORTER_CPU_LIMITS_MCPU`
-- `CGROUP_EXPORTER_MEMORY_REQUESTS_MIB`
-- `CGROUP_EXPORTER_MEMORY_LIMITS_MIB`
-- `CGROUP_EXPORTER_NODE_NAME`
+```bash
+kube-build-app build -e test -p maintenance -R environments -t deploy/test
+```
 
-## Rollout checksums (pod template annotations)
+Přímé stažení vybraných appek na nulu:
 
-Můžete vynutit rollout Kubernetes/ArgoCD při změně vybraných souborů prostředí.
+```bash
+kube-build-app build -e test -w worker -R environments -t deploy/test
+```
 
-Příklad:
+## Rollout Checksums
+
+Rollout checksum anotace použijte, když se má pod restartovat po změně vybraných souborů.
 
 ```yaml
 rollout_on:
@@ -244,7 +634,7 @@ rollout_on:
         - assets/infrastructure/mtls-gateway-config.tpl
 ```
 
-Do pod template se zapíší anotace:
+Výsledný deployment pod template obsahuje:
 
 ```yaml
 spec:
@@ -257,314 +647,71 @@ spec:
 
 Chování:
 
-- cesty jsou relativní vůči `<environment_dir>`
-- checksum se počítá z `relative_path + file_content`
-- soubory se zpracují ve stabilním seřazeném pořadí
-- změna checksum anotace změní pod template a tím vyvolá rollout
-- chybějící soubor = fail-fast
+- cesty jsou relativní k `<environment_dir>`
+- soubory se před hashováním seřadí
+- checksum zahrnuje relativní cestu a obsah souboru
+- chybějící soubor failne build
+- změna anotace změní pod template a vyvolá rollout
 
-Tohle je určené pro deterministické deklarativní vstupy. Nepoužívejte to pro hodnoty, které se injektují až později za běhu mimo `kube_build_app`.
+Používejte to jen pro deterministické deklarativní soubory. Ne pro hodnoty injektované později sidecarem nebo čistě runtime mechanismem.
 
-## Ukázkový asset
+## Inventory
 
-Vytvořte `nginx.conf` v `~/my-brand-new-product-k8s/environments/test/assets`:
-
-```nginx
-daemon off;
-worker_processes  2;
-
-server {
-    listen       8080;
-    server_name  localhost;
-
-    location / {
-        root   /usr/share/nginx/html;
-        index  index.html index.htm;
-    }
-
-    error_page   500 502 503 504  /50x.html;
-    location = /50x.html {
-        root   /usr/share/nginx/html;
-    }
-}
-```
-
-Struktura pak vypadá takto:
+Inventory vypíše strukturovaný JSON pohled na to, co se bude buildit:
 
 ```bash
-cd ~/my-brand-new-product-k8s
-tree -f
-
-.
-├── ./deployments
-│   ├── ./deployments/production
-│   │   └── ./deployments/production/deploy
-│   └── ./deployments/test
-│       └── ./deployments/test/deploy
-├── ./environments
-│   ├── ./environments/production
-│   │   ├── ./environments/production/apps
-│   │   └── ./environments/production/assets
-│   └── ./environments/test
-│       ├── ./environments/test/apps
-│       │   └── ./environments/test/apps/brand-new-product.yml
-│       ├── ./environments/test/env.secured.json
-│       ├── ./environments/test/env.unsecured.json
-│       ├── ./environments/test/shared.assets.yml
-│       └── ./environments/test/assets
-│           └── ./environments/test/assets/nginx.conf
-
-12 directories, 5 files
+kube-build-app inventory -e test -R environments
 ```
 
-## První build
+Legacy ekvivalent:
 
 ```bash
-kube_build_app -e test -t deployments/test/deploy
+kube-build-app -i -e test -R environments
 ```
 
-Příklad výstupu:
+Je určené pro automatizaci, UI a generátory typu PKI helperů.
 
-```log
-Build 0 shared asset/s
-Application brand-new-product, with 1 container/s
- => container [1] brand-new-product has 1 asset/s
- => asset [1]: brand-new-product-asset-66535d3
- => container [1] brand-new-product has 1 port/s
- => service [1] brand-new-product, has 1 port/s
-   => has external (ingress) brand-new-product
-```
+## Validace
 
-Výsledné soubory v `deployments/test/deploy`:
+Validace modelu bez zápisu manifestů:
 
 ```bash
-cd ~/my-brand-new-product-k8s/deployments/test/deploy
-tree -f
-
-.
-├── ./assets
-│   └── ./assets/brand-new-product-asset-66535d3.yml
-├── ./deployments
-│   └── ./deployments/brand-new-product-deployment.yml
-└── ./services
-    ├── ./services/brand-new-product-service.yml
-    └── ./services/external
-        └── ./services/external/brand-new-product-ingress.yml
-
-4 directories, 4 files
+kube-build-app validate -e test -R environments
 ```
 
-## Deployment profily (maintenance / normal mode)
+Validace chytá známé nevalidní kombinace, například konflikt startup/simple-init nebo nevalidní tombstones.
 
-Repliky můžete držet v `apps/*.yml`, ale přebít je jedním profilem:
+## Helm-Safe Assets
 
-`environments/<env>/replica-profiles.yml`
+Pokud se vygenerované manifesty renderují ještě Helmem, zbývající holé placeholdery v textových assetech mohou kolidovat s Helm syntaxí.
 
-```yaml
-defaults:
-  profile: normal
-
-profiles:
-  normal:
-    apps:
-      tsm-gateway: 2
-      tsm-ticket: 2
-
-  db-maintenance:
-    all: 0
-    apps:
-      tsm-log-server: 1
-      tsm-health-checker: 1
-```
-
-Použití konkrétního profilu:
+Použijte:
 
 ```bash
-kube_build_app -e test -p db-maintenance -t deployments/test/deploy
+kube-build-app build -e test -R environments -t deploy/test --helm-escape-assets
 ```
 
-Nebo explicitní soubor:
+Zbývající placeholdery se přepíšou z:
 
-```bash
-kube_build_app -e test -p normal --profiles-file /some/path/replica-profiles.yml
+```text
+{{VAR}}
 ```
-
-Priorita:
-
-1. profil z `-p/--profile`
-2. profil z `REPLICA_PROFILE`
-3. `defaults.profile` z `replica-profiles.yml`
-
-## Ignorování appky při buildu
-
-V app YAML lze nastavit:
-
-```yaml
-ignore: true
-```
-
-Pak se appka přeskočí a negenerují se pro ni deployment/service/assets.
-
-`-w/--down` stále funguje a aplikuje se až po profile overrides.
-
-## Validace modelu (fail fast)
-
-Validace bez generování manifestů:
-
-```bash
-kube_build_app validate -e test
-```
-
-Aktuálně se validuje například:
-
-- pokud `simple_init.enabled: true`, container nesmí mít současně `startup` (XOR konflikt)
-- v `simple_init` režimu musí být `simple_init.exec.command` neprázdné pole
-
-## Explicitní env file (`-E`, `--env-file`)
-
-Lze předat už vyřešený `.env` soubor a použít ho jako jediný zdroj proměnných:
-
-```bash
-kube_build_app -e test -E /path/to/release.env
-```
-
-Typický integrační bod:
-
-```bash
-simple-secrets resolve --env test -o dot-env --file /tmp/test.env
-kube_build_app -e test -E /tmp/test.env
-```
-
-V tomto režimu `kube_build_app` nečte:
-
-- `env.unsecured.json`
-- `env.secured.json`
-- process `ENV`
-
-Podporovaný `.env` formát:
-
-- prázdné řádky a řádky začínající `#` se ignorují
-- volitelný prefix `export ` je povolený
-- `KEY=VALUE`
-- podporované jsou i quoted values (`"..."` nebo `'...'`)
-
-Poznámky:
-
-- `-E/--env-file` nelze kombinovat s `-d/--decrypt-secured`
-- `-E/--env-file` nelze kombinovat s `--vars-source`
-
-## Výběr zdroje proměnných (`--vars-source`)
-
-Můžete explicitně určit, odkud se mají proměnné načíst (repeatable):
-
-```bash
-kube_build_app -e test --vars-source env
-kube_build_app -e test --vars-source json
-```
-
-Podporované hodnoty:
-
-- `env` – proměnné z process `ENV`
-- `json` – proměnné z `env.unsecured.json` (+ `env.secured.json`, pokud je zapnuté `-d`)
-- `dot-env` – proměnné z konvenčního souboru `<environment_dir>/.env`
-
-Když použijete více zdrojů, aplikují se v pořadí, v jakém je zadáte, a pozdější zdroj přebíjí dřívější.
-
-`--vars-source dot-env` používejte jen tehdy, když chcete implicitní soubor `<environment_dir>/.env`.
-Pokud už máte explicitní cestu na vyřešený `.env`, použijte `-E/--env-file`.
-
-Výchozí backward-compatible chování bez `--vars-source`:
-
-- `json`
-- `env`
-
-## Helm-safe assets (`--helm-escape-assets`)
-
-Pokud budou vygenerované manifesty znovu renderované Helm-em, může dojít ke kolizi placeholderů s Helm syntaxí.
-
-Použití:
-
-```bash
-kube_build_app -e test --helm-escape-assets
-```
-
-U textových assetů se zbývající placeholdery přebalí z:
-
-- `{{ VAR }}`
 
 na:
 
-- `{{`{{ VAR }}`}}`
-
-Poznámky:
-
-- binární assety se nemění
-- pokud je `transform: true`, nejdřív proběhne normální variable transform a až potom Helm escape
-- již zabalené `{{`{{ VAR }}`}}` se znovu neobalují
-- per-asset override je možný přes `helm_escape: true|false`
-
-## Inventory mode (`-i`)
-
-Vypíše detailní pretty-formatted app/container inventory JSON a skončí:
-
-```bash
-kube_build_app -i -e test
+```text
+{{`{{VAR}}`}}
 ```
 
-Všechny containery jsou zahrnuté. Pro mTLS pipeline filtrujte položky, kde:
+Pokud má asset `transform: true`, nejdřív se aplikují build-time proměnné a až potom Helm escaping zbývajících placeholderů.
 
-```yaml
-mtls:
-  enabled: true
-```
+## mTLS Assets
 
-JSON jde na stdout, takže je vhodný pro další piping:
+Při container-level `mtls.enabled: true` `kube-build-app` automaticky mountuje šifrované mTLS soubory do containeru.
 
-```bash
-kube_build_app -i -e test | simple-spiffe-pki generate -
-```
+Inventory obsahuje očekávané cesty, aby externí tooling mohl vytvořit odpovídající secured materiál.
 
-Inventory položky obsahují i app-level rollout checksum annotations, pokud jsou definované:
-
-```json
-{
-  "rollout_checksums": {
-    "checksum/config": "..."
-  }
-}
-```
-
-Když má container:
-
-```yaml
-mtls:
-  enabled: true
-```
-
-`kube_build_app` automaticky přimountuje šifrované mTLS soubory:
-
-- `/app/mtls.enc/mtls.secured.json`
-- `/app/mtls.enc/mtls.secured.schema.json`
-
-Zdrojové soubory se očekávají v environment repu:
-
-- `<env>/mtls/<app>/<container>.secured.json`
-- `<env>/mtls/<app>/<container>.secured.schema.json`
-
-## Environment root (`-R`, `--root-dir`)
-
-Výchozí načítání environments:
-
-- `environments/<env>`
-- nebo `ENVIRONMENTS_DIR/<env>`, pokud je nastavené `ENVIRONMENTS_DIR`
-
-Lze explicitně přepsat root directory:
-
-```bash
-kube_build_app -e test -R /Users/mares/Development/Src/Ruby/tsm/cetin/tsm-environments
-```
-
-## Docker (openSUSE / OpenShift friendly)
+## Docker
 
 Build image:
 
@@ -572,55 +719,44 @@ Build image:
 docker build -t kube-build-app:latest .
 ```
 
-Image vždy buildí a embeduje utility binárky:
-
-- `apply-env` z `https://github.com/martinmares/apply-env-rs`
-- `encjson-rs` z `https://github.com/martinmares/encjson-rs`
-- `simple-policy-engine` se klonuje během build procesu `encjson-rs`
-- legacy `encjson` z `https://github.com/martinmares/encjson`
-
-Refy/branche lze připnout build-argy:
+Run:
 
 ```bash
-docker build -t kube-build-app:latest \
-  --build-arg APPLY_ENV_REF=main \
-  --build-arg ENCJSON_REF=main \
-  --build-arg SIMPLE_POLICY_ENGINE_REF=main \
-  --build-arg ENCJSON_LEGACY_REF=main \
-  .
-```
-
-`kube_build_app` vybírá encjson binárku podle API markeru v souboru:
-
-- `EncJson[@api=1.0` -> legacy binary (`ENCJSON_LEGACY_PATH`, default `/app/bin/encjson-legacy`)
-- `EncJson[@api=2.0` -> rust binary (`ENCJSON_PATH`, default `/app/bin/encjson-rs`)
-
-Run proti lokálnímu environments repo:
-
-```bash
-docker run --rm -it \
-  -v /absolute/path/to/tsm-environments:/work/environments:ro \
-  -v /absolute/path/to/output:/work/output \
+docker run --rm \
+  -v "$PWD/environments:/work/environments:ro" \
+  -v "$PWD/deploy:/work/deploy" \
   kube-build-app:latest \
-  -e test -R /work/environments -t /work/output
+  kube-build-app build -e test -R /work/environments -t /work/deploy/test
 ```
 
-Container konvence:
+## Vývoj
 
-- base image: `opensuse/tumbleweed:latest`
-- runtime user: `UID=1001`, `GID=1001`, `HOME=/app`
-- `/app` je writable a OpenShift-friendly (`chgrp -R 0` + `chmod -R g=u`)
-
-## Testy
-
-Spuštění všech testů:
+Testy:
 
 ```bash
-ruby -Itest -e 'Dir["test/*_test.rb"].sort.each { |f| require_relative f }'
+just test
 ```
 
-Spuštění jednoho test souboru:
+Lokální binárky:
 
 ```bash
-ruby -Itest test/comprehensive_features_test.rb
+just build
+```
+
+Cross-platform build:
+
+```bash
+just build-cross
+just build-cross-all
+```
+
+Parity proti Ruby referenci:
+
+```bash
+scripts/parity-build \
+  --name cetin-test \
+  --root /path/to/tsm-environments \
+  --env test \
+  --release-id 2025.08.18.1 \
+  --go-bin ./dist/kube-build-app
 ```

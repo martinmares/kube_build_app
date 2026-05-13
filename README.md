@@ -1,158 +1,548 @@
-# Build Kubernetes manifests easily
+# kube-build-app
 
-Simple abstraction over kubernetes manifests.
+`kube-build-app` builds Kubernetes manifests from an environment repository.
 
-## Typical workflow
+The tool is intentionally small at runtime: it reads declarative environment metadata, app model files and assets, then writes Kubernetes YAML into a target directory. The Ruby implementation is the historical reference; the Go implementation is the productized CLI with a single binary, Cobra-based commands and shell completion.
 
-You want create deployment for your awesome **brand new product**
+## Quick Start
 
-```bash
-mkdir ~/my-brand-new-product-k8s
-cd ~/my-brand-new-product-k8s
+Minimal repository layout:
+
+```text
+environments/
+  test/
+    env.unsecured.json
+    apps/
+      api.yml
+    assets/
 ```
 
-Inside `my-brand-new-product-k8s` directory
+`environments/test/env.unsecured.json`:
 
-```bash
-cd ~/my-brand-new-product-k8s
-
-mkdir environments
-mkdir deployments
+```json
+{
+  "environment": {
+    "NAMESPACE": "demo-test",
+    "TSM_REGISTRY_URL": "registry.example.com/demo",
+    "TSM_RELEASE_ID": "2026.05.13.1"
+  }
+}
 ```
 
-Inside `environments` (you want create deployment for two separate `environments`, first => `test`, second => `production`)
-
-```bash
-cd  ~/my-brand-new-product-k8s/environments
-
-mkdir -p test/apps
-mkdir -p production/apps
-mkdir -p test/assets
-mkdir -p production/assets
-```
-
-Inside `deployments` (you want create deployment for two separate `targets`, first => `test`, second => `production`)
-
-```bash
-cd  ~/my-brand-new-product-k8s/deployments
-
-mkdir -p test/deploy
-mkdir -p production/deploy
-```
-
-You should see the following directory structure (inside `my-brand-new-product-k8s` directory)
-
-```bash
-cd ~/my-brand-new-product-k8s
-tree -d
-
-.
-├── deployments
-│   ├── production
-│   │   └── deploy
-│   └── test
-│       └── deploy
-└── environments
-    ├── production
-    │   ├── apps
-    │   └── assets
-    └── test
-        ├── apps
-        └── assets
-
-12 directories
-```
-
-You will now create a sample file describing the `application` for `test` environment
-
-Create file with name `brand-new-product.yml` (inside directory `~/my-brand-new-product-k8s/environments/test/apps`). With the following content
+`environments/test/apps/api.yml`:
 
 ```yaml
-name: brand-new-product
-disable_shared_assets: true
+name: api
 replicas: 1
 containers:
-  - name: brand-new-product
-    image: docker.io/library/nginx:stable
+  - name: api
+    image: "{{env:TSM_REGISTRY_URL}}/api:{{env:TSM_RELEASE_ID}}"
+```
+
+Build manifests:
+
+```bash
+kube-build-app build -e test -R environments -t deploy/test
+```
+
+Generated files:
+
+```text
+deploy/test/
+  deployments/api-deployment.yml
+  services/
+  assets/
+```
+
+If `-t/--target` is omitted, the default output directory is:
+
+```text
+<root>/<environment>/target
+```
+
+## CLI
+
+Preferred modern commands:
+
+```bash
+kube-build-app build -e test -R environments -t deploy/test
+kube-build-app validate -e test -R environments
+kube-build-app summary -e test -R environments
+kube-build-app summary --summary-format json -e test -R environments
+kube-build-app inventory -e test -R environments
+kube-build-app list -e test -R environments
+kube-build-app completion zsh
+```
+
+Legacy-compatible root flags are still supported:
+
+```bash
+kube-build-app -e test -R environments -t deploy/test
+kube-build-app -s -e test -R environments
+kube-build-app -i -e test -R environments
+kube-build-app -l -e test -R environments
+```
+
+Do not mix action subcommands with legacy action flags. For example, this is intentionally invalid:
+
+```bash
+kube-build-app build -e test -s
+```
+
+Use this instead:
+
+```bash
+kube-build-app summary -e test
+```
+
+Verbose build logging:
+
+```bash
+kube-build-app build -e test -R environments -t deploy/test --verbose
+kube-build-app build -e test -R environments -t deploy/test --verbose --log-format json
+kube-build-app build -e test -R environments -t deploy/test --verbose --color always
+```
+
+Build logs are written to `stderr`. Normal command output stays on `stdout`.
+
+Useful flags:
+
+```text
+-e, --environment        environment name
+-R, --root               environments root directory, default: environments
+-t, --target             target output directory
+-p, --profile            replica profile name
+    --profiles-file      replica profiles file path
+-r, --release-manifest   release manifest YAML path
+-w, --down               scale selected app replicas to 0
+-E, --env-file           explicit .env file path
+    --vars-source        env, json, dot-env; repeatable or comma-separated
+-d, --decrypt-secured    enable env.secured.json variables
+    --helm-escape-assets escape remaining {{VAR}} placeholders in text assets
+    --verbose            print build render events to stderr
+    --log-format         verbose build log format: text or json
+    --color              verbose text color: auto, always or never
+```
+
+## Placeholder Contract
+
+There are three placeholder forms. They have different scopes and different timing.
+
+| Placeholder | Resolved by | Timing | Meaning |
+| --- | --- | --- | --- |
+| `{{VAR}}` | `apply-env`, CI/CD, deploy phase, Helm-safe post-processing | later | Runtime/deploy placeholder. `kube-build-app` leaves it unresolved in app YAML. |
+| `{{env:VAR}}` | `kube-build-app` | build time | Build-time environment variable loaded from env JSON, `.env` or process env according to configured sources. |
+| `{{var:VAR}}` | `kube-build-app` | build time | App-local variable from the `vars:` block in the current `<app>.yml`, after `_defaults.yml` merge. |
+
+Use this rule of thumb:
+
+```text
+prefixed placeholder = resolve during kube-build-app
+plain placeholder    = keep for later deployment/rendering phase
+```
+
+Example:
+
+```yaml
+vars:
+  - name: APP_NAME
+    value: api
+
+name: "{{var:APP_NAME}}"
+containers:
+  - name: "{{var:APP_NAME}}"
+    image: "{{env:TSM_REGISTRY_URL}}/{{var:APP_NAME}}:{{env:TSM_RELEASE_ID}}"
     env_vars:
-      - name: ENV_VAR
-        value: "some value ..."
-      - name: ANOTHER_VAR
-        value: "another value ..."
-    assets:
-      - file: assets/nginx.conf
-        to: /etc/nginx/conf.d/default.conf
-    ports:
-      - name: http
-        port: 8080
+      - name: RUNTIME_VALUE
+        value: "{{RUNTIME_VALUE}}"
+```
+
+Resulting deployment keeps only the plain runtime placeholder:
+
+```yaml
+containers:
+  - name: api
+    image: registry.example.com/demo/api:2026.05.13.1
+    env:
+      - name: RUNTIME_VALUE
+        value: "{{RUNTIME_VALUE}}"
+```
+
+## Variable Sources
+
+Default behavior is backward-compatible:
+
+```text
+env.unsecured.json + env.secured.json when -d is enabled, then process environment
+```
+
+Explicit `.env` file:
+
+```bash
+kube-build-app build -e test -E /path/to/release.env
+```
+
+In this mode the explicit `.env` is the only variable source. It cannot be combined with `-d` or `--vars-source`.
+
+Explicit source selection:
+
+```bash
+kube-build-app build -e test --vars-source json
+kube-build-app build -e test --vars-source env
+kube-build-app build -e test --vars-source json --vars-source env
+kube-build-app build -e test --vars-source json,env
+```
+
+Supported sources:
+
+```text
+json     env.unsecured.json and env.secured.json when -d is enabled
+env      process environment
+dot-env  <environment_dir>/.env unless -E/--env-file is used
+```
+
+## App Model by Composition
+
+An app model is one YAML file in:
+
+```text
+<environment>/apps/<app>.yml
+```
+
+Files starting with `_` are special files, not apps. For example:
+
+```text
+<environment>/apps/_defaults.yml
+```
+
+### 1. Minimal App
+
+```yaml
+name: api
+containers:
+  - name: api
+    image: nginx:stable
+```
+
+Generated deployment contains one container:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          image: nginx:stable
+```
+
+### 2. Replicas
+
+Add:
+
+```yaml
+replicas: 3
+```
+
+Generated deployment contains:
+
+```yaml
+spec:
+  replicas: 3
+```
+
+### 3. Resources
+
+Add container resources:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
     resources:
       cpu:
         from: "100m"
-        to: "250m"
+        to: "500m"
       memory:
-        from: "50Mi"
-        to: "100Mi"
-    health:
-      http:
-        path:
-          live: /index.html
-          ready: /index.html
+        from: "128Mi"
+        to: "512Mi"
+```
+
+Generated deployment contains:
+
+```yaml
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+```
+
+The summary command uses these values and multiplies totals by replicas:
+
+```bash
+kube-build-app summary -e test -R environments
+```
+
+### 4. Container Environment Variables
+
+Add:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    env_vars:
+      - name: JAVA_OPTS
+        value: "-Xms256m -Xmx512m"
+      - name: POD_NAME
+        field_path: metadata.name
+```
+
+Generated deployment contains:
+
+```yaml
+env:
+  - name: JAVA_OPTS
+    value: "-Xms256m -Xmx512m"
+  - name: POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+```
+
+### 5. Ports and Services
+
+Add a container port:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    ports:
+      - name: http
         port: 8080
 ```
 
-### Tools utility binaries (initContainers + /app/tools)
+Generated deployment contains `containerPort: 8080`.
 
-You can expose static utility binaries from dedicated images into app containers.
+To create a service, add `expose_as`:
 
-Add app-level `tools:` block:
+```yaml
+ports:
+  - name: http
+    port: 8080
+    expose_as:
+      - hostname: api
+        port: 80
+```
+
+Generated service:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  ports:
+    - name: http-80
+      port: 80
+      targetPort: 8080
+```
+
+External exposure can be attached under `expose_as[].external` and generates Ingress or OpenShift Route according to the model.
+
+### 6. Health Probes
+
+Add:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    health:
+      http:
+        path:
+          live: /health/live
+          ready: /health/ready
+        port: 8080
+```
+
+Generated deployment contains liveness and readiness probes.
+
+### 7. Assets
+
+Place a file under:
+
+```text
+<environment>/assets/nginx.conf
+```
+
+Reference it from the app:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    assets:
+      - file: assets/nginx.conf
+        to: /etc/nginx/conf.d/default.conf
+```
+
+Generated output includes:
+
+```text
+assets/api-asset-<crc>.yml
+```
+
+and deployment gets a volume mount:
+
+```yaml
+volumeMounts:
+  - mountPath: /etc/nginx/conf.d/default.conf
+    name: api-asset-<crc>
+    readOnly: true
+    subPath: nginx.conf
+volumes:
+  - name: api-asset-<crc>
+    configMap:
+      name: api-asset-<crc>
+```
+
+Asset name digest is based on the real asset input and mount target. This keeps ConfigMap names stable and changes them only when the mounted asset content changes.
+
+Text assets can be transformed with build-time variables:
+
+```yaml
+assets:
+  - file: assets/application.yml.tpl
+    to: /app/config/application.yml
+    transform: true
+```
+
+### 8. Shared Assets
+
+Use `<environment>/shared.assets.yml` for assets mounted into multiple apps.
+
+An app can opt out:
+
+```yaml
+disable_shared_assets: true
+```
+
+### 9. Tools
+
+Static utility binaries can be exposed through initContainers and mounted under `/app/tools`:
 
 ```yaml
 tools:
-  - name: util-encjson-rs
-    image: your-registry/util-encjson-rs:latest
-    expose_bin: /usr/bin/encjson-rs
-    as: /app/tools/encjson
-
   - name: util-apply-env
-    image: your-registry/util-apply-env:latest
+    image: registry.example.com/tools/apply-env:latest
     expose_bin: /usr/bin/apply-env
-    # when `as` is omitted, default target is /app/tools/<basename(expose_bin)>
+    as: /app/tools/apply-env
 ```
 
 Behavior:
 
-- `tools` entries are generated as `initContainers`.
-- each initContainer copies `expose_bin` into shared `emptyDir` volume.
-- all app containers get the shared volume mounted read-only to `/app/tools`.
-- convention-over-configuration default target path is `/app/tools/...`.
-- if `as` points outside `/app/tools`, only basename is used and binary is still exposed under `/app/tools`.
-- you can define `tools` globally in `apps/_defaults.yml` and it will be merged into all apps.
-- app file has higher priority than `_defaults.yml`; explicit `tools: null` in app disables inherited default tools.
+- every tool becomes an initContainer
+- the initContainer copies `expose_bin` into a shared `emptyDir`
+- app containers mount that volume read-only under `/app/tools`
+- if `as` is omitted, target defaults to `/app/tools/<basename(expose_bin)>`
 
-### App defaults via `apps/_defaults.yml`
+### 10. Scheduling and Pod Metadata
 
-`apps/_defaults.yml` is the single env-level defaults file for app model loading.
+Common app-level fields:
 
-It is not treated as a buildable app. Instead, it is loaded and merged into every `apps/*.yml`.
+```yaml
+labels:
+  team: tsm
+annotations:
+  app.example.com/owner: l2
+pod_annotations:
+  prometheus.io/scrape: "true"
+arch: amd64
+node_selector:
+  node-role.kubernetes.io/worker: ""
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: tsm
+    effect: NoSchedule
+```
 
-Use it for app-level defaults such as:
+These are rendered into deployment metadata and pod template fields.
 
-- `tools`
-- `vars`
-- `container_env_vars`
+### 11. Raw Container Fields
+
+Use raw passthrough only when the model does not expose a dedicated field:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    raw:
+      securityContext:
+        runAsNonRoot: true
+```
+
+Dedicated model fields are preferred because they can be validated and represented in UI tooling.
+
+### 12. Cgroup Exporter Defaults
+
+At container level you can enable automatic env var injection for cgroup exporter:
+
+```yaml
+containers:
+  - name: api
+    image: api:latest
+    enable_cgroup_exporter: true
+```
+
+Only missing variables are injected:
+
+```text
+CGROUP_EXPORTER_METRICS_PREFIX
+CGROUP_EXPORTER_METRICS_STATIC_LABELS
+CGROUP_EXPORTER_LISTEN
+CGROUP_EXPORTER_CPU_REQUESTS_MCPU
+CGROUP_EXPORTER_CPU_LIMITS_MCPU
+CGROUP_EXPORTER_MEMORY_REQUESTS_MIB
+CGROUP_EXPORTER_MEMORY_LIMITS_MIB
+CGROUP_EXPORTER_NODE_NAME
+```
+
+### 13. Ignored Apps
+
+Exclude an app from build:
+
+```yaml
+ignore: true
+name: experimental-api
+```
+
+No deployment, service or assets are generated for ignored apps.
+
+## App Defaults
+
+`apps/_defaults.yml` is merged into every app model in that environment.
 
 Example:
 
 ```yaml
 tools:
-  - name: util-encjson-rs
-    image: your-registry/util-encjson-rs:latest
-    expose_bin: /usr/bin/encjson-rs
-    as: /app/tools/encjson
+  - name: util-apply-env
+    image: registry.example.com/tools/apply-env:latest
+    expose_bin: /usr/bin/apply-env
 
 vars:
-  - name: GLOBAL_FOO
-    value: "bar"
+  - name: LOG_LEVEL
+    value: INFO
 
 container_env_vars:
   - name: "*"
@@ -160,82 +550,77 @@ container_env_vars:
       - name: GLOBAL_FLAG
         value: "true"
 
-  - name: "tsm-dms"
+  - name: api
     env_vars:
       - name: JAVA_OPTS
         value: "-Xms256m"
 ```
 
-`vars` semantics:
+Semantics:
 
-- matched by `name`
-- app-level item fully replaces default item with the same `name`
-- no field-level merge
-
-`container_env_vars` semantics:
-
-- only valid in `apps/_defaults.yml`
-- applied to app containers by `container.name`
-- `name: "*"` means wildcard defaults for all containers
-- then a matching concrete `container.name` is applied
-- finally local `containers[].env_vars` from app YAML are applied
-- matching is done by env var `name`
-- higher layer fully replaces lower layer item
+- generic map keys are recursively merged, app values win
+- `vars` are matched by `name`; app-level item fully replaces default item
+- `container_env_vars` are applied by `container.name`
+- `name: "*"` applies to all containers first
+- concrete container defaults are applied next
+- local `containers[].env_vars` are applied last
+- matching env vars are fully replaced by `name`
 
 Removal / tombstone:
 
 ```yaml
 vars:
-  - name: GLOBAL_FOO
+  - name: LOG_LEVEL
     remove: true
 ```
 
 ```yaml
 containers:
-  - name: tsm-dms
+  - name: api
     env_vars:
       - name: GLOBAL_FLAG
         remove: true
 ```
 
-Rules for `remove: true`:
+`remove: true` removes the item completely and must not be combined with other data fields.
 
-- removes the item completely from final effective model
-- must not be combined with other data fields
-- invalid combinations fail fast
+## Replica Profiles
 
-Precedence summary:
+Use environment-level profiles to override replicas without editing app files:
 
-- generic hash keys: current recursive `_defaults.yml` merge, app values win
-- `vars`: whole-object replace by `name`
-- `container_env_vars` -> `containers[].env_vars`: whole-object replace by `name`
-
-### Cgroup Exporter Defaults (container-level)
-
-At container level you can enable automatic env var injection for cgroup exporter:
+`<environment>/replica-profiles.yml`:
 
 ```yaml
-containers:
-  - name: your-app
-    enable_cgroup_exporter: true
+defaults:
+  profile: normal
+
+profiles:
+  normal:
+    apps:
+      api: 2
+      worker: 1
+
+  maintenance:
+    all: 0
+    apps:
+      api: 1
 ```
 
-When enabled, these defaults are injected automatically (only if not already present in `env_vars`):
+Run:
 
-- `CGROUP_EXPORTER_METRICS_PREFIX`
-- `CGROUP_EXPORTER_METRICS_STATIC_LABELS`
-- `CGROUP_EXPORTER_LISTEN`
-- `CGROUP_EXPORTER_CPU_REQUESTS_MCPU`
-- `CGROUP_EXPORTER_CPU_LIMITS_MCPU`
-- `CGROUP_EXPORTER_MEMORY_REQUESTS_MIB`
-- `CGROUP_EXPORTER_MEMORY_LIMITS_MIB`
-- `CGROUP_EXPORTER_NODE_NAME`
+```bash
+kube-build-app build -e test -p maintenance -R environments -t deploy/test
+```
 
-### Rollout checksums (pod template annotations)
+Scale selected apps down directly:
 
-You can force Kubernetes/ArgoCD rollout when selected environment files change.
+```bash
+kube-build-app build -e test -w worker -R environments -t deploy/test
+```
 
-Define app-level checksum groups:
+## Rollout Checksums
+
+Use rollout checksum annotations when a pod must restart after selected files change.
 
 ```yaml
 rollout_on:
@@ -249,7 +634,7 @@ rollout_on:
         - assets/infrastructure/mtls-gateway-config.tpl
 ```
 
-Generated deployment pod template will contain:
+Generated deployment pod template contains:
 
 ```yaml
 spec:
@@ -263,448 +648,70 @@ spec:
 Behavior:
 
 - paths are relative to `<environment_dir>`
-- checksum is computed from `relative_path + file_content`
-- files are processed in stable sorted order
-- changing checksum annotation changes pod template and triggers rollout
+- files are sorted before hashing
+- checksum includes relative path and file content
 - missing files fail fast
+- changing annotation changes pod template and triggers rollout
 
-This is intended for deterministic declarative inputs only. Do not use it for values that are injected later at runtime outside of `kube_build_app`.
+Use this for deterministic declarative files only. Do not use it for values injected later by sidecars or runtime-only mechanisms.
 
-Create file with name `nginx.conf` (inside directory `~/my-brand-new-product-k8s/environments/test/assets`). With the following content
+## Inventory
 
-```nginx
-daemon off;
-worker_processes  2;
-
-server {
-    listen       8080;
-    server_name  localhost;
-
-    location / {
-        root   /usr/share/nginx/html;
-        index  index.html index.htm;
-    }
-
-    error_page   500 502 503 504  /50x.html;
-    location = /50x.html {
-        root   /usr/share/nginx/html;
-    }
-}
-```
-
-You should see the following directory structure (inside `~/my-brand-new-product-k8s` directory)
+Inventory prints a structured JSON view of what will be built:
 
 ```bash
-cd ~/my-brand-new-product-k8s
-tree -f
-
-.
-├── ./deployments
-│   ├── ./deployments/production
-│   │   └── ./deployments/production/deploy
-│   └── ./deployments/test
-│       └── ./deployments/test/deploy
-├── ./environments
-│   ├── ./environments/production
-│   │   ├── ./environments/production/apps
-│   │   └── ./environments/production/assets
-│   └── ./environments/test
-│       ├── ./environments/test/apps
-│       │   └── ./environments/test/apps/brand-new-product.yml
-│       ├── ./environments/test/env.secured.json
-│       ├── ./environments/test/env.unsecured.json
-│       ├── ./environments/test/shared.assets.yml
-│       └── ./environments/test/assets
-│           └── ./environments/test/assets/nginx.conf
-
-12 directories, 5 files
+kube-build-app inventory -e test -R environments
 ```
 
-**You are now ready to create your first `deployment`, run!**
+Legacy equivalent:
 
 ```bash
-kube_build_app -e test -t deployments/test/deploy
+kube-build-app -i -e test -R environments
 ```
 
-```log
-Build 0 shared asset/s
-Application brand-new-product, with 1 container/s
- => container [1] brand-new-product has 1 asset/s
- => asset [1]: brand-new-product-asset-66535d3
- => container [1] brand-new-product has 1 port/s
- => service [1] brand-new-product, has 1 port/s
-   => has external (ingress) brand-new-product
-```
+It is intended for automation, UI tooling and generators such as PKI helpers.
 
-You should see the following directory/file structure (inside `~/my-brand-new-product-k8s/deployments/test/deploy` directory)
+## Validation
+
+Validate model files without writing manifests:
 
 ```bash
-cd ~/my-brand-new-product-k8s/deployments/test/deploy
-tree -f
-
-.
-├── ./assets
-│   └── ./assets/brand-new-product-asset-66535d3.yml
-├── ./deployments
-│   └── ./deployments/brand-new-product-deployment.yml
-└── ./services
-    ├── ./services/brand-new-product-service.yml
-    └── ./services/external
-        └── ./services/external/brand-new-product-ingress.yml
-
-4 directories, 4 files
+kube-build-app validate -e test -R environments
 ```
 
-```yaml
----
-apiVersion: v1
-data:
-  nginx.conf: |
-    daemon off;
-    worker_processes  2;
+Validation catches known invalid combinations, for example conflicting startup/simple-init settings and invalid tombstones.
 
-    server {
-        listen       8080;
-        server_name  localhost;
+## Helm-Safe Assets
 
-        location / {
-            root   /usr/share/nginx/html;
-            index  index.html index.htm;
-        }
-
-        error_page   500 502 503 504  /50x.html;
-        location = /50x.html {
-            root   /usr/share/nginx/html;
-        }
-    }
-kind: ConfigMap
-metadata:
-  name: brand-new-product-asset-66535d3
-  namespace:
-```
-
-```yaml
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: brand-new-product
-  namespace:
-spec:
-  selector:
-    app.kubernetes.io/name: brand-new-product
-  ports:
-    - name: http-80
-      port: 80
-      targetPort: 8080
-```
-
-```yaml
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: brand-new-product
-  namespace:
-spec:
-  rules:
-    - host: brand-new-product.my-domain-name.io
-      http:
-        paths:
-          - path: "/"
-            backend:
-              service:
-                name: brand-new-product
-                port:
-                  number: 80
-            pathType: ImplementationSpecific
-```
-
-```yaml
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  labels:
-    app.kubernetes.io/name: brand-new-product
-  name: brand-new-product
-  namespace:
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: brand-new-product
-  strategy:
-    rollingUpdate:
-      maxSurge: 25%
-      maxUnavailable: 25%
-    type: RollingUpdate
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: brand-new-product
-    spec:
-      containers:
-        - name: brand-new-product
-          image: docker.io/library/nginx:stable
-          ports:
-            - name: http
-              containerPort: 8080
-              protocol: TCP
-          env:
-            - name: ENV_VAR
-              value: some value ...
-            - name: ANOTHER_VAR
-              value: another value ...
-          imagePullPolicy: Always
-          resources:
-            requests:
-              cpu: 100m
-              memory: 50Mi
-            limits:
-              cpu: 250m
-              memory: 100Mi
-          volumeMounts:
-            - mountPath: "/etc/nginx/conf.d/default.conf"
-              name: brand-new-product-asset-66535d3
-              readOnly: true
-              subPath: nginx.conf
-          livenessProbe:
-            httpGet:
-              path: "/index.html"
-              port: 8080
-            initialDelaySeconds:
-            periodSeconds:
-            timeoutSeconds:
-            successThreshold:
-            failureThreshold:
-          readinessProbe:
-            httpGet:
-              path: "/index.html"
-              port: 8080
-            initialDelaySeconds:
-            periodSeconds:
-            timeoutSeconds:
-            successThreshold:
-            failureThreshold:
-      imagePullSecrets: []
-      volumes:
-        - name: brand-new-product-asset-66535d3
-          configMap:
-            defaultMode: 420
-            name: brand-new-product-asset-66535d3
-```
-
-## Deployment profiles (maintenance / normal mode)
-
-You can keep app-level replicas in `apps/*.yml`, but override them using one profile file:
-
-`environments/<env>/replica-profiles.yml`
-
-```yaml
-defaults:
-  profile: normal
-
-profiles:
-  normal:
-    apps:
-      tsm-gateway: 2
-      tsm-ticket: 2
-
-  db-maintenance:
-    all: 0
-    apps:
-      tsm-log-server: 1
-      tsm-health-checker: 1
-```
-
-Run with explicit profile:
-
-```bash
-kube_build_app -e test -p db-maintenance -t deployments/test/deploy
-```
-
-Or choose file manually:
-
-```bash
-kube_build_app -e test -p normal --profiles-file /some/path/replica-profiles.yml
-```
-
-Priority order:
-
-1. Profile selected by `-p/--profile`
-2. Profile selected by `REPLICA_PROFILE` env var
-3. `defaults.profile` from `replica-profiles.yml`
-
-## Ignore app from build
-
-You can keep app file in git but skip all generated output:
-
-```yaml
-ignore: true
-```
-
-When set on app root, `kube_build_app` excludes that app from loading/building (no deployment/service/assets are generated for it).
-
-`-w/--down` still works and is applied after profile overrides.
-
-## Model validation (fail fast)
-
-You can validate app model without generating manifests:
-
-```bash
-kube_build_app validate -e test
-```
-
-Validation rules include:
-
-- if `simple_init.enabled: true`, container must not define `startup` (XOR conflict)
-- in `simple_init` mode, `simple_init.exec.command` must be a non-empty array
-
-## Explicit env file (`-E`, `--env-file`)
-
-You can pass an already resolved `.env`-style file and use it as the only variable source:
-
-```bash
-kube_build_app -e test -E /path/to/release.env
-```
-
-This is the intended integration point for outputs produced elsewhere, for example:
-
-```bash
-simple-secrets resolve --env test -o dot-env --file /tmp/test.env
-kube_build_app -e test -E /tmp/test.env
-```
-
-In this mode, `kube_build_app` does not read:
-
-- `env.unsecured.json`
-- `env.secured.json`
-- process `ENV`
-
-Supported `.env` format:
-
-- empty lines and lines starting with `#` are ignored
-- optional `export ` prefix is allowed
-- `KEY=VALUE`
-- quoted values (`"..."` or `'...'`) are supported
-
-Notes:
-
-- `-E/--env-file` cannot be combined with `-d/--decrypt-secured`
-- `-E/--env-file` cannot be combined with `--vars-source`
-
-## Variable source selection (`--vars-source`)
-
-You can explicitly choose where variables are loaded from (repeatable):
-
-```bash
-kube_build_app -e test --vars-source env
-kube_build_app -e test --vars-source json
-```
-
-Supported values:
-
-- `env` - load variables from process `ENV`
-- `json` - load variables from `env.unsecured.json` (+ `env.secured.json` when `-d` is enabled)
-- `dot-env` - load variables from conventional file `<environment_dir>/.env`
-
-When multiple sources are used, they are applied in the order you pass them and later sources override earlier ones.
-
-Use `--vars-source dot-env` only when you want the implicit conventional file `<environment_dir>/.env`.
-If you already have an explicit resolved `.env` file path, use `-E/--env-file` instead.
-
-Default behavior (for backward compatibility) when `--vars-source` is not specified:
-
-- `json`
-- `env`
-
-## Helm-safe assets (`--helm-escape-assets`)
-
-If your generated manifests are rendered again by Helm, asset placeholders can collide with Helm template syntax.
+If generated manifests are rendered again by Helm, remaining plain placeholders in text assets can collide with Helm syntax.
 
 Use:
 
 ```bash
-kube_build_app -e test --helm-escape-assets
+kube-build-app build -e test -R environments -t deploy/test --helm-escape-assets
 ```
 
-For text assets, remaining placeholders are wrapped from:
+Remaining placeholders are wrapped from:
 
-- `{{ VAR }}`
-
-to:
-
-- `{{`{{ VAR }}`}}`
-
-Notes:
-
-- binary assets are not modified
-- if `transform: true`, normal variable transform is applied first, then remaining placeholders are Helm-escaped
-- already wrapped `{{`{{ VAR }}`}}` values are not wrapped again
-- per-asset override is possible with `helm_escape: true|false`
-
-## Inventory mode (`-i`)
-
-Print detailed pretty-formatted app/container inventory JSON and exit:
-
-```bash
-kube_build_app -i -e test
+```text
+{{VAR}}
 ```
 
-All containers are included. For mTLS pipeline, filter items where:
+into:
 
-```yaml
-mtls:
-  enabled: true
+```text
+{{`{{VAR}}`}}
 ```
 
-Output is JSON on stdout, intended for piping:
+If `transform: true` is set on the asset, build-time variable transform is applied first, then remaining placeholders are Helm-escaped.
 
-```bash
-kube_build_app -i -e test | simple-spiffe-pki generate -
-```
+## mTLS Assets
 
-Inventory items also include app-level rollout checksum annotations when configured:
+When container-level `mtls.enabled: true` is used, `kube-build-app` automatically mounts encrypted mTLS files into the container.
 
-```json
-{
-  "rollout_checksums": {
-    "checksum/config": "..."
-  }
-}
-```
+Inventory exposes the expected generated paths so external tooling can produce the corresponding secured material.
 
-When container has:
-
-```yaml
-mtls:
-  enabled: true
-```
-
-`kube_build_app` also auto-mounts encrypted mTLS files into container:
-
-- `/app/mtls.enc/mtls.secured.json`
-- `/app/mtls.enc/mtls.secured.schema.json`
-
-Source files are expected in environment repo:
-
-- `<env>/mtls/<app>/<container>.secured.json`
-- `<env>/mtls/<app>/<container>.secured.schema.json`
-
-## Environment root (`-R`, `--root-dir`)
-
-By default, environments are loaded from:
-
-- `environments/<env>` (or `ENVIRONMENTS_DIR/<env>` when `ENVIRONMENTS_DIR` is set)
-
-You can override root directory explicitly:
-
-```bash
-kube_build_app -e test -R /Users/mares/Development/Src/Ruby/tsm/cetin/tsm-environments
-```
-
-## Docker (openSUSE / OpenShift-friendly)
+## Docker
 
 Build image:
 
@@ -712,55 +719,44 @@ Build image:
 docker build -t kube-build-app:latest .
 ```
 
-Image always builds and embeds static utility binaries:
-
-- `apply-env` from `https://github.com/martinmares/apply-env-rs`
-- `encjson-rs` from `https://github.com/martinmares/encjson-rs`
-- `simple-policy-engine` is also cloned during `encjson-rs` build
-- legacy `encjson` from `https://github.com/martinmares/encjson`
-
-You can pin refs/branches at build time:
+Run:
 
 ```bash
-docker build -t kube-build-app:latest \
-  --build-arg APPLY_ENV_REF=main \
-  --build-arg ENCJSON_REF=main \
-  --build-arg SIMPLE_POLICY_ENGINE_REF=main \
-  --build-arg ENCJSON_LEGACY_REF=main \
-  .
-```
-
-`kube_build_app` chooses encjson binary by file API marker:
-
-- `EncJson[@api=1.0` -> legacy binary (`ENCJSON_LEGACY_PATH`, default `/app/bin/encjson-legacy`)
-- `EncJson[@api=2.0` -> rust binary (`ENCJSON_PATH`, default `/app/bin/encjson-rs`)
-
-Run against local environments repo:
-
-```bash
-docker run --rm -it \
-  -v /absolute/path/to/tsm-environments:/work/environments:ro \
-  -v /absolute/path/to/output:/work/output \
+docker run --rm \
+  -v "$PWD/environments:/work/environments:ro" \
+  -v "$PWD/deploy:/work/deploy" \
   kube-build-app:latest \
-  -e test -R /work/environments -t /work/output
+  kube-build-app build -e test -R /work/environments -t /work/deploy/test
 ```
 
-Container conventions:
+## Development
 
-- base image: `opensuse/tumbleweed:latest`
-- runtime user: `UID=1001`, `GID=1001`, `HOME=/app`
-- `/app` is writable and OpenShift-friendly (`chgrp -R 0` + `chmod -R g=u`)
-
-## Tests
-
-Run all tests:
+Run tests:
 
 ```bash
-ruby -Itest -e 'Dir["test/*_test.rb"].sort.each { |f| require_relative f }'
+just test
 ```
 
-Run a single test file:
+Build local binaries:
 
 ```bash
-ruby -Itest test/comprehensive_features_test.rb
+just build
+```
+
+Build cross-platform binaries:
+
+```bash
+just build-cross
+just build-cross-all
+```
+
+Run parity against Ruby reference implementation:
+
+```bash
+scripts/parity-build \
+  --name cetin-test \
+  --root /path/to/tsm-environments \
+  --env test \
+  --release-id 2025.08.18.1 \
+  --go-bin ./dist/kube-build-app
 ```
