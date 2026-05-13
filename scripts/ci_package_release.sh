@@ -33,7 +33,6 @@ for target in "${targets[@]}"; do
     ext=".exe"
   fi
 
-  binary="${package}${ext}"
   archive_base="${package}-${version}-${os}-${arch}"
   work_dir="${release_dir}/${archive_base}"
   mkdir -p "${work_dir}"
@@ -43,7 +42,13 @@ for target in "${targets[@]}"; do
   CGO_ENABLED=0 \
   GOOS="${os}" \
   GOARCH="${arch}" \
-  go build -ldflags "${ldflags}" -o "${work_dir}/${binary}" ./cmd/kube-build-app
+  go build -ldflags "${ldflags}" -o "${work_dir}/kube-build-app${ext}" ./cmd/kube-build-app
+
+  GOCACHE="${PWD}/.tmp/go-build-cache" \
+  CGO_ENABLED=0 \
+  GOOS="${os}" \
+  GOARCH="${arch}" \
+  go build -ldflags "${ldflags}" -o "${work_dir}/kube-edit-app${ext}" ./cmd/kube-edit-app
 
   cp README.md README.cs.md LICENSE "${work_dir}/"
   tar -C "${release_dir}" -czf "${release_dir}/${archive_base}.tar.gz" "${archive_base}"

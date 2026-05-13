@@ -13,7 +13,7 @@ import (
 )
 
 func TestHealthz(t *testing.T) {
-	server := NewServer(appinfo.For(appinfo.EnvAppName), nil)
+	server := NewServer(appinfo.For(appinfo.EditAppName), nil)
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	response := httptest.NewRecorder()
 
@@ -33,7 +33,7 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestInfo(t *testing.T) {
-	info := appinfo.For(appinfo.EnvAppName)
+	info := appinfo.For(appinfo.EditAppName)
 	server := NewServer(info, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/info", nil)
 	response := httptest.NewRecorder()
@@ -48,8 +48,8 @@ func TestInfo(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("invalid JSON response: %v", err)
 	}
-	if payload.Name != appinfo.EnvAppName {
-		t.Fatalf("name = %q, want %q", payload.Name, appinfo.EnvAppName)
+	if payload.Name != appinfo.EditAppName {
+		t.Fatalf("name = %q, want %q", payload.Name, appinfo.EditAppName)
 	}
 }
 
@@ -60,7 +60,7 @@ func TestEnvironmentsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(appinfo.For(appinfo.EnvAppName), repo)
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/envs", nil)
 	response := httptest.NewRecorder()
 
@@ -91,7 +91,7 @@ func TestAppsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(appinfo.For(appinfo.EnvAppName), repo)
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/apps", nil)
 	response := httptest.NewRecorder()
 
@@ -123,7 +123,7 @@ func TestAssetsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(appinfo.For(appinfo.EnvAppName), repo)
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/assets", nil)
 	response := httptest.NewRecorder()
 

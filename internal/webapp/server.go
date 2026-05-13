@@ -12,12 +12,28 @@ import (
 )
 
 type Server struct {
-	info appinfo.Info
-	repo *repository.Repository
+	info    appinfo.Info
+	repo    *repository.Repository
+	options Options
 }
 
-func NewServer(info appinfo.Info, repo *repository.Repository) *Server {
-	return &Server{info: info, repo: repo}
+type Options struct {
+	BasePath          string
+	ReadOnly          bool
+	EncjsonPath       string
+	EncjsonLegacyPath string
+	EncjsonKeydir     string
+}
+
+func NewServer(info appinfo.Info, repo *repository.Repository, options ...Options) *Server {
+	opts := Options{BasePath: "/", ReadOnly: true}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	if opts.BasePath == "" {
+		opts.BasePath = "/"
+	}
+	return &Server{info: info, repo: repo, options: opts}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -64,7 +80,14 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.info)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":      s.info.Name,
+		"version":   s.info.Version,
+		"commit":    s.info.Commit,
+		"date":      s.info.Date,
+		"base_path": s.options.BasePath,
+		"read_only": s.options.ReadOnly,
+	})
 }
 
 func (s *Server) handleEnvironments(w http.ResponseWriter, _ *http.Request) {

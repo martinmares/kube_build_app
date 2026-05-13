@@ -35,11 +35,14 @@ build:
   script:
     - mkdir -p dist
     - go build -o dist/kube-build-app ./cmd/kube-build-app
+    - go build -o dist/kube-edit-app ./cmd/kube-edit-app
     - ./dist/kube-build-app --version
+    - ./dist/kube-edit-app --version
     - bash scripts/readme-smoke ./dist/kube-build-app
   artifacts:
     paths:
       - dist/kube-build-app
+      - dist/kube-edit-app
     expire_in: 7 days
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'

@@ -4,6 +4,15 @@
 
 Nástroj má jednoduchý runtime: načte deklarativní metadata prostředí, app modely a assety, a zapíše Kubernetes YAML do cílového adresáře. Ruby implementace je historická reference; Go implementace je produktizované CLI jako single binary, s Cobra commandy a shell completion.
 
+Repozitář teď obsahuje dvě související binárky:
+
+```text
+kube-build-app = build/render Kubernetes manifestů
+kube-edit-app  = webový editor environment repozitářů
+```
+
+`kube-edit-app` je cílový Go přepis Rust aplikace `kube-environments-ui`. Viz `docs/KUBE_EDIT_APP_PLAN.md`.
+
 ## Rychlý Start
 
 Minimální struktura repozitáře:
@@ -843,6 +852,13 @@ kube-build-app-<version>-linux-amd64.tar.gz
 kube-build-app-<version>-linux-arm64.tar.gz
 kube-build-app-<version>-windows-amd64.tar.gz
 SHA256SUMS
+```
+
+Každý platformní balíček obsahuje obě binárky:
+
+```text
+kube-build-app
+kube-edit-app
 ```
 
 Volitelný push `CHANGELOG.md`:

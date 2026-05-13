@@ -22,7 +22,7 @@ kube-build-app = build/render Kubernetes manifests from environment repositories
 kube-edit-app  = browse/edit/validate environment repositories through Web UI
 ```
 
-`kube-env-app` is considered a temporary name and should be renamed to `kube-edit-app`.
+`kube-env-app` was the temporary name and is being renamed to `kube-edit-app`.
 
 Recommended target layout:
 

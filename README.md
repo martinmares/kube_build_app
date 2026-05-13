@@ -4,6 +4,15 @@
 
 The tool is intentionally small at runtime: it reads declarative environment metadata, app model files and assets, then writes Kubernetes YAML into a target directory. The Ruby implementation is the historical reference; the Go implementation is the productized CLI with a single binary, Cobra-based commands and shell completion.
 
+This repository now contains two related binaries:
+
+```text
+kube-build-app = build/render Kubernetes manifests
+kube-edit-app  = web editor for environment repositories
+```
+
+`kube-edit-app` is the Go rewrite target for the Rust `kube-environments-ui` web application. See `docs/KUBE_EDIT_APP_PLAN.md`.
+
 ## Quick Start
 
 Minimal repository layout:
@@ -843,6 +852,13 @@ kube-build-app-<version>-linux-amd64.tar.gz
 kube-build-app-<version>-linux-arm64.tar.gz
 kube-build-app-<version>-windows-amd64.tar.gz
 SHA256SUMS
+```
+
+Each platform package contains both binaries:
+
+```text
+kube-build-app
+kube-edit-app
 ```
 
 Optional `CHANGELOG.md` push:
