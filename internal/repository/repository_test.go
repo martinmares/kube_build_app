@@ -150,6 +150,8 @@ func TestAppDetailRenderedVarsAndModel(t *testing.T) {
 	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `vars:
   - name: APP_NAME
     value: "api"
+  - name: EXPOSE_PORT
+    value: 8080
 name: "{{var:APP_NAME}}"
 replicas: 2
 containers:
@@ -170,7 +172,7 @@ containers:
       memory: {from: "128Mi", to: "256Mi"}
     ports:
       - name: http
-        port: 8080
+        port: {{var:EXPOSE_PORT}}
         expose_as:
           - hostname: api
             port: 80
@@ -205,7 +207,7 @@ containers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(vars.Items) != 1 || vars.Items[0].Name != "APP_NAME" || vars.Items[0].Value != "api" {
+	if len(vars.Items) != 2 || vars.Items[0].Name != "APP_NAME" || vars.Items[0].Value != "api" || vars.Items[1].Name != "EXPOSE_PORT" || vars.Items[1].Value != "8080" {
 		t.Fatalf("unexpected vars: %#v", vars.Items)
 	}
 
@@ -213,7 +215,7 @@ containers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.AppName == nil || *model.AppName != "{{var:APP_NAME}}" || len(model.Containers) != 1 {
+	if model.AppName == nil || *model.AppName != "api" || len(model.Containers) != 1 {
 		t.Fatalf("unexpected model: %#v", model)
 	}
 	container := model.Containers[0]
@@ -222,6 +224,9 @@ containers:
 	}
 	if len(container.Ports) != 1 || len(container.Ports[0].ExposeAs) != 1 || !container.Ports[0].ExposeAs[0].IngressEnabled {
 		t.Fatalf("unexpected ports model: %#v", container.Ports)
+	}
+	if container.Ports[0].Port == nil || *container.Ports[0].Port != "8080" {
+		t.Fatalf("unexpected port model: %#v", container.Ports[0])
 	}
 }
 

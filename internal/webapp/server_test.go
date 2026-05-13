@@ -275,3 +275,52 @@ func TestIndexAndStaticAssets(t *testing.T) {
 		t.Fatalf("unexpected static response:\n%s", staticRes.Body.String())
 	}
 }
+
+func TestBuildReadOnlyEndpoints(t *testing.T) {
+	root := t.TempDir()
+	writeBuildFixture(t, root)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo)
+
+	for _, item := range []struct {
+		path     string
+		expected string
+	}{
+		{"/api/v1/envs/test/validate", `"ok":true`},
+		{"/api/v1/envs/test/summary", `"environment":"test"`},
+		{"/api/v1/envs/test/inventory", `"env":"test"`},
+	} {
+		request := httptest.NewRequest(http.MethodPost, item.path, nil)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200: %s", item.path, response.Code, response.Body.String())
+		}
+		if !strings.Contains(response.Body.String(), item.expected) {
+			t.Fatalf("%s response missing %q:\n%s", item.path, item.expected, response.Body.String())
+		}
+	}
+}
+
+func writeBuildFixture(t *testing.T, root string) {
+	t.Helper()
+	envDir := filepath.Join(root, "test")
+	writeFile(t, filepath.Join(envDir, "env.unsecured.json"), `{"environment":{"NAMESPACE":"nac-test","TSM_REGISTRY_URL":"registry.local/tsm","TSM_RELEASE_ID":"1.0.0"}}`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 2
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+}

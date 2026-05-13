@@ -162,7 +162,7 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 		return AppModel{}, err
 	}
 	var root any
-	if err := yaml.Unmarshal([]byte(detail.Content), &root); err != nil {
+	if err := yaml.Unmarshal([]byte(renderVarsPreview(detail.Content)), &root); err != nil {
 		return AppModel{}, err
 	}
 	rootMap, _ := root.(map[string]any)

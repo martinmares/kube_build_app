@@ -77,7 +77,46 @@
               <div class="col-12 col-lg-7"><div class="card"><div class="card-header"><div><h3 class="card-title" id="asset-detail-title">Select asset</h3><div class="text-muted small font-monospace" id="asset-detail-path"></div></div></div><div class="card-body"><pre class="code-block" id="asset-raw"></pre></div></div></div>
             </div>
           </section>
-          <section data-page="build" class="hidden"><div class="card"><div class="card-body text-muted">Build preview will use kube-build-app internals in the next phase.</div></div></section>
+          <section data-page="build" class="hidden">
+            <div class="row g-3">
+              <div class="col-12 col-xl-4">
+                <div class="card h-100">
+                  <div class="card-header">
+                    <div>
+                      <h3 class="card-title"><i class="ti ti-hammer me-2"></i>Build checks</h3>
+                      <div class="text-muted small">Read-only view powered by kube-build-app internals.</div>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div class="btn-list mb-3">
+                      <button class="btn btn-primary" id="build-validate-btn" type="button"><i class="ti ti-shield-check me-2"></i>Validate</button>
+                      <button class="btn btn-outline-secondary" id="build-summary-btn" type="button"><i class="ti ti-chart-bar me-2"></i>Summary</button>
+                      <button class="btn btn-outline-secondary" id="build-inventory-btn" type="button"><i class="ti ti-list-details me-2"></i>Inventory</button>
+                    </div>
+                    <div id="build-status" class="alert alert-info mb-0">Select an environment and run a build check.</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-xl-8">
+                <div class="card mb-3">
+                  <div class="card-header"><h3 class="card-title">Resource summary</h3></div>
+                  <div class="card-body">
+                    <div class="row g-2 mb-3" id="build-totals"></div>
+                    <div class="table-responsive">
+                      <table class="table table-vcenter table-sm" id="build-summary-table">
+                        <thead><tr><th>App</th><th>Container</th><th class="text-end">Replicas</th><th>CPU req</th><th>CPU lim</th><th>Mem req</th><th>Mem lim</th></tr></thead>
+                        <tbody><tr><td colspan="7" class="text-muted">No summary loaded.</td></tr></tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-header"><h3 class="card-title">Inventory JSON</h3></div>
+                  <div class="card-body"><pre class="code-block" id="build-inventory-json"></pre></div>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </div>

@@ -3,9 +3,11 @@ const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const api = async (url) => { const r = await fetch(url, { credentials: 'same-origin' }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
+const apiPost = async (url) => { const r = await fetch(url, { method: 'POST', credentials: 'same-origin' }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
 function showError(e) { const el = qs('#ui-error'); el.textContent = String(e); el.classList.remove('hidden'); }
 function clearError() { const el = qs('#ui-error'); el.textContent = ''; el.classList.add('hidden'); }
 function setText(id, value) { const el = qs(id); if (el) el.textContent = value ?? '-'; }
+function setHTML(id, value) { const el = qs(id); if (el) el.innerHTML = value ?? ''; }
 function setActive(page) {
   state.active = page;
   for (const link of qsa('[data-nav]')) {
@@ -16,6 +18,7 @@ function setActive(page) {
   for (const pageEl of qsa('[data-page]')) pageEl.classList.toggle('hidden', pageEl.dataset.page !== page);
   setText('#page-pretitle', state.env ? `Environment ${state.env}` : 'Environment repository');
   setText('#page-title', page === 'dashboard' ? 'Select environment' : page === 'apps' ? 'Inspect applications' : page === 'assets' ? 'Inspect assets' : 'Build preview');
+  if (page === 'build') loadBuildSummary();
 }
 function applyTheme(theme) {
   if (theme === 'auto') theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -31,6 +34,9 @@ async function init() {
   setupTheme();
   qsa('[data-nav]').forEach((x) => x.addEventListener('click', (e) => { e.preventDefault(); if (x.dataset.nav !== 'dashboard' && !state.env) return showError('Select environment first.'); setActive(x.dataset.nav); }));
   qs('#refresh-btn')?.addEventListener('click', () => loadAll());
+  qs('#build-validate-btn')?.addEventListener('click', () => runBuildValidate());
+  qs('#build-summary-btn')?.addEventListener('click', () => loadBuildSummary());
+  qs('#build-inventory-btn')?.addEventListener('click', () => loadBuildInventory());
   await loadAll();
 }
 async function loadAll() {
@@ -133,4 +139,65 @@ async function selectAsset(path) {
   } catch (e) { showError(e); }
 }
 function isSpecial(path) { return ['env.secured.json','env.unsecured.json','assets.secured.json','assets.unsecured.json'].includes(path); }
+async function runBuildValidate() {
+  if (!state.env) return showError('Select environment first.');
+  clearError();
+  try {
+    setBuildStatus('info', 'Validation is running...');
+    const result = await apiPost(`/api/v1/envs/${encodeURIComponent(state.env)}/validate`);
+    setBuildStatus(result.ok ? 'success' : 'danger', result.message || (result.ok ? 'Validation OK' : 'Validation failed'));
+  } catch (e) { setBuildStatus('danger', String(e)); showError(e); }
+}
+async function loadBuildSummary() {
+  if (!state.env) return;
+  clearError();
+  try {
+    const summary = await apiPost(`/api/v1/envs/${encodeURIComponent(state.env)}/summary`);
+    renderBuildSummary(summary);
+  } catch (e) { showError(e); }
+}
+async function loadBuildInventory() {
+  if (!state.env) return showError('Select environment first.');
+  clearError();
+  try {
+    setText('#build-inventory-json', 'Loading inventory...');
+    const inventory = await apiPost(`/api/v1/envs/${encodeURIComponent(state.env)}/inventory`);
+    setText('#build-inventory-json', JSON.stringify(inventory, null, 2));
+  } catch (e) { setText('#build-inventory-json', ''); showError(e); }
+}
+function setBuildStatus(kind, text) {
+  const el = qs('#build-status');
+  if (!el) return;
+  el.className = `alert alert-${kind} mb-0`;
+  el.textContent = text;
+}
+function renderBuildSummary(summary) {
+  const totals = summary.totals || {};
+  setHTML('#build-totals', [
+    metricCard('Apps', totals.apps ?? 0, 'ti-apps'),
+    metricCard('Containers', totals.containers ?? 0, 'ti-box'),
+    metricCard('Replicas', totals.replicas ?? 0, 'ti-copy'),
+    metricCard('CPU req', `${fmt(totals.cpu_request_cores)} cores`, 'ti-cpu'),
+    metricCard('Mem req', `${fmt(totals.memory_request_mib)} MiB`, 'ti-database'),
+    metricCard('Mem lim', `${fmt(totals.memory_limit_mib)} MiB`, 'ti-gauge'),
+  ].join(''));
+  const items = summary.items || [];
+  qs('#build-summary-table tbody').innerHTML = items.map((item) => `
+    <tr>
+      <td class="font-monospace">${esc(item.app)}</td>
+      <td class="font-monospace">${esc(item.container)}</td>
+      <td class="text-end">${item.replicas ?? 0}</td>
+      <td>${esc(item.cpu_request)}</td>
+      <td>${esc(item.cpu_limit)}</td>
+      <td>${esc(item.memory_request)}</td>
+      <td>${esc(item.memory_limit)}</td>
+    </tr>`).join('') || '<tr><td colspan="7" class="text-muted">No summary items.</td></tr>';
+}
+function metricCard(label, value, icon) {
+  return `<div class="col-6 col-lg-4"><div class="metric-card"><div class="text-muted small"><i class="ti ${icon} me-1"></i>${esc(label)}</div><div class="h3 mb-0">${esc(value)}</div></div></div>`;
+}
+function fmt(value) {
+  const n = Number(value || 0);
+  return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
 document.addEventListener('DOMContentLoaded', init);

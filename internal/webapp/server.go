@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"kube-env/internal/appinfo"
+	"kube-env/internal/buildapp"
 	"kube-env/internal/repository"
 )
 
@@ -66,6 +67,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/content/{asset_path...}", s.handleAssetContent)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/special/{special_file}/entries", s.handleSpecialEntries)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/special/{special_file}/preflight", s.handleSpecialPreflight)
+	mux.HandleFunc("POST /api/v1/envs/{env}/validate", s.handleBuildValidate)
+	mux.HandleFunc("POST /api/v1/envs/{env}/summary", s.handleBuildSummary)
+	mux.HandleFunc("POST /api/v1/envs/{env}/inventory", s.handleBuildInventory)
 	return mux
 }
 
@@ -274,6 +278,60 @@ func (s *Server) handleSpecialPreflight(w http.ResponseWriter, r *http.Request) 
 		"ok":           len(issues) == 0,
 		"issues":       issues,
 	})
+}
+
+func (s *Server) handleBuildValidate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	env := r.PathValue("env")
+	err := buildapp.Validate(s.buildOptions(env))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"env":     env,
+		"ok":      err == nil,
+		"message": validationMessage(err),
+	})
+}
+
+func (s *Server) handleBuildSummary(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	summary, err := buildapp.ResourceSummary(s.buildOptions(r.PathValue("env")))
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) handleBuildInventory(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	inventory, err := buildapp.Inventory(s.buildOptions(r.PathValue("env")))
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, inventory)
+}
+
+func (s *Server) buildOptions(env string) buildapp.Options {
+	return buildapp.Options{
+		Environment: env,
+		Root:        s.repo.Root(),
+	}
+}
+
+func validationMessage(err error) string {
+	if err == nil {
+		return "Validation OK"
+	}
+	return err.Error()
 }
 
 func detectEncjsonMode(content string) string {
