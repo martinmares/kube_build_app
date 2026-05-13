@@ -2,9 +2,12 @@ package webapp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"kube-env/internal/appinfo"
@@ -43,7 +46,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/info", s.handleInfo)
 	mux.HandleFunc("GET /api/v1/envs", s.handleEnvironments)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps", s.handleApps)
+	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}", s.handleAppDetail)
+	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/rendered", s.handleAppRendered)
+	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVars)
+	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/model", s.handleAppModel)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets", s.handleAssets)
+	mux.HandleFunc("GET /api/v1/envs/{env}/assets/content/{asset_path...}", s.handleAssetContent)
+	mux.HandleFunc("GET /api/v1/envs/{env}/assets/special/{special_file}/entries", s.handleSpecialEntries)
+	mux.HandleFunc("GET /api/v1/envs/{env}/assets/special/{special_file}/preflight", s.handleSpecialPreflight)
 	return mux
 }
 
@@ -136,8 +146,146 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"env":   env,
+		"count": len(assets),
 		"items": assets,
 	})
+}
+
+func (s *Server) handleAppDetail(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	detail, err := s.repo.AppDetail(r.PathValue("env"), r.PathValue("app_file"))
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAppRendered(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	rendered, err := s.repo.AppRendered(r.PathValue("env"), r.PathValue("app_file"))
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, rendered)
+}
+
+func (s *Server) handleAppVars(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	vars, err := s.repo.AppVars(r.PathValue("env"), r.PathValue("app_file"))
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, vars)
+}
+
+func (s *Server) handleAppModel(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	model, err := s.repo.AppModel(r.PathValue("env"), r.PathValue("app_file"))
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, model)
+}
+
+func (s *Server) handleAssetContent(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	detail, err := s.repo.AssetDetail(r.PathValue("env"), r.PathValue("asset_path"))
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleSpecialEntries(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	entries, err := s.repo.SpecialEntries(r.PathValue("env"), r.PathValue("special_file"))
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, entries)
+}
+
+func (s *Server) handleSpecialPreflight(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	env := r.PathValue("env")
+	specialFile := r.PathValue("special_file")
+	detail, err := s.repo.AssetDetail(env, specialFile)
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	mode := detectEncjsonMode(detail.Content)
+	issues := []string{}
+	if isSecuredSpecialFile(specialFile) {
+		bin := s.options.EncjsonPath
+		if mode == "legacy" {
+			bin = s.options.EncjsonLegacyPath
+		}
+		if bin == "" {
+			if mode == "legacy" {
+				issues = append(issues, "missing ENCJSON_LEGACY_PATH or --encjson-legacy-path")
+			} else {
+				issues = append(issues, "missing ENCJSON_PATH or --encjson-path")
+			}
+		} else if info, err := os.Stat(bin); err != nil || info.IsDir() {
+			issues = append(issues, "encjson binary is not accessible: "+bin)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"env":          env,
+		"special_file": specialFile,
+		"mode":         mode,
+		"ok":           len(issues) == 0,
+		"issues":       issues,
+	})
+}
+
+func detectEncjsonMode(content string) string {
+	if strings.Contains(content, "EncJson[@api=1.") {
+		return "legacy"
+	}
+	if strings.Contains(content, "EncJson[@api=2.") {
+		return "modern"
+	}
+	return "unknown"
+}
+
+func isSecuredSpecialFile(name string) bool {
+	return name == "env.secured.json" || name == "assets.secured.json"
+}
+
+func statusForError(err error) int {
+	if errors.Is(err, os.ErrNotExist) {
+		return http.StatusNotFound
+	}
+	return http.StatusBadRequest
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"kube-env/internal/appinfo"
@@ -157,5 +158,97 @@ func writeFile(t *testing.T, path string, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAppReadEndpoints(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `vars:
+  - name: APP_NAME
+    value: api
+name: "{{var:APP_NAME}}"
+replicas: 1
+containers:
+  - name: api
+    env_vars:
+      - name: MODE
+        value: test
+`)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo)
+
+	for _, item := range []struct {
+		path     string
+		expected string
+	}{
+		{"/api/v1/envs/test/apps/api.yml", `"file_name":"api.yml"`},
+		{"/api/v1/envs/test/apps/api.yml/rendered", `"file_name":"api.yml"`},
+		{"/api/v1/envs/test/apps/api.yml/vars", `"name":"APP_NAME"`},
+		{"/api/v1/envs/test/apps/api.yml/model", `"containers"`},
+	} {
+		request := httptest.NewRequest(http.MethodGet, item.path, nil)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200: %s", item.path, response.Code, response.Body.String())
+		}
+		if !strings.Contains(response.Body.String(), item.expected) {
+			t.Fatalf("%s response missing %q:\n%s", item.path, item.expected, response.Body.String())
+		}
+	}
+}
+
+func TestAssetContentEndpoint(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "assets", "ui", "nginx.conf"), "server {}\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/assets/content/ui/nginx.conf", nil)
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"relative_path":"ui/nginx.conf"`) || !strings.Contains(response.Body.String(), "server {}") {
+		t.Fatalf("unexpected response:\n%s", response.Body.String())
+	}
+}
+
+func TestSpecialEntriesAndPreflightEndpoints(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "env.unsecured.json"), `{"environment":{"A":"one"}}`)
+	writeFile(t, filepath.Join(root, "test", "env.secured.json"), `{"environment":{"SECRET":"EncJson[@api=2.0:@box=<x>]"}}`)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo)
+
+	entriesReq := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/assets/special/env.unsecured.json/entries", nil)
+	entriesRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(entriesRes, entriesReq)
+	if entriesRes.Code != http.StatusOK {
+		t.Fatalf("entries status = %d, want 200: %s", entriesRes.Code, entriesRes.Body.String())
+	}
+	if !strings.Contains(entriesRes.Body.String(), `"key":"A"`) || !strings.Contains(entriesRes.Body.String(), `"editable":true`) {
+		t.Fatalf("unexpected entries response:\n%s", entriesRes.Body.String())
+	}
+
+	preflightReq := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/assets/special/env.secured.json/preflight", nil)
+	preflightRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(preflightRes, preflightReq)
+	if preflightRes.Code != http.StatusOK {
+		t.Fatalf("preflight status = %d, want 200: %s", preflightRes.Code, preflightRes.Body.String())
+	}
+	if !strings.Contains(preflightRes.Body.String(), `"mode":"modern"`) || !strings.Contains(preflightRes.Body.String(), `"ok":false`) {
+		t.Fatalf("unexpected preflight response:\n%s", preflightRes.Body.String())
 	}
 }

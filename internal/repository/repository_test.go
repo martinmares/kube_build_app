@@ -3,6 +3,7 @@ package repository
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -141,5 +142,165 @@ func writeFile(t *testing.T, path string, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAppDetailRenderedVarsAndModel(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `vars:
+  - name: APP_NAME
+    value: "api"
+name: "{{var:APP_NAME}}"
+replicas: 2
+containers:
+  - name: api
+    startup:
+      command: ["/bin/sh"]
+      arguments: ["-c", "echo ok"]
+    env_vars:
+      - name: PLAIN
+        value: hello
+      - name: SECRET
+        valueFrom:
+          secretKeyRef:
+            name: app-secret
+            key: password
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+    ports:
+      - name: http
+        port: 8080
+        expose_as:
+          - hostname: api
+            port: 80
+            external:
+              - name: api-public
+                http:
+                  - hostname: api.example.test
+                    path: /
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.FileName != "api.yml" || detail.Summary.AppName != "{{var:APP_NAME}}" {
+		t.Fatalf("unexpected detail: %#v", detail)
+	}
+
+	rendered, err := repo.AppRendered("test", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.FileName != "api.yml" || !contains(rendered.Content, `name: "api"`) || contains(rendered.Content, "\nvars:") || strings.HasPrefix(rendered.Content, "vars:") {
+		t.Fatalf("unexpected rendered content:\n%s", rendered.Content)
+	}
+
+	vars, err := repo.AppVars("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vars.Items) != 1 || vars.Items[0].Name != "APP_NAME" || vars.Items[0].Value != "api" {
+		t.Fatalf("unexpected vars: %#v", vars.Items)
+	}
+
+	model, err := repo.AppModel("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.AppName == nil || *model.AppName != "{{var:APP_NAME}}" || len(model.Containers) != 1 {
+		t.Fatalf("unexpected model: %#v", model)
+	}
+	container := model.Containers[0]
+	if len(container.EnvVars) != 2 || container.EnvVars[1].Kind != "secret" || container.EnvVars[1].SecretName == nil || *container.EnvVars[1].SecretName != "app-secret" {
+		t.Fatalf("unexpected env model: %#v", container.EnvVars)
+	}
+	if len(container.Ports) != 1 || len(container.Ports[0].ExposeAs) != 1 || !container.Ports[0].ExposeAs[0].IngressEnabled {
+		t.Fatalf("unexpected ports model: %#v", container.Ports)
+	}
+}
+
+func TestAssetDetailSupportsSpecialRootAndRejectsEscapes(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "assets", "ui", "nginx.conf"), "server {}\n")
+	writeFile(t, filepath.Join(root, "test", "env.unsecured.json"), `{"environment":{}}`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	asset, err := repo.AssetDetail("test", "ui/nginx.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset.RelativePath != "ui/nginx.conf" || asset.Content != "server {}\n" {
+		t.Fatalf("unexpected asset detail: %#v", asset)
+	}
+
+	special, err := repo.AssetDetail("test", "env.unsecured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if special.RelativePath != "env.unsecured.json" || !contains(special.Content, "environment") {
+		t.Fatalf("unexpected special detail: %#v", special)
+	}
+
+	if _, err := repo.AssetDetail("test", "../env.unsecured.json"); err == nil {
+		t.Fatal("path escape succeeded, want error")
+	}
+	if _, err := repo.AppDetail("test", "../api.yml"); err == nil {
+		t.Fatal("app path escape succeeded, want error")
+	}
+}
+
+func contains(value string, needle string) bool {
+	return strings.Contains(value, needle)
+}
+
+func TestSpecialEntriesForEnvAndAssets(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "env.unsecured.json"), `{"environment":{"A":"one","B":2}}`)
+	writeFile(t, filepath.Join(root, "test", "assets.unsecured.json"), `{"assets":{"ssl/cert.pem":{"content":"Q0VSVA==","kind":"text"},"legacy.bin":"AAE="}}`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envEntries, err := repo.SpecialEntries("test", "env.unsecured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !envEntries.Editable || len(envEntries.Entries) != 2 || envEntries.Entries[0].Key != "A" || envEntries.Entries[1].ValueType != "number" {
+		t.Fatalf("unexpected env entries: %#v", envEntries)
+	}
+
+	assetEntries, err := repo.SpecialEntries("test", "assets.unsecured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assetEntries.Entries) != 2 || assetEntries.Entries[1].Key != "ssl/cert.pem" || assetEntries.Entries[1].ValueType != "text" {
+		t.Fatalf("unexpected asset entries: %#v", assetEntries)
+	}
+}
+
+func TestSpecialEntriesForSecuredAreReadOnly(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "env.secured.json"), `{"environment":{"SECRET":"EncJson[@api=2.0:@box=<x>]"}}`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := repo.SpecialEntries("test", "env.secured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries.Editable || entries.Warning == nil || len(entries.Entries) != 1 || entries.Entries[0].Key != "SECRET" {
+		t.Fatalf("unexpected secured entries: %#v", entries)
 	}
 }
