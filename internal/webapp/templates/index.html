@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.AppName}}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.30.0/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/ui.css">
+</head>
+<body>
+  <div class="page">
+    <header class="navbar navbar-expand-md d-print-none navbar-dark">
+      <div class="container-xl">
+        <h1 class="navbar-brand navbar-brand-autodark pe-0 pe-md-3">
+          <a href="/"><i class="ti ti-pencil-code me-2"></i>{{.AppName}}</a>
+        </h1>
+        <div class="navbar-nav flex-row order-md-last align-items-center gap-2">
+          <span class="badge bg-blue-lt"><i class="ti ti-stack-2 me-1"></i><span id="env-count">-</span> envs</span>
+          <span class="badge bg-green-lt"><i class="ti ti-apps me-1"></i><span id="apps-count">-</span> apps</span>
+          <span class="badge bg-cyan-lt"><i class="ti ti-files me-1"></i><span id="assets-count">-</span> assets</span>
+          <span class="badge bg-yellow-lt hidden" id="read-only-badge"><i class="ti ti-lock me-1"></i>read-only</span>
+          <div class="nav-item d-none d-md-flex position-relative ms-1">
+            <a href="#" class="nav-link px-0" id="theme-toggle" aria-label="Toggle theme"><i class="ti ti-sun"></i></a>
+            <div id="theme-menu" class="dropdown-menu dropdown-menu-end dropdown-menu-arrow">
+              <a href="#" class="dropdown-item" data-theme="light"><i class="ti ti-sun me-2"></i>Light</a>
+              <a href="#" class="dropdown-item" data-theme="dark"><i class="ti ti-moon me-2"></i>Dark</a>
+              <a href="#" class="dropdown-item" data-theme="auto"><i class="ti ti-device-desktop me-2"></i>Auto</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+    <header class="navbar-expand-md">
+      <div class="navbar">
+        <div class="container-xl">
+          <ul class="navbar-nav">
+            <li class="nav-item active"><a class="nav-link active" href="#dashboard" data-nav="dashboard"><span class="nav-link-icon"><i class="ti ti-layout-dashboard"></i></span><span class="nav-link-title">Dashboard</span></a></li>
+            <li class="nav-item"><a class="nav-link" href="#apps" data-nav="apps"><span class="nav-link-icon"><i class="ti ti-apps"></i></span><span class="nav-link-title">Apps</span></a></li>
+            <li class="nav-item"><a class="nav-link" href="#assets" data-nav="assets"><span class="nav-link-icon"><i class="ti ti-folders"></i></span><span class="nav-link-title">Assets</span></a></li>
+            <li class="nav-item"><a class="nav-link" href="#build" data-nav="build"><span class="nav-link-icon"><i class="ti ti-hammer"></i></span><span class="nav-link-title">Build</span></a></li>
+          </ul>
+        </div>
+      </div>
+    </header>
+    <div class="page-wrapper">
+      <div class="page-header d-print-none">
+        <div class="container-xl">
+          <div class="row g-2 align-items-center">
+            <div class="col">
+              <div class="page-pretitle" id="page-pretitle">Environment repository</div>
+              <h2 class="page-title" id="page-title">Select environment</h2>
+              <div class="text-muted small font-monospace text-break mt-1" id="repo-root">-</div>
+            </div>
+            <div class="col-auto ms-auto d-print-none">
+              <div class="btn-list">
+                <span class="badge bg-dark-lt text-dark-fg" id="app-version">-</span>
+                <button class="btn btn-outline-secondary btn-icon" id="refresh-btn" title="Refresh" type="button"><i class="ti ti-refresh"></i></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="container-xl"><div class="alert alert-danger hidden mb-0" id="ui-error" role="alert"></div></div>
+      <div class="page-body">
+        <div class="container-xl">
+          <section data-page="dashboard"><div class="row g-3" id="env-list"></div></section>
+          <section data-page="apps" class="hidden">
+            <div class="row g-3">
+              <div class="col-12 col-lg-4"><div class="card"><div class="card-header"><h3 class="card-title"><i class="ti ti-apps me-2"></i>Applications</h3></div><div class="table-responsive"><table class="table table-vcenter table-hover mb-0" id="apps-table"><thead><tr><th>File</th><th>Name</th><th class="text-end">Replicas</th><th class="text-end">Containers</th></tr></thead><tbody></tbody></table></div></div></div>
+              <div class="col-12 col-lg-8"><div class="card"><div class="card-header"><div><h3 class="card-title" id="app-detail-title">Select app</h3><div class="text-muted small font-monospace" id="app-detail-path"></div><div class="text-muted small" id="app-detail-meta"></div></div></div><div class="card-body"><div class="row g-3"><div class="col-12"><h4>Local variables</h4><div class="table-responsive"><table class="table table-sm" id="app-vars"><tbody></tbody></table></div></div><div class="col-12"><h4>Raw YAML</h4><pre class="code-block" id="app-raw"></pre></div><div class="col-12"><h4>Rendered preview</h4><pre class="code-block" id="app-rendered"></pre></div></div></div></div></div>
+            </div>
+          </section>
+          <section data-page="assets" class="hidden">
+            <div class="row g-3">
+              <div class="col-12 col-lg-5"><div class="card"><div class="card-header"><h3 class="card-title"><i class="ti ti-folders me-2"></i>Assets</h3></div><div class="table-responsive"><table class="table table-vcenter table-hover mb-0" id="assets-table"><thead><tr><th>Path</th><th>Driver</th><th class="text-end">Bytes</th></tr></thead><tbody></tbody></table></div></div></div>
+              <div class="col-12 col-lg-7"><div class="card"><div class="card-header"><div><h3 class="card-title" id="asset-detail-title">Select asset</h3><div class="text-muted small font-monospace" id="asset-detail-path"></div></div></div><div class="card-body"><pre class="code-block" id="asset-raw"></pre></div></div></div>
+            </div>
+          </section>
+          <section data-page="build" class="hidden"><div class="card"><div class="card-body text-muted">Build preview will use kube-build-app internals in the next phase.</div></div></section>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/js/tabler.min.js"></script>
+  <script src="/static/ui.js"></script>
+</body>
+</html>

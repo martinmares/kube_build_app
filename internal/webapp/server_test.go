@@ -252,3 +252,26 @@ func TestSpecialEntriesAndPreflightEndpoints(t *testing.T) {
 		t.Fatalf("unexpected preflight response:\n%s", preflightRes.Body.String())
 	}
 }
+
+func TestIndexAndStaticAssets(t *testing.T) {
+	server := NewServer(appinfo.For(appinfo.EditAppName), nil)
+	indexReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	indexRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(indexRes, indexReq)
+	if indexRes.Code != http.StatusOK {
+		t.Fatalf("index status = %d, want 200", indexRes.Code)
+	}
+	if !strings.Contains(indexRes.Body.String(), "kube-edit-app") || !strings.Contains(indexRes.Body.String(), "/static/ui.js") {
+		t.Fatalf("unexpected index response:\n%s", indexRes.Body.String())
+	}
+
+	staticReq := httptest.NewRequest(http.MethodGet, "/static/ui.js", nil)
+	staticRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(staticRes, staticReq)
+	if staticRes.Code != http.StatusOK {
+		t.Fatalf("static status = %d, want 200", staticRes.Code)
+	}
+	if !strings.Contains(staticRes.Body.String(), "const state") {
+		t.Fatalf("unexpected static response:\n%s", staticRes.Body.String())
+	}
+}

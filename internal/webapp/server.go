@@ -1,9 +1,11 @@
 package webapp
 
 import (
+	"embed"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"html/template"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -13,6 +15,15 @@ import (
 	"kube-env/internal/appinfo"
 	"kube-env/internal/repository"
 )
+
+//go:embed static/* templates/*
+var contentFiles embed.FS
+
+var indexTemplate = template.Must(template.ParseFS(contentFiles, "templates/index.html"))
+
+type indexPageData struct {
+	AppName string
+}
 
 type Server struct {
 	info    appinfo.Info
@@ -42,6 +53,7 @@ func NewServer(info appinfo.Info, repo *repository.Repository, options ...Option
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleIndex)
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(mustSubFS(contentFiles, "static")))))
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/v1/info", s.handleInfo)
 	mux.HandleFunc("GET /api/v1/envs", s.handleEnvironments)
@@ -69,20 +81,17 @@ func (s *Server) ListenAndServe(addr string) error {
 
 func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = fmt.Fprintf(w, `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>%s</title>
-</head>
-<body>
-  <main>
-    <h1>%s</h1>
-    <p>Go web UI skeleton is running.</p>
-  </main>
-</body>
-</html>
-`, s.info.Name, s.info.Name)
+	if err := indexTemplate.Execute(w, indexPageData{AppName: s.info.Name}); err != nil {
+		slog.Error("render index failed", "error", err)
+	}
+}
+
+func mustSubFS(source embed.FS, dir string) fs.FS {
+	sub, err := fs.Sub(source, dir)
+	if err != nil {
+		panic(err)
+	}
+	return sub
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
