@@ -160,6 +160,81 @@ containers:
 	}
 }
 
+func TestLoadEnvVarsDecryptSecuredUsesEncjsonAPISelection(t *testing.T) {
+	root := t.TempDir()
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE": "json-ns",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "env.secured.json"), `{
+  "_public_key": "dummy",
+  "environment": {
+    "SECRET": "EncJson[@api=2.0:@box=<encrypted>]"
+  }
+}`)
+	rustBin, rustArgs := writeFakeEncjson(t, "rust", `{"_public_key":"decrypted-key","environment":{"SECRET":"decrypted-secret"}}`)
+	legacyBin, _ := writeFakeEncjson(t, "legacy", `{"_public_key":"legacy-key","environment":{"SECRET":"legacy-secret"}}`)
+	keydir := filepath.Join(t.TempDir(), "keys")
+	t.Setenv("ENCJSON_PATH", rustBin)
+	t.Setenv("ENCJSON_LEGACY_PATH", legacyBin)
+	t.Setenv("ENCJSON_KEYDIR", keydir)
+
+	vars, err := loadEnvVars(envDir, Options{DecryptSecured: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := vars["SECRET"]; got != "decrypted-secret" {
+		t.Fatalf("SECRET = %q, want decrypted-secret", got)
+	}
+	if got := vars["_public_key"]; got != "decrypted-key" {
+		t.Fatalf("_public_key = %q, want decrypted-key", got)
+	}
+	argsContent, err := os.ReadFile(rustArgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(argsContent)
+	for _, expected := range []string{"decrypt", "-k", keydir, "-f", filepath.Join(envDir, "env.secured.json")} {
+		if !strings.Contains(args, expected) {
+			t.Fatalf("fake encjson args missing %q: %s", expected, args)
+		}
+	}
+}
+
+func TestLoadEnvVarsDecryptSecuredUsesLegacyEncjsonForAPI1(t *testing.T) {
+	root := t.TempDir()
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE": "json-ns",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "env.secured.json"), `{
+  "_public_key": "dummy",
+  "environment": {
+    "SECRET": "EncJson[@api=1.0:@box=<encrypted>]"
+  }
+}`)
+	rustBin, _ := writeFakeEncjson(t, "rust", `{"_public_key":"rust-key","environment":{"SECRET":"rust-secret"}}`)
+	legacyBin, legacyArgs := writeFakeEncjson(t, "legacy", `{"_public_key":"legacy-key","environment":{"SECRET":"legacy-secret"}}`)
+	t.Setenv("ENCJSON_PATH", rustBin)
+	t.Setenv("ENCJSON_LEGACY_PATH", legacyBin)
+	t.Setenv("ENCJSON_KEYDIR", filepath.Join(t.TempDir(), "keys"))
+
+	vars, err := loadEnvVars(envDir, Options{DecryptSecured: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := vars["SECRET"]; got != "legacy-secret" {
+		t.Fatalf("SECRET = %q, want legacy-secret", got)
+	}
+	if _, err := os.Stat(legacyArgs); err != nil {
+		t.Fatalf("legacy encjson was not executed: %v", err)
+	}
+}
+
 func TestBuildGeneratesServiceWithMetricsAndHeadless(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
@@ -1850,4 +1925,21 @@ func checksumForFiles(t *testing.T, envDir string, relativePaths ...string) stri
 		hash.Write([]byte{0})
 	}
 	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func writeFakeEncjson(t *testing.T, name string, output string) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, name+".args")
+	binPath := filepath.Join(dir, name)
+	script := fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' "$*" > %q
+cat <<'JSON'
+%s
+JSON
+`, argsPath, output)
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return binPath, argsPath
 }

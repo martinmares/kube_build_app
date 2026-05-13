@@ -182,7 +182,36 @@ Explicitní `.env` soubor:
 kube-build-app build -e test -E /path/to/release.env
 ```
 
+Tohle je doporučený produkční workflow pro secured proměnné. Čím se hodnoty dešifrují je mimo `kube-build-app`; nástroj dostane už vyřešené key/value páry.
+
 V tomto režimu je explicitní `.env` jediný zdroj proměnných. Nelze ho kombinovat s `-d` ani s `--vars-source`.
+
+Zpětně kompatibilní decrypt secured JSON:
+
+```bash
+kube-build-app build -e test -d
+```
+
+Při použití `-d/--decrypt-secured` se `env.secured.json` dešifruje spuštěním externí EncJson binárky:
+
+```text
+encjson decrypt -k <keydir> -f env.secured.json
+encjson-rs decrypt -k <keydir> -f env.secured.json
+```
+
+Výběr binárky:
+
+```text
+EncJson[@api=1.0  -> ENCJSON_LEGACY_PATH, ENCJSON_LEGACY_BIN, ENCJSON_BIN, fallback encjson
+EncJson[@api=2.0  -> ENCJSON_PATH, ENCJSON_RS_BIN, fallback encjson-rs
+neznámý marker    -> ENCJSON_BIN nebo legacy fallback
+```
+
+Adresář s klíči:
+
+```text
+ENCJSON_KEYDIR nebo ~/.encjson
+```
 
 Explicitní výběr zdrojů:
 
@@ -750,6 +779,12 @@ just build-cross
 just build-cross-all
 ```
 
+Release binárky s version metadata a SHA256 checksumy:
+
+```bash
+just release 0.1.0
+```
+
 Parity proti Ruby referenci:
 
 ```bash
@@ -759,4 +794,10 @@ scripts/parity-build \
   --env test \
   --release-id 2025.08.18.1 \
   --go-bin ./dist/kube-build-app
+```
+
+Reprezentativní smoke parity cases:
+
+```bash
+just parity-smoke
 ```

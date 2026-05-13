@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -979,6 +980,12 @@ func loadEnvJSONFile(vars map[string]string, path string, secured bool) error {
 	if err != nil {
 		return err
 	}
+	if secured {
+		content, err = decryptEnvJSONFile(path)
+		if err != nil {
+			return err
+		}
+	}
 	var parsed envFile
 	if err := json.Unmarshal(content, &parsed); err != nil {
 		return err
@@ -996,6 +1003,85 @@ func loadEnvJSONFile(vars map[string]string, path string, secured bool) error {
 		vars[key] = fmt.Sprint(value)
 	}
 	return nil
+}
+
+func decryptEnvJSONFile(path string) ([]byte, error) {
+	bin := encjsonBinForFile(path)
+	keydir := encjsonKeydir()
+	cmd := exec.Command(bin, "decrypt", "-k", keydir, "-f", path)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			if stderr != "" {
+				return nil, fmt.Errorf("decrypt %s failed: %w: %s", path, err, stderr)
+			}
+		}
+		return nil, fmt.Errorf("decrypt %s failed: %w", path, err)
+	}
+	return out, nil
+}
+
+func encjsonKeydir() string {
+	if value := strings.TrimSpace(os.Getenv("ENCJSON_KEYDIR")); value != "" {
+		return value
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ".encjson"
+	}
+	return filepath.Join(home, ".encjson")
+}
+
+func encjsonBinForFile(path string) string {
+	switch detectEncjsonAPI(path) {
+	case "1.0":
+		return legacyEncjsonBin()
+	case "2.0":
+		return rustEncjsonBin()
+	default:
+		if value := strings.TrimSpace(os.Getenv("ENCJSON_BIN")); value != "" {
+			return value
+		}
+		return legacyEncjsonBin()
+	}
+}
+
+func legacyEncjsonBin() string {
+	for _, key := range []string{"ENCJSON_LEGACY_PATH", "ENCJSON_LEGACY_BIN", "ENCJSON_BIN"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return "encjson"
+}
+
+func rustEncjsonBin() string {
+	for _, key := range []string{"ENCJSON_PATH", "ENCJSON_RS_BIN"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return "encjson-rs"
+}
+
+func detectEncjsonAPI(path string) string {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	probe := string(content)
+	if len(probe) > 8192 {
+		probe = probe[:8192]
+	}
+	switch {
+	case strings.Contains(probe, "EncJson[@api=2.0"):
+		return "2.0"
+	case strings.Contains(probe, "EncJson[@api=1.0"):
+		return "1.0"
+	default:
+		return ""
+	}
 }
 
 func loadDotEnvFile(vars map[string]string, path string) error {

@@ -182,7 +182,36 @@ Explicit `.env` file:
 kube-build-app build -e test -E /path/to/release.env
 ```
 
+This is the recommended production workflow for secured variables. The decrypting tool can be anything; `kube-build-app` receives already resolved key/value pairs.
+
 In this mode the explicit `.env` is the only variable source. It cannot be combined with `-d` or `--vars-source`.
+
+Backward-compatible secured JSON decrypt:
+
+```bash
+kube-build-app build -e test -d
+```
+
+When `-d/--decrypt-secured` is used, `env.secured.json` is decrypted by executing an external EncJson binary:
+
+```text
+encjson decrypt -k <keydir> -f env.secured.json
+encjson-rs decrypt -k <keydir> -f env.secured.json
+```
+
+Binary selection:
+
+```text
+EncJson[@api=1.0  -> ENCJSON_LEGACY_PATH, ENCJSON_LEGACY_BIN, ENCJSON_BIN, fallback encjson
+EncJson[@api=2.0  -> ENCJSON_PATH, ENCJSON_RS_BIN, fallback encjson-rs
+unknown marker    -> ENCJSON_BIN or legacy fallback
+```
+
+Key directory:
+
+```text
+ENCJSON_KEYDIR or ~/.encjson
+```
 
 Explicit source selection:
 
@@ -750,6 +779,12 @@ just build-cross
 just build-cross-all
 ```
 
+Build release binaries with version metadata and SHA256 checksums:
+
+```bash
+just release 0.1.0
+```
+
 Run parity against Ruby reference implementation:
 
 ```bash
@@ -759,4 +794,10 @@ scripts/parity-build \
   --env test \
   --release-id 2025.08.18.1 \
   --go-bin ./dist/kube-build-app
+```
+
+Run representative smoke parity cases:
+
+```bash
+just parity-smoke
 ```

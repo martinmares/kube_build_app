@@ -309,7 +309,7 @@ Implemented in the initial Go renderer skeleton:
 
 Known intentional differences / remaining risks:
 
-- `-d/--decrypt-secured` does not implement real EncJson decryption yet; it can load JSON-shaped inputs, but production decrypt must be delegated to `encjson-rs` or implemented explicitly
+- `-d/--decrypt-secured` is a compatibility path implemented by executing external EncJson binaries; production workflows should prefer resolved `.env` input through `-E/--env-file`
 - `simple_init` runtime rendering if a future contract defines it; current Ruby behavior is validation/inventory only
 - byte-for-byte Ruby summary table output is not preserved; Go uses a new CI/L2-oriented ASCII table and keeps JSON available through `--summary-format json`
 
@@ -345,10 +345,9 @@ The comparer checks generated file sets and YAML/JSON content semantically. Non-
 
 Before replacing Ruby in production workflows, finish these non-rendering items:
 
-1. Define the production story for `-d/--decrypt-secured`: shell out to `encjson-rs`, link a shared implementation, or keep decrypt outside `kube-build-app`.
-2. Add a CI job that runs `just test`, `just build`, and a curated subset of parity cases.
-3. Optionally run `kubeconform` on Ruby and Go outputs and document any shared schema exceptions.
-4. Package binaries for macOS, Linux and Windows.
+1. Add a CI job that runs `just test`, `just build`, and a curated subset of parity cases.
+2. Optionally run `kubeconform` on Ruby and Go outputs and document any shared schema exceptions.
+3. Publish release binaries for macOS, Linux and Windows using `just release <version>`.
 
 ## Decision rule
 
