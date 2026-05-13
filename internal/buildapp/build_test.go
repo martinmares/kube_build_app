@@ -235,6 +235,46 @@ func TestLoadEnvVarsDecryptSecuredUsesLegacyEncjsonForAPI1(t *testing.T) {
 	}
 }
 
+func TestLoadEnvVarsDecryptSecuredOmitsKeydirWhenUnset(t *testing.T) {
+	root := t.TempDir()
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE": "json-ns",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "env.secured.json"), `{
+  "_public_key": "dummy",
+  "environment": {
+    "SECRET": "EncJson[@api=2.0:@box=<encrypted>]"
+  }
+}`)
+	rustBin, rustArgs := writeFakeEncjson(t, "rust", `{"_public_key":"decrypted-key","environment":{"SECRET":"decrypted-secret"}}`)
+	t.Setenv("ENCJSON_PATH", rustBin)
+	t.Setenv("ENCJSON_KEYDIR", "")
+
+	vars, err := loadEnvVars(envDir, Options{DecryptSecured: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := vars["SECRET"]; got != "decrypted-secret" {
+		t.Fatalf("SECRET = %q, want decrypted-secret", got)
+	}
+	argsContent, err := os.ReadFile(rustArgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(argsContent)
+	if strings.Contains(args, "-k") {
+		t.Fatalf("fake encjson args unexpectedly contain -k: %s", args)
+	}
+	for _, expected := range []string{"decrypt", "-f", filepath.Join(envDir, "env.secured.json")} {
+		if !strings.Contains(args, expected) {
+			t.Fatalf("fake encjson args missing %q: %s", expected, args)
+		}
+	}
+}
+
 func TestBuildGeneratesServiceWithMetricsAndHeadless(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")

@@ -1007,8 +1007,12 @@ func loadEnvJSONFile(vars map[string]string, path string, secured bool) error {
 
 func decryptEnvJSONFile(path string) ([]byte, error) {
 	bin := encjsonBinForFile(path)
-	keydir := encjsonKeydir()
-	cmd := exec.Command(bin, "decrypt", "-k", keydir, "-f", path)
+	args := []string{"decrypt"}
+	if keydir := strings.TrimSpace(os.Getenv("ENCJSON_KEYDIR")); keydir != "" {
+		args = append(args, "-k", keydir)
+	}
+	args = append(args, "-f", path)
+	cmd := exec.Command(bin, args...)
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -1020,17 +1024,6 @@ func decryptEnvJSONFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("decrypt %s failed: %w", path, err)
 	}
 	return out, nil
-}
-
-func encjsonKeydir() string {
-	if value := strings.TrimSpace(os.Getenv("ENCJSON_KEYDIR")); value != "" {
-		return value
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ".encjson"
-	}
-	return filepath.Join(home, ".encjson")
 }
 
 func encjsonBinForFile(path string) string {
