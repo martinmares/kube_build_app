@@ -267,6 +267,61 @@ Avoid introducing a separate visual language.
 
 ## Implementation Order
 
+## Current Work Snapshot
+
+Last updated: 2026-05-14
+
+Current implementation status:
+
+- `cmd/kube-edit-app` exists and is built by `just build`
+- Cobra `serve` command exists with root/listen/read-only/EncJson flags
+- HTML/JS/CSS are externalized under `internal/webapp/templates` and `internal/webapp/static`
+- read-only repository browsing works for environments, apps, assets and special files
+- app detail supports raw YAML, rendered preview, local vars and parsed model
+- unquoted app placeholders such as `port: {{var:EXPOSE_PORT}}` are handled for model preview
+- Build tab uses `internal/buildapp` through read-only endpoints:
+  - `POST /api/v1/envs/{env}/validate`
+  - `POST /api/v1/envs/{env}/summary`
+  - `POST /api/v1/envs/{env}/inventory`
+- Build tab UI currently shows:
+  - Validate action
+  - Resource summary metrics and table with totals
+  - Inventory table with text filter and dot-path value extraction
+
+Open uncommitted UI work at this snapshot:
+
+```text
+internal/webapp/templates/index.html
+internal/webapp/static/ui.js
+internal/webapp/static/ui.css
+```
+
+Verification already run for the snapshot:
+
+```bash
+just go-test
+just build
+```
+
+Recommended commit message for the current UI-only snapshot:
+
+```bash
+git add internal/webapp/templates/index.html internal/webapp/static/ui.js internal/webapp/static/ui.css
+git commit -m "Polish kube-edit-app build view"
+```
+
+Recommended next steps for `kube-edit-app` after returning to it:
+
+1. Add Git status endpoint and show dirty state per environment/app/asset.
+2. Implement read-only app structured overview closer to the Rust UI: resources, container env vars, services/ports/expose_as.
+3. Add `build-preview` endpoint that renders into a temp directory and returns generated file list/events without writing to deploy repo.
+4. Add safe write foundation: read-only guard, atomic writes, content hash precondition, structured JSON errors.
+5. Port the first mutating editor from Rust: replicas/resources is the lowest-risk starting point.
+6. Add special file editors for `_defaults.yml`, `env.unsecured.json`, `env.secured.json`.
+7. Revisit virtual assets content only after secured/unsecured special file edit flow is designed.
+
+Do not start with broad YAML reserialization. Prefer targeted patches that preserve existing file layout where practical.
+
 ### Phase 1: Rename and CLI
 
 - rename `cmd/kube-env-app` to `cmd/kube-edit-app`

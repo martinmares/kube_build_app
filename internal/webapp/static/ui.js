@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], appFile: null, assetPath: null, active: 'dashboard' };
+const state = { envs: [], env: null, apps: [], assets: [], inventory: null, appFile: null, assetPath: null, active: 'dashboard' };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -18,7 +18,7 @@ function setActive(page) {
   for (const pageEl of qsa('[data-page]')) pageEl.classList.toggle('hidden', pageEl.dataset.page !== page);
   setText('#page-pretitle', state.env ? `Environment ${state.env}` : 'Environment repository');
   setText('#page-title', page === 'dashboard' ? 'Select environment' : page === 'apps' ? 'Inspect applications' : page === 'assets' ? 'Inspect assets' : 'Build preview');
-  if (page === 'build') loadBuildSummary();
+  if (page === 'build') loadBuildData();
 }
 function applyTheme(theme) {
   if (theme === 'auto') theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -35,8 +35,16 @@ async function init() {
   qsa('[data-nav]').forEach((x) => x.addEventListener('click', (e) => { e.preventDefault(); if (x.dataset.nav !== 'dashboard' && !state.env) return showError('Select environment first.'); setActive(x.dataset.nav); }));
   qs('#refresh-btn')?.addEventListener('click', () => loadAll());
   qs('#build-validate-btn')?.addEventListener('click', () => runBuildValidate());
-  qs('#build-summary-btn')?.addEventListener('click', () => loadBuildSummary());
-  qs('#build-inventory-btn')?.addEventListener('click', () => loadBuildInventory());
+  qs('#build-refresh-btn')?.addEventListener('click', () => loadBuildData());
+  qs('#inventory-filter')?.addEventListener('input', () => renderInventory());
+  qs('#inventory-path')?.addEventListener('input', () => renderInventory());
+  qs('#inventory-clear-btn')?.addEventListener('click', () => {
+    const filter = qs('#inventory-filter');
+    const path = qs('#inventory-path');
+    if (filter) filter.value = '';
+    if (path) path.value = '';
+    renderInventory();
+  });
   await loadAll();
 }
 async function loadAll() {
@@ -160,10 +168,17 @@ async function loadBuildInventory() {
   if (!state.env) return showError('Select environment first.');
   clearError();
   try {
-    setText('#build-inventory-json', 'Loading inventory...');
     const inventory = await apiPost(`/api/v1/envs/${encodeURIComponent(state.env)}/inventory`);
-    setText('#build-inventory-json', JSON.stringify(inventory, null, 2));
-  } catch (e) { setText('#build-inventory-json', ''); showError(e); }
+    state.inventory = inventory;
+    renderInventory();
+  } catch (e) { state.inventory = null; renderInventory(); showError(e); }
+}
+async function loadBuildData() {
+  if (!state.env) return;
+  clearError();
+  try {
+    await Promise.all([loadBuildSummary(), loadBuildInventory()]);
+  } catch (e) { showError(e); }
 }
 function setBuildStatus(kind, text) {
   const el = qs('#build-status');
@@ -187,11 +202,49 @@ function renderBuildSummary(summary) {
       <td class="font-monospace">${esc(item.app)}</td>
       <td class="font-monospace">${esc(item.container)}</td>
       <td class="text-end">${item.replicas ?? 0}</td>
-      <td>${esc(item.cpu_request)}</td>
-      <td>${esc(item.cpu_limit)}</td>
-      <td>${esc(item.memory_request)}</td>
-      <td>${esc(item.memory_limit)}</td>
+      <td class="text-end">${esc(item.cpu_request)}</td>
+      <td class="text-end">${esc(item.cpu_limit)}</td>
+      <td class="text-end">${esc(item.memory_request)}</td>
+      <td class="text-end">${esc(item.memory_limit)}</td>
     </tr>`).join('') || '<tr><td colspan="7" class="text-muted">No summary items.</td></tr>';
+  qs('#build-summary-table tfoot').innerHTML = items.length ? `
+    <tr class="fw-bold">
+      <td colspan="2">Total</td>
+      <td class="text-end">${totals.replicas ?? 0}</td>
+      <td class="text-end">${fmt(totals.cpu_request_cores)} cores</td>
+      <td class="text-end">${fmt(totals.cpu_limit_cores)} cores</td>
+      <td class="text-end">${fmt(totals.memory_request_mib)} MiB</td>
+      <td class="text-end">${fmt(totals.memory_limit_mib)} MiB</td>
+    </tr>` : '';
+}
+function renderInventory() {
+  const table = qs('#build-inventory-table tbody');
+  if (!table) return;
+  const items = state.inventory?.items || [];
+  const query = (qs('#inventory-filter')?.value || '').trim().toLowerCase();
+  const dotPath = (qs('#inventory-path')?.value || '').trim();
+  const filtered = items.filter((item) => {
+    if (!query) return true;
+    return [item.app, item.container, item.image, item.app_kind].some((value) => String(value || '').toLowerCase().includes(query));
+  });
+  table.innerHTML = filtered.map((item) => `
+    <tr>
+      <td class="font-monospace">${esc(item.app)}</td>
+      <td class="font-monospace">${esc(item.container)}</td>
+      <td class="font-monospace text-break">${esc(item.image)}</td>
+      <td class="text-end">${item.replicas ?? '-'}</td>
+      <td class="font-monospace text-break">${esc(dotPath ? valueAtPath(item, dotPath) : 'resources, mtls, rollout_checksums')}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="text-muted">No inventory rows.</td></tr>';
+}
+function valueAtPath(value, path) {
+  let current = value;
+  for (const part of path.split('.').filter(Boolean)) {
+    if (current == null || typeof current !== 'object' || !(part in current)) return '';
+    current = current[part];
+  }
+  if (current == null) return '';
+  if (typeof current === 'object') return JSON.stringify(current);
+  return String(current);
 }
 function metricCard(label, value, icon) {
   return `<div class="col-6 col-lg-4"><div class="metric-card"><div class="text-muted small"><i class="ti ${icon} me-1"></i>${esc(label)}</div><div class="h3 mb-0">${esc(value)}</div></div></div>`;
