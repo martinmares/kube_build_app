@@ -1675,6 +1675,9 @@ containers:
 	if got := digString(deployment, "spec", "template", "spec", "volumes", "1", "persistentVolumeClaim", "claimName"); got != "data-claim" {
 		t.Fatalf("pvc claimName = %q", got)
 	}
+	if emptyDir := digAny(deployment, "spec", "template", "spec", "volumes", "0", "emptyDir"); emptyDir == nil {
+		t.Fatalf("temp volume missing emptyDir: %#v", volumes[0])
+	}
 	if got := digString(deployment, "spec", "template", "spec", "volumes", "2", "nfs", "server"); got != "nfs.local" {
 		t.Fatalf("nfs server = %q", got)
 	}
@@ -1683,6 +1686,92 @@ containers:
 	}
 	if subPath := digAny(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "0", "subPath"); subPath != nil {
 		t.Fatalf("temp mount has subPath: %#v", subPath)
+	}
+}
+
+func TestBuildGeneratesModernMounts(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "assets", "app.conf"), "value=1\n")
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    mounts:
+      - type: config
+        file: assets/app.conf
+        mount_path: /app/app.conf
+      - type: empty_dir
+        name: cache
+        mount_path: /tmp/cache
+      - type: pvc
+        name: data
+        claim_name: data-claim
+        mount_path: /data
+      - type: nfs
+        name: nfs-data
+        server: nfs.local
+        path: /export/data
+        mount_path: /nfs
+      - type: host_path
+        name: host-data
+        path: /var/lib/host-data
+        mount_path: /host
+      - type: raw
+        volume:
+          name: projected-config
+          projected:
+            sources: []
+        mount:
+          name: projected-config
+          mountPath: /app/projected
+          readOnly: true
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	result, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Assets) != 1 {
+		t.Fatalf("len(configmap assets) = %d, want 1", len(result.Assets))
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "0", "mountPath"); got != "/app/app.conf" {
+		t.Fatalf("config mountPath = %q", got)
+	}
+	if emptyDir := digAny(deployment, "spec", "template", "spec", "volumes", "1", "emptyDir"); emptyDir == nil {
+		t.Fatalf("empty_dir volume missing emptyDir")
+	}
+	if got := digString(deployment, "spec", "template", "spec", "volumes", "2", "persistentVolumeClaim", "claimName"); got != "data-claim" {
+		t.Fatalf("pvc claimName = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "volumes", "3", "nfs", "server"); got != "nfs.local" {
+		t.Fatalf("nfs server = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "volumes", "4", "hostPath", "path"); got != "/var/lib/host-data" {
+		t.Fatalf("hostPath path = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "volumes", "5", "name"); got != "projected-config" {
+		t.Fatalf("raw volume name = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "5", "mountPath"); got != "/app/projected" {
+		t.Fatalf("raw mountPath = %q", got)
+	}
+	if got := digBool(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "5", "readOnly"); !got {
+		t.Fatalf("raw mount readOnly = false, want true")
 	}
 }
 

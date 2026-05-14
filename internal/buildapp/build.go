@@ -167,6 +167,7 @@ type containerSpec struct {
 	Name                 string                    `yaml:"name"`
 	Image                string                    `yaml:"image"`
 	Assets               []assetSpec               `yaml:"assets"`
+	Mounts               []mountSpec               `yaml:"mounts"`
 	EnvVars              []envVar                  `yaml:"env_vars"`
 	MTLS                 mtlsSpec                  `yaml:"mtls"`
 	Ports                []portSpec                `yaml:"ports"`
@@ -284,6 +285,22 @@ type assetSpec struct {
 	HostPath   string `yaml:"host-path"`
 }
 
+type mountSpec struct {
+	Type       string         `yaml:"type"`
+	File       string         `yaml:"file"`
+	MountPath  string         `yaml:"mount_path"`
+	Binary     bool           `yaml:"binary"`
+	Transform  bool           `yaml:"transform"`
+	HelmEscape *bool          `yaml:"helm_escape"`
+	Name       string         `yaml:"name"`
+	ClaimName  string         `yaml:"claim_name"`
+	Server     string         `yaml:"server"`
+	Path       string         `yaml:"path"`
+	HostPath   string         `yaml:"host_path"`
+	Volume     map[string]any `yaml:"volume"`
+	Mount      map[string]any `yaml:"mount"`
+}
+
 type resolvedAsset struct {
 	VolumeName    string
 	ConfigMapKey  string
@@ -296,6 +313,8 @@ type resolvedAsset struct {
 	NFSServer     string
 	NFSPath       string
 	HostPath      string
+	RawVolume     map[string]any
+	RawMount      map[string]any
 }
 
 type sharedAssetsFile struct {
@@ -2411,6 +2430,13 @@ func resolveAssets(app appModel, envDir string, vars map[string]string, opts Opt
 			}
 			out[container.Name] = append(out[container.Name], asset)
 		}
+		for _, item := range container.Mounts {
+			asset, err := resolveMount(app.Name, container.Name, item, envDir, vars, opts)
+			if err != nil {
+				return nil, err
+			}
+			out[container.Name] = append(out[container.Name], asset)
+		}
 	}
 	return out, nil
 }
@@ -2555,6 +2581,68 @@ func resolveAsset(appName string, containerName string, spec assetSpec, envDir s
 	}, nil
 }
 
+func resolveMount(appName string, containerName string, spec mountSpec, envDir string, vars map[string]string, opts Options) (resolvedAsset, error) {
+	switch strings.TrimSpace(spec.Type) {
+	case "config":
+		return resolveAsset(appName, containerName, assetSpec{
+			File:       spec.File,
+			To:         spec.MountPath,
+			Binary:     spec.Binary,
+			Transform:  spec.Transform,
+			HelmEscape: spec.HelmEscape,
+		}, envDir, vars, opts)
+	case "empty_dir":
+		asset, err := resolveAsset(appName, containerName, assetSpec{Temp: true, To: spec.MountPath}, envDir, vars, opts)
+		return withMountVolumeName(asset, spec.Name), err
+	case "pvc":
+		claimName := spec.ClaimName
+		if claimName == "" {
+			claimName = spec.Name
+		}
+		asset, err := resolveAsset(appName, containerName, assetSpec{PVC: true, Name: claimName, To: spec.MountPath}, envDir, vars, opts)
+		return withMountVolumeName(asset, spec.Name), err
+	case "nfs":
+		asset, err := resolveAsset(appName, containerName, assetSpec{NFSServer: spec.Server, Path: spec.Path, To: spec.MountPath}, envDir, vars, opts)
+		return withMountVolumeName(asset, spec.Name), err
+	case "host_path":
+		asset, err := resolveAsset(appName, containerName, assetSpec{HostPath: spec.Path, To: spec.MountPath}, envDir, vars, opts)
+		return withMountVolumeName(asset, spec.Name), err
+	case "raw":
+		volumeName := rawVolumeName(spec)
+		if volumeName == "" {
+			return resolvedAsset{}, errors.New("raw mount requires volume.name or mount.name")
+		}
+		if len(spec.Volume) == 0 {
+			return resolvedAsset{}, errors.New("raw mount requires volume")
+		}
+		if len(spec.Mount) == 0 {
+			return resolvedAsset{}, errors.New("raw mount requires mount")
+		}
+		return resolvedAsset{VolumeName: volumeName, ContainerName: containerName, Kind: "raw", RawVolume: spec.Volume, RawMount: spec.Mount}, nil
+	case "":
+		return resolvedAsset{}, errors.New("mount type is required")
+	default:
+		return resolvedAsset{}, fmt.Errorf("unsupported mount type: %s", spec.Type)
+	}
+}
+
+func withMountVolumeName(asset resolvedAsset, name string) resolvedAsset {
+	if strings.TrimSpace(name) != "" {
+		asset.VolumeName = strings.TrimSpace(name)
+	}
+	return asset
+}
+
+func rawVolumeName(spec mountSpec) string {
+	if name, _ := spec.Volume["name"].(string); name != "" {
+		return name
+	}
+	if name, _ := spec.Mount["name"].(string); name != "" {
+		return name
+	}
+	return spec.Name
+}
+
 func renderVolumes(app appModel, assets map[string][]resolvedAsset, sharedAssets []resolvedAsset) []any {
 	all := orderedResolvedAssets(app, assets)
 	all = append(sharedAssets, all...)
@@ -2568,13 +2656,15 @@ func renderVolumes(app appModel, assets map[string][]resolvedAsset, sharedAssets
 		volume := map[string]any{"name": asset.VolumeName}
 		switch asset.Kind {
 		case "temp":
-			// Ruby emits only volume name for temp assets.
+			volume["emptyDir"] = map[string]any{}
 		case "pvc":
 			volume["persistentVolumeClaim"] = map[string]any{"claimName": asset.PVCName}
 		case "nfs":
 			volume["nfs"] = map[string]any{"server": asset.NFSServer, "path": asset.NFSPath}
 		case "host":
 			volume["hostPath"] = map[string]any{"path": asset.HostPath, "type": "Directory"}
+		case "raw":
+			volume = cloneMap(asset.RawVolume)
 		default:
 			volume["configMap"] = map[string]any{"defaultMode": 420, "name": asset.VolumeName}
 		}
@@ -2586,6 +2676,10 @@ func renderVolumes(app appModel, assets map[string][]resolvedAsset, sharedAssets
 func renderVolumeMounts(assets []resolvedAsset) []any {
 	out := make([]any, 0, len(assets))
 	for _, asset := range assets {
+		if asset.Kind == "raw" {
+			out = append(out, cloneMap(asset.RawMount))
+			continue
+		}
 		mount := map[string]any{
 			"mountPath": asset.To,
 			"name":      asset.VolumeName,

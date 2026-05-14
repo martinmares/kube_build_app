@@ -543,7 +543,60 @@ assets:
     transform: true
 ```
 
-### 8. Shared Assets
+Legacy `assets` podporuje i volume-only formy jako `temp`, `pvc`, `nfs-server` a `host-path`. Kvůli zpětné kompatibilitě zůstávají podporované, ale nové soubory by měly pro volume deklarace preferovat `mounts`.
+
+### 8. Mounts
+
+`mounts` používejte pro non-ConfigMap volumes a pro čistší moderní zápis file mountů:
+
+```yaml
+containers:
+  - name: api
+    image: api:latest
+    mounts:
+      - type: config
+        file: assets/app.conf
+        mount_path: /app/app.conf
+
+      - type: empty_dir
+        name: cache
+        mount_path: /app/cache
+
+      - type: pvc
+        name: data
+        claim_name: data-claim
+        mount_path: /data
+
+      - type: nfs
+        name: data-nfs
+        server: nfs.local
+        path: /export/data
+        mount_path: /nfs
+
+      - type: host_path
+        name: host-data
+        path: /var/lib/host-data
+        mount_path: /host
+```
+
+`host_path` je high-risk escape hatch, protože containeru vystavuje filesystem path přímo z nodu.
+
+Pro vzácné Kubernetes volume typy použijte raw mount passthrough:
+
+```yaml
+mounts:
+  - type: raw
+    volume:
+      name: special
+      projected:
+        sources: []
+    mount:
+      name: special
+      mountPath: /app/special
+      readOnly: true
+```
+
+### 9. Shared Assets
 
 `<environment>/shared.assets.yml` slouží pro assety mountované do více appek.
 
@@ -553,7 +606,7 @@ Appka je může vypnout:
 disable_shared_assets: true
 ```
 
-### 9. Tools
+### 10. Tools
 
 Statické utility binárky lze vystavit přes initContainers a mount do `/app/tools`:
 
@@ -572,7 +625,7 @@ Chování:
 - app containery mountují volume read-only pod `/app/tools`
 - pokud `as` chybí, cíl je `/app/tools/<basename(expose_bin)>`
 
-### 10. Scheduling a Pod Metadata
+### 11. Scheduling a Pod Metadata
 
 Časté app-level fields:
 
@@ -633,7 +686,7 @@ scheduling:
 
 Legacy `arch`, `node_selector` a `tolerations` zůstávají podporované. Nové soubory by měly preferovat `scheduling`.
 
-### 11. Raw Container Fields
+### 12. Raw Container Fields
 
 Raw passthrough používejte jen tehdy, když model nemá dedikované pole:
 
@@ -648,7 +701,7 @@ containers:
 
 Dedikovaná modelová pole jsou lepší, protože se dají validovat a zobrazit v UI nástrojích.
 
-### 12. Cgroup Exporter Defaults
+### 13. Cgroup Exporter Defaults
 
 Na úrovni containeru lze zapnout automatické vkládání env var pro cgroup exporter:
 

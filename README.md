@@ -543,7 +543,60 @@ assets:
     transform: true
 ```
 
-### 8. Shared Assets
+Legacy `assets` also supports volume-only forms such as `temp`, `pvc`, `nfs-server` and `host-path`. They remain supported for backward compatibility, but new files should prefer `mounts` for volume declarations.
+
+### 8. Mounts
+
+Use `mounts` for non-ConfigMap volumes and for a clearer modern form of file mounts:
+
+```yaml
+containers:
+  - name: api
+    image: api:latest
+    mounts:
+      - type: config
+        file: assets/app.conf
+        mount_path: /app/app.conf
+
+      - type: empty_dir
+        name: cache
+        mount_path: /app/cache
+
+      - type: pvc
+        name: data
+        claim_name: data-claim
+        mount_path: /data
+
+      - type: nfs
+        name: data-nfs
+        server: nfs.local
+        path: /export/data
+        mount_path: /nfs
+
+      - type: host_path
+        name: host-data
+        path: /var/lib/host-data
+        mount_path: /host
+```
+
+`host_path` is a high-risk escape hatch because it exposes node filesystem paths to the container.
+
+For rare Kubernetes volume types, use raw mount passthrough:
+
+```yaml
+mounts:
+  - type: raw
+    volume:
+      name: special
+      projected:
+        sources: []
+    mount:
+      name: special
+      mountPath: /app/special
+      readOnly: true
+```
+
+### 9. Shared Assets
 
 Use `<environment>/shared.assets.yml` for assets mounted into multiple apps.
 
@@ -553,7 +606,7 @@ An app can opt out:
 disable_shared_assets: true
 ```
 
-### 9. Tools
+### 10. Tools
 
 Static utility binaries can be exposed through initContainers and mounted under `/app/tools`:
 
@@ -572,7 +625,7 @@ Behavior:
 - app containers mount that volume read-only under `/app/tools`
 - if `as` is omitted, target defaults to `/app/tools/<basename(expose_bin)>`
 
-### 10. Scheduling and Pod Metadata
+### 11. Scheduling and Pod Metadata
 
 Common app-level fields:
 
@@ -633,7 +686,7 @@ scheduling:
 
 Legacy `arch`, `node_selector` and `tolerations` remain supported. New files should prefer `scheduling`.
 
-### 11. Raw Container Fields
+### 12. Raw Container Fields
 
 Use raw passthrough only when the model does not expose a dedicated field:
 
@@ -648,7 +701,7 @@ containers:
 
 Dedicated model fields are preferred because they can be validated and represented in UI tooling.
 
-### 12. Cgroup Exporter Defaults
+### 13. Cgroup Exporter Defaults
 
 At container level you can enable automatic env var injection for cgroup exporter:
 
