@@ -539,6 +539,123 @@ containers:
 	}
 }
 
+func TestBuildGeneratesModernProbesPreset(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+vars:
+  - name: EXPOSE_PORT
+    value: 8080
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    probes:
+      preset: spring-actuator
+      port: "{{var:EXPOSE_PORT}}"
+    startup:
+      command: ["/bin/sh"]
+      arguments: ["-c", "echo ok"]
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "livenessProbe", "httpGet", "path"); got != "/actuator/health/liveness" {
+		t.Fatalf("liveness path = %q, want /actuator/health/liveness", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "readinessProbe", "httpGet", "path"); got != "/actuator/health/readiness" {
+		t.Fatalf("readiness path = %q, want /actuator/health/readiness", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "startupProbe", "httpGet", "path"); got != "/actuator/health" {
+		t.Fatalf("startup path = %q, want /actuator/health", got)
+	}
+	if got := digInt(deployment, "spec", "template", "spec", "containers", "0", "livenessProbe", "httpGet", "port"); got != 8080 {
+		t.Fatalf("liveness port = %d, want 8080", got)
+	}
+	if got := digInt(deployment, "spec", "template", "spec", "containers", "0", "startupProbe", "failureThreshold"); got != 30 {
+		t.Fatalf("startup failureThreshold = %d, want 30", got)
+	}
+}
+
+func TestBuildGeneratesModernProbesOverrides(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    probes:
+      http:
+        path: /healthz
+        port: 8080
+      ready:
+        period: 3
+        success: 1
+      start:
+        command: ["/bin/check-start"]
+        failure: 40
+    startup:
+      command: ["/bin/sh"]
+      arguments: ["-c", "echo ok"]
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "livenessProbe", "httpGet", "path"); got != "/healthz" {
+		t.Fatalf("liveness path = %q, want /healthz", got)
+	}
+	if got := digInt(deployment, "spec", "template", "spec", "containers", "0", "readinessProbe", "periodSeconds"); got != 3 {
+		t.Fatalf("readiness period = %d, want 3", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "startupProbe", "exec", "command", "0"); got != "/bin/check-start" {
+		t.Fatalf("startup command = %q, want /bin/check-start", got)
+	}
+	if got := digInt(deployment, "spec", "template", "spec", "containers", "0", "startupProbe", "failureThreshold"); got != 40 {
+		t.Fatalf("startup failureThreshold = %d, want 40", got)
+	}
+}
+
 func TestBuildGeneratesSchedulingFieldsAndRawContainerPassthrough(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
@@ -600,6 +717,83 @@ containers:
 	}
 	if got := digBool(deployment, "spec", "template", "spec", "containers", "0", "stdin"); !got {
 		t.Fatalf("stdin = false, want true")
+	}
+}
+
+func TestBuildGeneratesModernSchedulingFields(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 2
+scheduling:
+  arch: amd64
+  node_selector:
+    workload: tsm
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: tsm
+      effect: NoSchedule
+  spread:
+    by: hostname
+    max_skew: 1
+    when_unsatisfiable: ScheduleAnyway
+  anti_affinity:
+    self: preferred
+    topology: kubernetes.io/hostname
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 10
+          preference:
+            matchExpressions:
+              - key: disk
+                operator: In
+                values: [ssd]
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    startup:
+      command: ["/bin/sh"]
+      arguments: ["-c", "echo ok"]
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "nodeSelector", "kubernetes.io/arch"); got != "amd64" {
+		t.Fatalf("arch nodeSelector = %q, want amd64", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "nodeSelector", "workload"); got != "tsm" {
+		t.Fatalf("workload nodeSelector = %q, want tsm", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "topologySpreadConstraints", "0", "topologyKey"); got != "kubernetes.io/hostname" {
+		t.Fatalf("topologyKey = %q, want kubernetes.io/hostname", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "affinity", "podAntiAffinity", "preferredDuringSchedulingIgnoredDuringExecution", "0", "podAffinityTerm", "topologyKey"); got != "kubernetes.io/hostname" {
+		t.Fatalf("podAntiAffinity topologyKey = %q, want kubernetes.io/hostname", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "affinity", "nodeAffinity", "preferredDuringSchedulingIgnoredDuringExecution", "0", "preference", "matchExpressions", "0", "key"); got != "disk" {
+		t.Fatalf("nodeAffinity match key = %q, want disk", got)
 	}
 }
 

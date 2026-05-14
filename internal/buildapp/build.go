@@ -121,6 +121,7 @@ type appModel struct {
 	Arch                 string          `yaml:"arch"`
 	NodeSelector         map[string]any  `yaml:"node_selector"`
 	Tolerations          []any           `yaml:"tolerations"`
+	Scheduling           schedulingSpec  `yaml:"scheduling"`
 	Containers           []containerSpec `yaml:"containers"`
 }
 
@@ -141,6 +142,27 @@ type hostAliasSpec struct {
 	Hostnames []string `yaml:"hostnames"`
 }
 
+type schedulingSpec struct {
+	Arch         string           `yaml:"arch"`
+	NodeSelector map[string]any   `yaml:"node_selector"`
+	Tolerations  []any            `yaml:"tolerations"`
+	Affinity     map[string]any   `yaml:"affinity"`
+	Spread       spreadSpec       `yaml:"spread"`
+	AntiAffinity antiAffinitySpec `yaml:"anti_affinity"`
+}
+
+type spreadSpec struct {
+	By                string `yaml:"by"`
+	Topology          string `yaml:"topology"`
+	MaxSkew           int    `yaml:"max_skew"`
+	WhenUnsatisfiable string `yaml:"when_unsatisfiable"`
+}
+
+type antiAffinitySpec struct {
+	Self     string `yaml:"self"`
+	Topology string `yaml:"topology"`
+}
+
 type containerSpec struct {
 	Name                 string                    `yaml:"name"`
 	Image                string                    `yaml:"image"`
@@ -150,6 +172,7 @@ type containerSpec struct {
 	Ports                []portSpec                `yaml:"ports"`
 	Health               healthSpec                `yaml:"health"`
 	Probe                probeSpec                 `yaml:"probe"`
+	Probes               probesSpec                `yaml:"probes"`
 	SimpleInit           simpleInitSpec            `yaml:"simple_init"`
 	Startup              startupSpec               `yaml:"startup"`
 	EnableCgroupExporter bool                      `yaml:"enable_cgroup_exporter"`
@@ -178,7 +201,21 @@ type healthSpec struct {
 
 type httpHealthSpec struct {
 	Path pathValue `yaml:"path"`
-	Port int       `yaml:"port"`
+	Port intValue  `yaml:"port"`
+}
+
+type intValue int
+
+func (v *intValue) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.ScalarNode || strings.TrimSpace(value.Value) == "" {
+		return nil
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value.Value))
+	if err != nil {
+		return err
+	}
+	*v = intValue(parsed)
+	return nil
 }
 
 type pathValue struct {
@@ -208,10 +245,24 @@ func (p pathValue) For(probeType string) string {
 	return p.Scalar
 }
 
+func (p pathValue) Empty() bool {
+	return p.Scalar == "" && len(p.ByType) == 0
+}
+
 type probeSpec struct {
 	Live  healthSpec `yaml:"live"`
 	Ready healthSpec `yaml:"ready"`
 	Start healthSpec `yaml:"start"`
+}
+
+type probesSpec struct {
+	Preset string         `yaml:"preset"`
+	Port   intValue       `yaml:"port"`
+	Path   pathValue      `yaml:"path"`
+	HTTP   httpHealthSpec `yaml:"http"`
+	Live   healthSpec     `yaml:"live"`
+	Ready  healthSpec     `yaml:"ready"`
+	Start  healthSpec     `yaml:"start"`
 }
 
 type mtlsSpec struct {
@@ -1857,22 +1908,7 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 	if len(app.DNS) > 0 {
 		podSpec["hostAliases"] = renderHostAliases(app.DNS)
 	}
-	if app.Arch != "" {
-		podSpec["nodeSelector"] = map[string]any{"kubernetes.io/arch": app.Arch}
-	}
-	if len(app.NodeSelector) > 0 {
-		nodeSelector, _ := podSpec["nodeSelector"].(map[string]any)
-		if nodeSelector == nil {
-			nodeSelector = map[string]any{}
-			podSpec["nodeSelector"] = nodeSelector
-		}
-		for key, value := range app.NodeSelector {
-			nodeSelector[key] = value
-		}
-	}
-	if len(app.Tolerations) > 0 {
-		podSpec["tolerations"] = app.Tolerations
-	}
+	applyScheduling(podSpec, app)
 	if len(app.Tools) > 0 {
 		podSpec["initContainers"] = renderToolInitContainers(app.Tools)
 		podSpec["volumes"] = append(podSpec["volumes"].([]any), map[string]any{
@@ -1933,6 +1969,116 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 		"metadata":   metadata,
 		"spec":       spec,
 	}, nil
+}
+
+func applyScheduling(podSpec map[string]any, app appModel) {
+	nodeSelector := map[string]any{}
+	if app.Arch != "" {
+		nodeSelector["kubernetes.io/arch"] = app.Arch
+	}
+	for key, value := range app.NodeSelector {
+		nodeSelector[key] = value
+	}
+	if app.Scheduling.Arch != "" {
+		nodeSelector["kubernetes.io/arch"] = app.Scheduling.Arch
+	}
+	for key, value := range app.Scheduling.NodeSelector {
+		nodeSelector[key] = value
+	}
+	if len(nodeSelector) > 0 {
+		podSpec["nodeSelector"] = nodeSelector
+	}
+
+	if len(app.Tolerations) > 0 {
+		podSpec["tolerations"] = app.Tolerations
+	}
+	if len(app.Scheduling.Tolerations) > 0 {
+		podSpec["tolerations"] = app.Scheduling.Tolerations
+	}
+
+	affinity := cloneMap(app.Scheduling.Affinity)
+	if selfAntiAffinity := renderSelfAntiAffinity(app); selfAntiAffinity != nil {
+		podAntiAffinity, _ := affinity["podAntiAffinity"].(map[string]any)
+		if podAntiAffinity == nil {
+			podAntiAffinity = map[string]any{}
+			affinity["podAntiAffinity"] = podAntiAffinity
+		}
+		for key, value := range selfAntiAffinity {
+			podAntiAffinity[key] = value
+		}
+	}
+	if len(affinity) > 0 {
+		podSpec["affinity"] = affinity
+	}
+
+	if spread := renderTopologySpread(app); spread != nil {
+		podSpec["topologySpreadConstraints"] = []any{spread}
+	}
+}
+
+func renderSelfAntiAffinity(app appModel) map[string]any {
+	mode := strings.TrimSpace(app.Scheduling.AntiAffinity.Self)
+	if mode == "" {
+		return nil
+	}
+	topology := strings.TrimSpace(app.Scheduling.AntiAffinity.Topology)
+	if topology == "" {
+		topology = "kubernetes.io/hostname"
+	}
+	term := map[string]any{
+		"topologyKey": topology,
+		"labelSelector": map[string]any{
+			"matchLabels": map[string]any{appLabel: app.Name},
+		},
+	}
+	switch mode {
+	case "required":
+		return map[string]any{"requiredDuringSchedulingIgnoredDuringExecution": []any{term}}
+	default:
+		return map[string]any{"preferredDuringSchedulingIgnoredDuringExecution": []any{
+			map[string]any{"weight": 100, "podAffinityTerm": term},
+		}}
+	}
+}
+
+func renderTopologySpread(app appModel) map[string]any {
+	spread := app.Scheduling.Spread
+	if spread.By == "" && spread.Topology == "" {
+		return nil
+	}
+	topology := strings.TrimSpace(spread.Topology)
+	if topology == "" {
+		switch strings.TrimSpace(spread.By) {
+		case "zone":
+			topology = "topology.kubernetes.io/zone"
+		default:
+			topology = "kubernetes.io/hostname"
+		}
+	}
+	maxSkew := spread.MaxSkew
+	if maxSkew == 0 {
+		maxSkew = 1
+	}
+	whenUnsatisfiable := strings.TrimSpace(spread.WhenUnsatisfiable)
+	if whenUnsatisfiable == "" {
+		whenUnsatisfiable = "ScheduleAnyway"
+	}
+	return map[string]any{
+		"maxSkew":           maxSkew,
+		"topologyKey":       topology,
+		"whenUnsatisfiable": whenUnsatisfiable,
+		"labelSelector": map[string]any{
+			"matchLabels": map[string]any{appLabel: app.Name},
+		},
+	}
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func rolloutChecksumAnnotations(app appModel, envDir string) (map[string]string, error) {
@@ -2079,10 +2225,145 @@ func renderContainer(container containerSpec, assets []resolvedAsset, sharedAsse
 	if probe := renderHealth(container.Probe.Start, "live"); probe != nil {
 		out["startupProbe"] = probe
 	}
+	for key, probe := range renderProbes(container.Probes) {
+		out[key] = probe
+	}
 	for key, value := range container.Raw {
 		out[key] = value
 	}
 	return out
+}
+
+func renderProbes(probes probesSpec) map[string]any {
+	out := map[string]any{}
+	if isEmptyProbes(probes) {
+		return out
+	}
+
+	for _, item := range []struct {
+		key      string
+		kind     string
+		override healthSpec
+	}{
+		{key: "livenessProbe", kind: "live", override: probes.Live},
+		{key: "readinessProbe", kind: "ready", override: probes.Ready},
+		{key: "startupProbe", kind: "start", override: probes.Start},
+	} {
+		if probe := renderHealth(resolveProbeHealth(probes, item.kind, item.override), item.kind); probe != nil {
+			out[item.key] = probe
+		}
+	}
+	return out
+}
+
+func resolveProbeHealth(probes probesSpec, kind string, override healthSpec) healthSpec {
+	health := defaultProbeHealth(probes, kind)
+	baseHTTP := commonProbeHTTP(probes, kind)
+	if hasHTTPHealth(baseHTTP) {
+		health.HTTP = baseHTTP
+	}
+
+	if len(override.Command) > 0 {
+		health.Command = override.Command
+		health.HTTP = httpHealthSpec{}
+	}
+	if hasHTTPHealth(override.HTTP) {
+		if override.HTTP.Port != 0 {
+			health.HTTP.Port = override.HTTP.Port
+		}
+		if !override.HTTP.Path.Empty() {
+			health.HTTP.Path = override.HTTP.Path
+		}
+		health.Command = nil
+	}
+	if override.Delay != nil {
+		health.Delay = override.Delay
+	}
+	if override.Period != nil {
+		health.Period = override.Period
+	}
+	if override.Timeout != nil {
+		health.Timeout = override.Timeout
+	}
+	if override.Success != nil {
+		health.Success = override.Success
+	}
+	if override.Failure != nil {
+		health.Failure = override.Failure
+	}
+	return health
+}
+
+func defaultProbeHealth(probes probesSpec, kind string) healthSpec {
+	preset := strings.TrimSpace(probes.Preset)
+	if preset == "" {
+		return healthSpec{}
+	}
+
+	switch kind {
+	case "live":
+		return healthSpec{Period: intPtr(10), Timeout: intPtr(2), Success: intPtr(1), Failure: intPtr(5)}
+	case "ready":
+		return healthSpec{Period: intPtr(2), Timeout: intPtr(2), Success: intPtr(2), Failure: intPtr(2)}
+	case "start":
+		return healthSpec{Period: intPtr(10), Timeout: intPtr(2), Failure: intPtr(30)}
+	default:
+		return healthSpec{}
+	}
+}
+
+func commonProbeHTTP(probes probesSpec, kind string) httpHealthSpec {
+	http := probes.HTTP
+	if http.Port == 0 {
+		http.Port = probes.Port
+	}
+	if http.Path.Empty() {
+		http.Path = probes.Path
+	}
+
+	if strings.TrimSpace(probes.Preset) == "spring-actuator" && http.Path.Empty() {
+		switch kind {
+		case "live":
+			http.Path = scalarPath("/actuator/health/liveness")
+		case "ready":
+			http.Path = scalarPath("/actuator/health/readiness")
+		case "start":
+			http.Path = scalarPath("/actuator/health")
+		}
+	}
+	return http
+}
+
+func isEmptyProbes(probes probesSpec) bool {
+	return strings.TrimSpace(probes.Preset) == "" &&
+		probes.Port == 0 &&
+		probes.Path.Empty() &&
+		!hasHTTPHealth(probes.HTTP) &&
+		isEmptyHealth(probes.Live) &&
+		isEmptyHealth(probes.Ready) &&
+		isEmptyHealth(probes.Start)
+}
+
+func isEmptyHealth(health healthSpec) bool {
+	return !hasHTTPHealth(health.HTTP) &&
+		len(health.Command) == 0 &&
+		health.Delay == nil &&
+		health.Period == nil &&
+		health.Timeout == nil &&
+		health.Success == nil &&
+		health.Failure == nil
+}
+
+func hasHTTPHealth(http httpHealthSpec) bool {
+	return http.Port != 0 || !http.Path.Empty()
+}
+
+func scalarPath(value string) pathValue {
+	return pathValue{Scalar: value}
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 func renderHealth(health healthSpec, probeType string) map[string]any {
@@ -2090,7 +2371,7 @@ func renderHealth(health healthSpec, probeType string) map[string]any {
 	if health.HTTP.Port != 0 || health.HTTP.Path.For(probeType) != "" {
 		out["httpGet"] = map[string]any{
 			"path": health.HTTP.Path.For(probeType),
-			"port": health.HTTP.Port,
+			"port": int(health.HTTP.Port),
 		}
 	} else if len(health.Command) > 0 {
 		out["exec"] = map[string]any{

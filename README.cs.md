@@ -13,6 +13,19 @@ kube-edit-app  = webový editor environment repozitářů
 
 `kube-edit-app` je cílový Go přepis Rust aplikace `kube-environments-ui`. Viz `docs/KUBE_EDIT_APP_PLAN.md`.
 
+## Cíl Metamodelu
+
+`kube-build-app` není Helm. App model záměrně používá pravidlo 80/20:
+
+```text
+80 % běžných deployment potřeb = jasná first-class pole metamodelu
+20 % speciálních Kubernetes případů = explicitní raw escape hatch
+```
+
+Preferujte dedikovaná modelová pole, pokud existují, protože se dají validovat, sumarizovat a editovat přes `kube-edit-app`. `raw:` používejte jen pro Kubernetes pole, která jsou příliš speciální nebo vzácná pro běžný model.
+
+Dlouhodobý plán metamodelu je v `docs/KUBE_BUILD_APP_METAMODEL_PLAN.md`.
+
 ## Rychlý Start
 
 Minimální struktura repozitáře:
@@ -399,9 +412,72 @@ spec:
 
 Externí vystavení se přidává pod `expose_as[].external` a podle modelu generuje Ingress nebo OpenShift Route.
 
-### 6. Health Probes
+### 6. Probes
 
-Přidejte:
+Preferovaný moderní zápis:
+
+```yaml
+containers:
+  - name: api
+    image: api:latest
+    probes:
+      preset: spring-actuator
+      port: 8080
+```
+
+Vygeneruje:
+
+```text
+livenessProbe  -> /actuator/health/liveness
+readinessProbe -> /actuator/health/readiness
+startupProbe   -> /actuator/health
+```
+
+Obecný HTTP zápis:
+
+```yaml
+probes:
+  preset: http
+  port: 8080
+  path: /healthz
+```
+
+Zápis s override:
+
+```yaml
+probes:
+  http:
+    path: /actuator/health
+    port: 8080
+  live:
+    period: 10
+    timeout: 2
+    failure: 5
+  ready:
+    period: 2
+    timeout: 2
+    success: 2
+    failure: 2
+  start:
+    period: 10
+    timeout: 2
+    failure: 30
+```
+
+Exec probes:
+
+```yaml
+probes:
+  live:
+    command: ["/bin/sh", "/app/liveness.sh"]
+  ready:
+    command: ["/bin/sh", "/app/liveness.sh"]
+  start:
+    command: ["/bin/sh", "/app/liveness.sh"]
+    failure: 30
+```
+
+Legacy bloky `health` a `probe` zůstávají podporované kvůli zpětné kompatibilitě:
 
 ```yaml
 containers:
@@ -415,7 +491,7 @@ containers:
         port: 8080
 ```
 
-Výsledný deployment obsahuje liveness a readiness probes.
+`health` generuje jen liveness/readiness. `probe` umí liveness/readiness/startup, ale je ukecanější. Nové soubory by měly preferovat `probes`.
 
 ### 7. Assets
 
@@ -518,6 +594,44 @@ tolerations:
 ```
 
 Renderují se do deployment metadata a pod template.
+
+Preferovaný moderní zápis pro scheduling:
+
+```yaml
+scheduling:
+  arch: amd64
+  node_selector:
+    node-role.kubernetes.io/worker: ""
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: tsm
+      effect: NoSchedule
+  spread:
+    by: hostname
+    max_skew: 1
+    when_unsatisfiable: ScheduleAnyway
+  anti_affinity:
+    self: preferred
+    topology: kubernetes.io/hostname
+```
+
+Pro vzácné Kubernetes scheduling případy použijte raw affinity pod `scheduling.affinity`:
+
+```yaml
+scheduling:
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 10
+          preference:
+            matchExpressions:
+              - key: disk
+                operator: In
+                values: [ssd]
+```
+
+Legacy `arch`, `node_selector` a `tolerations` zůstávají podporované. Nové soubory by měly preferovat `scheduling`.
 
 ### 11. Raw Container Fields
 

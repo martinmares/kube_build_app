@@ -13,6 +13,19 @@ kube-edit-app  = web editor for environment repositories
 
 `kube-edit-app` is the Go rewrite target for the Rust `kube-environments-ui` web application. See `docs/KUBE_EDIT_APP_PLAN.md`.
 
+## Metamodel Goal
+
+`kube-build-app` is not Helm. The app model intentionally follows an 80/20 rule:
+
+```text
+80 % of common deployment needs = clear first-class metamodel fields
+20 % of special Kubernetes cases = explicit raw escape hatches
+```
+
+Prefer dedicated model fields when they exist, because they can be validated, summarized and edited by `kube-edit-app`. Use `raw:` only for Kubernetes fields that are too rare or too specific for the common model.
+
+The long-term metamodel plan is tracked in `docs/KUBE_BUILD_APP_METAMODEL_PLAN.md`.
+
 ## Quick Start
 
 Minimal repository layout:
@@ -399,9 +412,72 @@ spec:
 
 External exposure can be attached under `expose_as[].external` and generates Ingress or OpenShift Route according to the model.
 
-### 6. Health Probes
+### 6. Probes
 
-Add:
+Preferred modern form:
+
+```yaml
+containers:
+  - name: api
+    image: api:latest
+    probes:
+      preset: spring-actuator
+      port: 8080
+```
+
+This generates:
+
+```text
+livenessProbe  -> /actuator/health/liveness
+readinessProbe -> /actuator/health/readiness
+startupProbe   -> /actuator/health
+```
+
+Generic HTTP form:
+
+```yaml
+probes:
+  preset: http
+  port: 8080
+  path: /healthz
+```
+
+Override form:
+
+```yaml
+probes:
+  http:
+    path: /actuator/health
+    port: 8080
+  live:
+    period: 10
+    timeout: 2
+    failure: 5
+  ready:
+    period: 2
+    timeout: 2
+    success: 2
+    failure: 2
+  start:
+    period: 10
+    timeout: 2
+    failure: 30
+```
+
+Exec probes:
+
+```yaml
+probes:
+  live:
+    command: ["/bin/sh", "/app/liveness.sh"]
+  ready:
+    command: ["/bin/sh", "/app/liveness.sh"]
+  start:
+    command: ["/bin/sh", "/app/liveness.sh"]
+    failure: 30
+```
+
+Legacy `health` and `probe` blocks remain supported for backward compatibility:
 
 ```yaml
 containers:
@@ -415,7 +491,7 @@ containers:
         port: 8080
 ```
 
-Generated deployment contains liveness and readiness probes.
+`health` generates liveness/readiness only. `probe` can generate liveness/readiness/startup but is more verbose. New files should prefer `probes`.
 
 ### 7. Assets
 
@@ -518,6 +594,44 @@ tolerations:
 ```
 
 These are rendered into deployment metadata and pod template fields.
+
+Preferred modern scheduling form:
+
+```yaml
+scheduling:
+  arch: amd64
+  node_selector:
+    node-role.kubernetes.io/worker: ""
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: tsm
+      effect: NoSchedule
+  spread:
+    by: hostname
+    max_skew: 1
+    when_unsatisfiable: ScheduleAnyway
+  anti_affinity:
+    self: preferred
+    topology: kubernetes.io/hostname
+```
+
+For rare Kubernetes scheduling cases, use raw affinity under `scheduling.affinity`:
+
+```yaml
+scheduling:
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 10
+          preference:
+            matchExpressions:
+              - key: disk
+                operator: In
+                values: [ssd]
+```
+
+Legacy `arch`, `node_selector` and `tolerations` remain supported. New files should prefer `scheduling`.
 
 ### 11. Raw Container Fields
 
