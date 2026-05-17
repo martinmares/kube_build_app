@@ -99,7 +99,17 @@ async function loadApps() {
 }
 function renderApps() {
   const body = qs('#apps-table tbody');
-  body.innerHTML = state.apps.map((a) => `<tr class="row-link ${state.appFile === a.file_name ? 'selected-row' : ''}" data-app="${esc(a.file_name)}"><td class="font-monospace">${esc(a.file_name)}</td><td>${esc(a.app_name || '-')}</td><td class="text-end">${a.replicas ?? '-'}</td><td class="text-end">${a.containers_count ?? 0}</td></tr>`).join('') || '<tr><td colspan="4" class="text-muted">No apps.</td></tr>';
+  body.innerHTML = state.apps.map((a) => `
+    <tr class="row-link ${state.appFile === a.file_name ? 'selected-row' : ''}" data-app="${esc(a.file_name)}">
+      <td>
+        <div class="fw-semibold app-list-name">${esc(a.app_name || a.file_name)}</div>
+        <div class="text-muted small font-monospace text-break">${esc(a.file_name)}</div>
+      </td>
+      <td class="text-end">
+        <div class="badge bg-blue-lt" title="replicas">${a.replicas ?? '-'}</div>
+        <div class="text-muted small mt-1">${a.containers_count ?? 0} ctr</div>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="2" class="text-muted">No apps.</td></tr>';
   qsa('[data-app]').forEach((x) => x.addEventListener('click', () => selectApp(x.dataset.app)));
 }
 async function selectApp(file) {
@@ -111,13 +121,85 @@ async function selectApp(file) {
       api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(file)}/vars`),
       api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(file)}/model`),
     ]);
-    setText('#app-detail-title', detail.summary?.app_name || detail.file_name);
+    setText('#app-detail-title', model.app_name || detail.summary?.app_name || detail.file_name);
     setText('#app-detail-path', detail.path);
     setText('#app-detail-meta', `${model.containers?.length || 0} container(s), ${vars.items?.length || 0} local variable(s)`);
+    renderAppOverview(model);
     setText('#app-raw', detail.content);
     setText('#app-rendered', rendered.content);
     qs('#app-vars').innerHTML = (vars.items || []).map((v) => `<tr><td class="font-monospace">${esc(v.name)}</td><td class="font-monospace text-break">${esc(v.value)}</td></tr>`).join('') || '<tr><td colspan="2" class="text-muted">No local variables.</td></tr>';
   } catch (e) { showError(e); }
+}
+function renderAppOverview(model) {
+  const host = qs('#app-overview');
+  if (!host) return;
+  const autoscaling = model.autoscaling || {};
+  const appFacts = [
+    fact('Kind', model.kind || 'Deployment', 'ti-cube'),
+    fact('Replicas', model.replicas ?? '-', 'ti-copy'),
+    fact('Containers', (model.containers || []).length, 'ti-box'),
+    fact('Init containers', model.init_containers_count || 0, 'ti-player-skip-forward'),
+    fact('Autoscaling', autoscaling.enabled ? `HPA ${autoscaling.min_replicas ?? '?'}-${autoscaling.max_replicas ?? '?'}` : 'off', autoscaling.enabled ? 'ti-arrows-maximize' : 'ti-arrows-minimize'),
+  ];
+  const autoscalingMetrics = autoscaling.enabled ? `
+    <div class="overview-section">
+      <div class="overview-title"><i class="ti ti-arrows-maximize me-1"></i>Autoscaling</div>
+      <div class="chip-row">
+        ${chip('min', autoscaling.min_replicas ?? '-')}
+        ${chip('max', autoscaling.max_replicas ?? '-')}
+        ${chip('cpu avg', autoscaling.cpu_average_utilization ? `${autoscaling.cpu_average_utilization}%` : '-')}
+        ${chip('memory avg', autoscaling.memory_average_utilization ? `${autoscaling.memory_average_utilization}%` : '-')}
+      </div>
+    </div>` : '';
+  const containers = (model.containers || []).map((container) => renderContainerOverview(container)).join('');
+  host.innerHTML = `
+    <div class="overview-grid">${appFacts.join('')}</div>
+    ${autoscalingMetrics}
+    <div class="overview-section">
+      <div class="overview-title"><i class="ti ti-box me-1"></i>Containers</div>
+      <div class="container-stack">${containers || '<div class="text-muted">No containers.</div>'}</div>
+    </div>`;
+}
+function renderContainerOverview(container) {
+  const resources = container.resources || {};
+  const java = container.runtime?.java || {};
+  const probes = container.probes || {};
+  const ports = container.ports || [];
+  const envVars = container.env_vars || [];
+  const javaBlock = java.enabled ? `
+    <div class="chip-row">
+      ${chip('JVM Xms', java.xms || '-')}
+      ${chip('JVM Xmx', java.xmx || '-')}
+      ${chip('export', java.export_env_name || 'JAVA_OPTS')}
+      ${java.opts?.length ? chip('opts', java.opts.length) : ''}
+    </div>` : '<div class="text-muted small">Java runtime not configured.</div>';
+  const probeText = probes.enabled ? [probes.preset && `preset ${probes.preset}`, probes.port && `port ${probes.port}`, probes.path && `path ${probes.path}`, probes.legacy && 'legacy'].filter(Boolean).join(', ') : 'not configured';
+  return `
+    <div class="container-card">
+      <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
+        <div>
+          <div class="fw-semibold font-monospace">${esc(container.name || `container-${container.index}`)}</div>
+          <div class="text-muted small">${envVars.length} env var(s), ${container.env_from_count || 0} env_from, ${container.mounts_count || 0} mount(s), ${ports.length} port(s)</div>
+        </div>
+        <span class="badge bg-blue-lt">#${container.index + 1}</span>
+      </div>
+      <div class="row g-2">
+        <div class="col-12 col-xl-4"><div class="overview-subtitle">Resources</div><div class="chip-row">
+          ${chip('CPU req', resources.cpu_request || '-')}
+          ${chip('CPU lim', resources.cpu_limit || '-')}
+          ${chip('Mem req', resources.memory_request || '-')}
+          ${chip('Mem lim', resources.memory_limit || '-')}
+        </div></div>
+        <div class="col-12 col-xl-4"><div class="overview-subtitle">Java runtime</div>${javaBlock}</div>
+        <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div><div class="text-muted small">${esc(probeText)}</div></div>
+      </div>
+    </div>`;
+}
+function fact(label, value, icon) {
+  return `<div class="overview-fact"><div class="text-muted small"><i class="ti ${icon} me-1"></i>${esc(label)}</div><div class="fw-semibold">${esc(value)}</div></div>`;
+}
+function chip(label, value) {
+  return `<span class="model-chip"><span>${esc(label)}</span><strong>${esc(value)}</strong></span>`;
 }
 async function loadAssets() {
   if (!state.env) return;
@@ -206,7 +288,9 @@ function renderBuildSummary(summary) {
       <td class="text-end">${esc(item.cpu_limit)}</td>
       <td class="text-end">${esc(item.memory_request)}</td>
       <td class="text-end">${esc(item.memory_limit)}</td>
-    </tr>`).join('') || '<tr><td colspan="7" class="text-muted">No summary items.</td></tr>';
+      <td class="text-end">${esc(item.java_xms)}</td>
+      <td class="text-end">${esc(item.java_xmx)}</td>
+    </tr>`).join('') || '<tr><td colspan="9" class="text-muted">No summary items.</td></tr>';
   qs('#build-summary-table tfoot').innerHTML = items.length ? `
     <tr class="fw-bold">
       <td colspan="2">Total</td>
@@ -215,6 +299,8 @@ function renderBuildSummary(summary) {
       <td class="text-end">${fmt(totals.cpu_limit_cores)} cores</td>
       <td class="text-end">${fmt(totals.memory_request_mib)} MiB</td>
       <td class="text-end">${fmt(totals.memory_limit_mib)} MiB</td>
+      <td class="text-end">-</td>
+      <td class="text-end">-</td>
     </tr>` : '';
 }
 function renderInventory() {
