@@ -34,6 +34,7 @@ async function init() {
   setupTheme();
   qsa('[data-nav]').forEach((x) => x.addEventListener('click', (e) => { e.preventDefault(); if (x.dataset.nav !== 'dashboard' && !state.env) return showError('Select environment first.'); setActive(x.dataset.nav); }));
   qs('#refresh-btn')?.addEventListener('click', () => loadAll());
+  qs('#apps-filter')?.addEventListener('input', () => renderApps());
   qs('#build-validate-btn')?.addEventListener('click', () => runBuildValidate());
   qs('#build-refresh-btn')?.addEventListener('click', () => loadBuildData());
   qs('#inventory-filter')?.addEventListener('input', () => renderInventory());
@@ -99,7 +100,12 @@ async function loadApps() {
 }
 function renderApps() {
   const body = qs('#apps-table tbody');
-  body.innerHTML = state.apps.map((a) => `
+  const query = (qs('#apps-filter')?.value || '').trim().toLowerCase();
+  const apps = state.apps.filter((a) => {
+    if (!query) return true;
+    return [a.app_name, a.file_name, a.replicas, a.containers_count].some((value) => String(value ?? '').toLowerCase().includes(query));
+  });
+  body.innerHTML = apps.map((a) => `
     <tr class="row-link ${state.appFile === a.file_name ? 'selected-row' : ''}" data-app="${esc(a.file_name)}">
       <td>
         <div class="fw-semibold app-list-name">${esc(a.app_name || a.file_name)}</div>
