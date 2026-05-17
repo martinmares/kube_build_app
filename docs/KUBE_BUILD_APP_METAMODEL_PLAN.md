@@ -368,7 +368,7 @@ init_containers:
 Supported fields intentionally mirror the common subset of regular containers:
 
 ```text
-name, image, command, arguments, env_vars, env_from, mounts, security_context, resources, raw
+name, image, command, arguments, env_vars, env_from, mounts, security_context, resources, runtime.java, raw
 ```
 
 ## Resources Direction
@@ -397,6 +397,32 @@ resources:
 ```
 
 If both forms are present for the same resource, `requests` / `limits` win.
+
+## Java Runtime Direction
+
+Java is the only runtime with a currently standardized metamodel shortcut. The goal is to make JVM heap sizing visible next to Kubernetes `resources`, especially in `kube-build-app summary`.
+
+```yaml
+containers:
+  - name: api
+    runtime:
+      java:
+        xms: "512m"
+        xmx: "2048m"
+        opts:
+          - "-XX:+UseG1GC"
+        export:
+          env_name: JAVA_OPTS
+```
+
+Contract:
+
+- `runtime.java.xms` renders as `-Xms...`.
+- `runtime.java.xmx` renders as `-Xmx...`.
+- `runtime.java.opts` is appended after `xms` and `xmx`.
+- `runtime.java.export.env_name` defaults to `JAVA_OPTS`.
+- A manual `env_vars` item with the same name is a validation error.
+- Other runtimes are intentionally left to `env_vars` and `raw` until a repeated real pattern appears.
 
 ## Raw Escape Hatch Direction
 
@@ -444,6 +470,7 @@ Priority order and current status:
 9. more general `init_containers` - done
 10. pod/deployment/container `raw` escape hatches - done
 11. optional HPA support - done
+12. Java runtime options - done
 
 ## Autoscaling / HPA Direction
 
@@ -495,3 +522,4 @@ Contract:
 12. Add `resources.requests/limits` aliases while keeping `from/to`.
 13. Add explicit `deployment_raw` and `pod_raw` escape hatches.
 14. Add `autoscaling` and generate `HorizontalPodAutoscaler`.
+15. Add narrow `runtime.java` support for JVM heap/options.

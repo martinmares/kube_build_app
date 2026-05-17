@@ -486,6 +486,41 @@ env:
         fieldPath: metadata.name
 ```
 
+#### Java Runtime Options
+
+For Java containers, prefer `runtime.java` for well-known JVM memory options instead of hand-writing `JAVA_OPTS`:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    runtime:
+      java:
+        xms: "512m"
+        xmx: "2048m"
+        opts:
+          - "-XX:+UseG1GC"
+        export:
+          env_name: JAVA_OPTS
+    resources:
+      cpu:
+        requests: "100m"
+        limits: "1000m"
+      memory:
+        requests: "1024Mi"
+        limits: "2560Mi"
+```
+
+Generated deployment contains:
+
+```yaml
+env:
+  - name: JAVA_OPTS
+    value: "-Xms512m -Xmx2048m -XX:+UseG1GC"
+```
+
+`export.env_name` defaults to `JAVA_OPTS`. If the same variable is also specified manually in `env_vars`, validation fails. This keeps JVM heap sizing visible in `kube-build-app summary` and avoids hidden conflicts with startup scripts.
+
 ### 5. Ports and Services
 
 Add a container port:

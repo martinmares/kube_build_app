@@ -1023,6 +1023,59 @@ containers:
 	}
 }
 
+func TestBuildGeneratesJavaRuntimeEnv(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 2
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    runtime:
+      java:
+        xms: "512m"
+        xmx: "1536m"
+        opts:
+          - "-XX:+UseG1GC"
+        export:
+          env_name: APP_JAVA_OPTS
+    resources:
+      cpu: {requests: "250m", limits: "1"}
+      memory: {requests: "512Mi", limits: "2048Mi"}
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	env := digSlice(deployment, "spec", "template", "spec", "containers", "0", "env")
+	if got := envValue(env, "APP_JAVA_OPTS"); got != "-Xms512m -Xmx1536m -XX:+UseG1GC" {
+		t.Fatalf("APP_JAVA_OPTS = %q, want composed JVM opts", got)
+	}
+
+	summary, err := ResourceSummary(Options{Environment: "test", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := summary.Items[0].JavaXms; got != "512m" {
+		t.Fatalf("summary java_xms = %q, want 512m", got)
+	}
+	if got := summary.Items[0].JavaXmx; got != "1536m" {
+		t.Fatalf("summary java_xmx = %q, want 1536m", got)
+	}
+}
+
 func TestBuildAppliesDeploymentAndPodRaw(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
@@ -1435,6 +1488,43 @@ containers:
 		t.Fatal("expected autoscaling validation error")
 	}
 	if !strings.Contains(err.Error(), "autoscaling.max_replicas") {
+		t.Fatalf("validation error = %v", err)
+	}
+}
+
+func TestValidateRejectsJavaRuntimeEnvConflict(t *testing.T) {
+	root := t.TempDir()
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "invalid.yml"), `
+name: invalid
+replicas: 1
+containers:
+  - name: invalid
+    image: "{{TSM_REGISTRY_URL}}/invalid:{{TSM_RELEASE_ID}}"
+    runtime:
+      java:
+        xms: "512m"
+        xmx: "1024m"
+    env_vars:
+      - name: JAVA_OPTS
+        value: "-Xmx256m"
+    resources:
+      cpu: {requests: "100m", limits: "500m"}
+      memory: {requests: "128Mi", limits: "512Mi"}
+`)
+
+	err := Validate(Options{Environment: "test", Root: root})
+	if err == nil {
+		t.Fatal("expected java runtime env conflict validation error")
+	}
+	if !strings.Contains(err.Error(), `env "JAVA_OPTS"`) {
 		t.Fatalf("validation error = %v", err)
 	}
 }
@@ -1917,8 +2007,8 @@ containers:
 	text := FormatResourceSummaryText(summary)
 	for _, expected := range []string{
 		"Resource summary for environment: test",
-		"+-----+-----+-----------+---------+---------+---------+---------+------------+------------+------------+------------+",
-		"| api |   3 | api       | 250m    | 1       | 128Mi   | 512Mi   |      0.750 |      3.000 |    384.0Mi |   1536.0Mi |",
+		"+-----+-----+-----------+---------+---------+---------+---------+---------+---------+------------+------------+------------+------------+",
+		"| api |   3 | api       | 250m    | 1       | 128Mi   | 512Mi   | -       | -       |      0.750 |      3.000 |    384.0Mi |   1536.0Mi |",
 		"cpu req:    0.750 cores",
 		"mem lim:    1536.0Mi",
 	} {

@@ -70,6 +70,8 @@ type ResourceSummaryItem struct {
 	CPULimit              string  `json:"cpu_limit"`
 	MemoryRequest         string  `json:"memory_request"`
 	MemoryLimit           string  `json:"memory_limit"`
+	JavaXms               string  `json:"java_xms"`
+	JavaXmx               string  `json:"java_xmx"`
 	CPURequestCores       float64 `json:"cpu_request_cores"`
 	CPULimitCores         float64 `json:"cpu_limit_cores"`
 	MemoryRequestMiB      float64 `json:"memory_request_mib"`
@@ -200,9 +202,25 @@ type containerSpec struct {
 	Startup              startupSpec               `yaml:"startup"`
 	EnableCgroupExporter bool                      `yaml:"enable_cgroup_exporter"`
 	Resources            map[string]map[string]any `yaml:"resources"`
+	Runtime              runtimeSpec               `yaml:"runtime"`
 	SecurityContext      map[string]any            `yaml:"security_context"`
 	EnvFrom              []envFromSpec             `yaml:"env_from"`
 	Raw                  map[string]any            `yaml:"raw"`
+}
+
+type runtimeSpec struct {
+	Java javaRuntimeSpec `yaml:"java"`
+}
+
+type javaRuntimeSpec struct {
+	Xms    string                `yaml:"xms"`
+	Xmx    string                `yaml:"xmx"`
+	Opts   []string              `yaml:"opts"`
+	Export javaRuntimeExportSpec `yaml:"export"`
+}
+
+type javaRuntimeExportSpec struct {
+	EnvName string `yaml:"env_name"`
 }
 
 type initContainerSpec struct {
@@ -688,7 +706,7 @@ func Inventory(opts Options) (map[string]any, error) {
 			return nil, err
 		}
 		for _, container := range app.Containers {
-			items = append(items, map[string]any{
+			item := map[string]any{
 				"env":                    opts.Environment,
 				"app":                    app.Name,
 				"app_kind":               app.Kind,
@@ -706,7 +724,18 @@ func Inventory(opts Options) (map[string]any, error) {
 					"mount_target": mtlsMountDir(container),
 					"files":        []string{"tls.crt", "tls.key", "ca.crt"},
 				},
-			})
+			}
+			if javaRuntimeEnabled(container.Runtime.Java) {
+				item["runtime"] = map[string]any{
+					"java": map[string]any{
+						"xms":             container.Runtime.Java.Xms,
+						"xmx":             container.Runtime.Java.Xmx,
+						"opts":            container.Runtime.Java.Opts,
+						"export_env_name": javaRuntimeEnvName(container.Runtime.Java),
+					},
+				}
+			}
+			items = append(items, item)
 		}
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -811,6 +840,8 @@ func ResourceSummary(opts Options) (ResourceSummaryData, error) {
 				CPULimit:              emptyDash(cpuLimitRaw),
 				MemoryRequest:         emptyDash(memRequestRaw),
 				MemoryLimit:           emptyDash(memLimitRaw),
+				JavaXms:               emptyDash(container.Runtime.Java.Xms),
+				JavaXmx:               emptyDash(container.Runtime.Java.Xmx),
 				CPURequestCores:       cpuRequest,
 				CPULimitCores:         cpuLimit,
 				MemoryRequestMiB:      memRequest,
@@ -834,6 +865,8 @@ func FormatResourceSummaryText(summary ResourceSummaryData) string {
 		"CPU lim",
 		"Mem req",
 		"Mem lim",
+		"JVM Xms",
+		"JVM Xmx",
 		"CPU req xR",
 		"CPU lim xR",
 		"Mem req xR",
@@ -848,13 +881,15 @@ func FormatResourceSummaryText(summary ResourceSummaryData) string {
 			item.CPULimit,
 			item.MemoryRequest,
 			item.MemoryLimit,
+			item.JavaXms,
+			item.JavaXmx,
 			formatCPU(item.TotalCPURequestCores),
 			formatCPU(item.TotalCPULimitCores),
 			formatMiB(item.TotalMemoryRequestMiB),
 			formatMiB(item.TotalMemoryLimitMiB),
 		})
 	}
-	table := renderASCIITable(rows, map[int]bool{1: true, 7: true, 8: true, 9: true, 10: true})
+	table := renderASCIITable(rows, map[int]bool{1: true, 9: true, 10: true, 11: true, 12: true})
 	var out strings.Builder
 	fmt.Fprintf(&out, "Resource summary for environment: %s\n\n", summary.Environment)
 	out.WriteString(table)
@@ -1319,6 +1354,12 @@ func validateApps(apps []appModel) error {
 			}
 		}
 		for _, container := range app.Containers {
+			if javaRuntimeEnabled(container.Runtime.Java) {
+				envName := javaRuntimeEnvName(container.Runtime.Java)
+				if containerHasEnvVar(container.EnvVars, envName) {
+					return fmt.Errorf("%s: container %q defines runtime.java export env %q and env_vars with the same name", app.Name, container.Name, envName)
+				}
+			}
 			if !container.SimpleInit.Enabled {
 				continue
 			}
@@ -1344,6 +1385,15 @@ func autoscalingHasRawMetrics(autoscaling autoscalingSpec) bool {
 	}
 	metrics, ok := spec["metrics"].([]any)
 	return ok && len(metrics) > 0
+}
+
+func containerHasEnvVar(items []envVar, name string) bool {
+	for _, item := range items {
+		if item.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func applyReplicaProfile(apps []appModel, envDir string, opts Options) error {
@@ -3442,6 +3492,9 @@ func effectiveContainerEnvVars(container containerSpec) []envVar {
 	if container.EnableCgroupExporter {
 		items = append(items, cgroupExporterDefaultEnvVars...)
 	}
+	if item, ok := renderJavaRuntimeEnvVar(container.Runtime.Java); ok {
+		items = append(items, item)
+	}
 	items = append(items, container.EnvVars...)
 	if len(items) == 0 {
 		return nil
@@ -3460,6 +3513,44 @@ func effectiveContainerEnvVars(container containerSpec) []envVar {
 		out = append(out, item)
 	}
 	return out
+}
+
+func renderJavaRuntimeEnvVar(java javaRuntimeSpec) (envVar, bool) {
+	if !javaRuntimeEnabled(java) {
+		return envVar{}, false
+	}
+	parts := []string{}
+	if strings.TrimSpace(java.Xms) != "" {
+		parts = append(parts, "-Xms"+strings.TrimSpace(java.Xms))
+	}
+	if strings.TrimSpace(java.Xmx) != "" {
+		parts = append(parts, "-Xmx"+strings.TrimSpace(java.Xmx))
+	}
+	for _, opt := range java.Opts {
+		if strings.TrimSpace(opt) != "" {
+			parts = append(parts, strings.TrimSpace(opt))
+		}
+	}
+	return envVar{Name: javaRuntimeEnvName(java), Value: strings.Join(parts, " ")}, true
+}
+
+func javaRuntimeEnabled(java javaRuntimeSpec) bool {
+	if strings.TrimSpace(java.Xms) != "" || strings.TrimSpace(java.Xmx) != "" {
+		return true
+	}
+	for _, opt := range java.Opts {
+		if strings.TrimSpace(opt) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func javaRuntimeEnvName(java javaRuntimeSpec) string {
+	if strings.TrimSpace(java.Export.EnvName) != "" {
+		return strings.TrimSpace(java.Export.EnvName)
+	}
+	return "JAVA_OPTS"
 }
 
 func renderToolInitContainers(tools []toolSpec) []map[string]any {
