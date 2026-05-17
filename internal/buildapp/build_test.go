@@ -720,6 +720,252 @@ containers:
 	}
 }
 
+func TestBuildGeneratesPodAndContainerSecurityContext(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+security_context:
+  runAsNonRoot: true
+  fsGroup: 2000
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    security_context:
+      allowPrivilegeEscalation: false
+      runAsUser: 1000
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digBool(deployment, "spec", "template", "spec", "securityContext", "runAsNonRoot"); !got {
+		t.Fatalf("pod runAsNonRoot = false, want true")
+	}
+	if got := digInt(deployment, "spec", "template", "spec", "securityContext", "fsGroup"); got != 2000 {
+		t.Fatalf("pod fsGroup = %d, want 2000", got)
+	}
+	if got := digBool(deployment, "spec", "template", "spec", "containers", "0", "securityContext", "allowPrivilegeEscalation"); got {
+		t.Fatalf("container allowPrivilegeEscalation = true, want false")
+	}
+	if got := digInt(deployment, "spec", "template", "spec", "containers", "0", "securityContext", "runAsUser"); got != 1000 {
+		t.Fatalf("container runAsUser = %d, want 1000", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "securityContext", "capabilities", "drop", "0"); got != "ALL" {
+		t.Fatalf("container dropped capability = %q, want ALL", got)
+	}
+}
+
+func TestBuildGeneratesLifecyclePreStopAndTerminationGrace(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+termination_grace_period: 45
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    lifecycle:
+      pre_stop:
+        command: ["/bin/sh", "-c", "sleep 10"]
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digInt(deployment, "spec", "template", "spec", "terminationGracePeriodSeconds"); got != 45 {
+		t.Fatalf("terminationGracePeriodSeconds = %d, want 45", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "lifecycle", "preStop", "exec", "command", "2"); got != "sleep 10" {
+		t.Fatalf("preStop command[2] = %q, want sleep 10", got)
+	}
+}
+
+func TestBuildGeneratesServiceAccountAndEnvFrom(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+service_account: tsm-api
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    env_from:
+      - config_map: api-config
+      - secret: api-secret
+        prefix: SECRET_
+      - secretRef:
+          name: optional-secret
+          optional: true
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "serviceAccountName"); got != "tsm-api" {
+		t.Fatalf("serviceAccountName = %q, want tsm-api", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "envFrom", "0", "configMapRef", "name"); got != "api-config" {
+		t.Fatalf("envFrom[0].configMapRef.name = %q, want api-config", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "envFrom", "1", "secretRef", "name"); got != "api-secret" {
+		t.Fatalf("envFrom[1].secretRef.name = %q, want api-secret", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "envFrom", "1", "prefix"); got != "SECRET_" {
+		t.Fatalf("envFrom[1].prefix = %q, want SECRET_", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "envFrom", "2", "secretRef", "name"); got != "optional-secret" {
+		t.Fatalf("envFrom[2].secretRef.name = %q, want optional-secret", got)
+	}
+	if got := digBool(deployment, "spec", "template", "spec", "containers", "0", "envFrom", "2", "secretRef", "optional"); !got {
+		t.Fatalf("envFrom[2].secretRef.optional = false, want true")
+	}
+}
+
+func TestBuildGeneratesGenericInitContainers(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+init_containers:
+  - name: migrate
+    image: "{{TSM_REGISTRY_URL}}/api-migrate:{{TSM_RELEASE_ID}}"
+    command: ["/bin/sh", "-c"]
+    arguments: ["./migrate.sh"]
+    env_vars:
+      - name: LOG_LEVEL
+        value: INFO
+    env_from:
+      - config_map: api-config
+    mounts:
+      - type: empty_dir
+        name: work
+        mount_path: /work
+    security_context:
+      runAsNonRoot: true
+    resources:
+      cpu:
+        from: "50m"
+        to: "100m"
+      memory:
+        from: "64Mi"
+        to: "128Mi"
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    mounts:
+      - type: empty_dir
+        name: work
+        mount_path: /work
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "name"); got != "migrate" {
+		t.Fatalf("init container name = %q, want migrate", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "image"); got != "{{TSM_REGISTRY_URL}}/api-migrate:{{TSM_RELEASE_ID}}" {
+		t.Fatalf("init container image = %q, want runtime placeholder image", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "args", "0"); got != "./migrate.sh" {
+		t.Fatalf("init container args[0] = %q, want ./migrate.sh", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "env", "0", "name"); got != "LOG_LEVEL" {
+		t.Fatalf("init container env[0].name = %q, want LOG_LEVEL", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "envFrom", "0", "configMapRef", "name"); got != "api-config" {
+		t.Fatalf("init container envFrom[0].configMapRef.name = %q, want api-config", got)
+	}
+	if got := digBool(deployment, "spec", "template", "spec", "initContainers", "0", "securityContext", "runAsNonRoot"); !got {
+		t.Fatalf("init container runAsNonRoot = false, want true")
+	}
+	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "volumeMounts", "0", "mountPath"); got != "/work" {
+		t.Fatalf("init container volumeMount mountPath = %q, want /work", got)
+	}
+	if emptyDir := digAny(deployment, "spec", "template", "spec", "volumes", "0", "emptyDir"); emptyDir == nil {
+		t.Fatal("expected emptyDir volume for init/container shared mount")
+	}
+}
+
 func TestBuildGeneratesModernSchedulingFields(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")

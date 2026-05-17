@@ -686,7 +686,147 @@ scheduling:
 
 Legacy `arch`, `node_selector` a `tolerations` zůstávají podporované. Nové soubory by měly preferovat `scheduling`.
 
-### 12. Raw Container Fields
+### 12. Security Context
+
+Pro běžná pod a container security nastavení použijte `security_context`.
+
+App-level `security_context` se renderuje do pod spec `securityContext`:
+
+```yaml
+security_context:
+  runAsNonRoot: true
+  fsGroup: 2000
+```
+
+Container-level `security_context` se renderuje do container `securityContext`:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    security_context:
+      allowPrivilegeEscalation: false
+      runAsUser: 1000
+      capabilities:
+        drop: ["ALL"]
+```
+
+Preferujte toto dedikované pole před `raw.securityContext`. Pokud se použije obojí, `raw` zůstává kompatibilní výjimka a může vygenerované pole přepsat.
+
+### 13. Lifecycle a Termination Grace
+
+App-level `termination_grace_period` se renderuje do pod spec `terminationGracePeriodSeconds`:
+
+```yaml
+termination_grace_period: 45
+```
+
+Container-level `lifecycle.pre_stop` použijte pro graceful shutdown hooky:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    lifecycle:
+      pre_stop:
+        command: ["/bin/sh", "-c", "sleep 10"]
+```
+
+Výsledkem je Kubernetes `lifecycle.preStop.exec.command`.
+
+Pro vzácné lifecycle handler formy použijte explicitní raw passthrough:
+
+```yaml
+containers:
+  - name: api
+    lifecycle:
+      pre_stop:
+        raw:
+          httpGet:
+            path: /shutdown
+            port: 8080
+```
+
+### 14. Service Account a Env From
+
+App-level `service_account` se renderuje do pod spec `serviceAccountName`:
+
+```yaml
+service_account: tsm-api
+```
+
+Container-level `env_from` použijte pro běžné importy environment proměnných z ConfigMap/Secret:
+
+```yaml
+containers:
+  - name: api
+    image: api:latest
+    env_from:
+      - config_map: api-config
+      - secret: api-secret
+        prefix: SECRET_
+```
+
+Pro méně běžné Kubernetes volby použijte nativní tvar reference:
+
+```yaml
+env_from:
+  - configMapRef:
+      name: api-config
+      optional: true
+  - secretRef:
+      name: api-secret
+      optional: true
+```
+
+Výsledkem je Kubernetes `envFrom`.
+
+### 15. Init Containers
+
+App-level `init_containers` použijte pro obecné Kubernetes init containery:
+
+```yaml
+init_containers:
+  - name: migrate
+    image: registry.example.com/api-migrate:latest
+    command: ["/bin/sh", "-c"]
+    arguments: ["./migrate.sh"]
+    env_vars:
+      - name: LOG_LEVEL
+        value: INFO
+    env_from:
+      - config_map: api-config
+    mounts:
+      - type: empty_dir
+        name: work
+        mount_path: /work
+    security_context:
+      runAsNonRoot: true
+    resources:
+      cpu:
+        from: "50m"
+        to: "100m"
+      memory:
+        from: "64Mi"
+        to: "128Mi"
+```
+
+Podporovaná pole init containeru záměrně kopírují běžnou podmnožinu standardních containerů:
+
+- `name`
+- `image`
+- `command`
+- `arguments`
+- `env_vars`
+- `env_from`
+- `mounts`
+- `security_context`
+- `resources`
+- `raw`
+
+Existující `tools` zůstávají preferovaná zkratka pro vystavení statických utilit přes generované init containery.
+
+### 16. Raw Container Fields
 
 Raw passthrough používejte jen tehdy, když model nemá dedikované pole:
 
@@ -701,7 +841,7 @@ containers:
 
 Dedikovaná modelová pole jsou lepší, protože se dají validovat a zobrazit v UI nástrojích.
 
-### 13. Cgroup Exporter Defaults
+### 17. Cgroup Exporter Defaults
 
 Na úrovni containeru lze zapnout automatické vkládání env var pro cgroup exporter:
 
@@ -725,7 +865,7 @@ CGROUP_EXPORTER_MEMORY_LIMITS_MIB
 CGROUP_EXPORTER_NODE_NAME
 ```
 
-### 13. Ignorované Appky
+### 18. Ignorované Appky
 
 Vynechání appky z buildu:
 

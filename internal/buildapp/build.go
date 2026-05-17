@@ -100,29 +100,33 @@ type variable struct {
 }
 
 type appModel struct {
-	Vars                 []variable      `yaml:"vars"`
-	Name                 string          `yaml:"name"`
-	Kind                 string          `yaml:"kind"`
-	Ignore               bool            `yaml:"ignore"`
-	DisableSharedAssets  bool            `yaml:"disable_shared_assets"`
-	DisableCreateService bool            `yaml:"disable_create_service"`
-	Strategy             string          `yaml:"strategy"`
-	SubdomainName        string          `yaml:"subdomain_name"`
-	MinAvailable         any             `yaml:"min_available"`
-	MaxUnavailable       any             `yaml:"max_unavailable"`
-	Replicas             int             `yaml:"replicas"`
-	Labels               map[string]any  `yaml:"labels"`
-	Annotations          map[string]any  `yaml:"annotations"`
-	PodAnnotations       map[string]any  `yaml:"pod_annotations"`
-	RolloutOn            rolloutOnSpec   `yaml:"rollout_on"`
-	Tools                []toolSpec      `yaml:"tools"`
-	Registry             []registrySpec  `yaml:"registry"`
-	DNS                  []hostAliasSpec `yaml:"dns"`
-	Arch                 string          `yaml:"arch"`
-	NodeSelector         map[string]any  `yaml:"node_selector"`
-	Tolerations          []any           `yaml:"tolerations"`
-	Scheduling           schedulingSpec  `yaml:"scheduling"`
-	Containers           []containerSpec `yaml:"containers"`
+	Vars                 []variable          `yaml:"vars"`
+	Name                 string              `yaml:"name"`
+	Kind                 string              `yaml:"kind"`
+	Ignore               bool                `yaml:"ignore"`
+	DisableSharedAssets  bool                `yaml:"disable_shared_assets"`
+	DisableCreateService bool                `yaml:"disable_create_service"`
+	Strategy             string              `yaml:"strategy"`
+	SubdomainName        string              `yaml:"subdomain_name"`
+	MinAvailable         any                 `yaml:"min_available"`
+	MaxUnavailable       any                 `yaml:"max_unavailable"`
+	Replicas             int                 `yaml:"replicas"`
+	Labels               map[string]any      `yaml:"labels"`
+	Annotations          map[string]any      `yaml:"annotations"`
+	PodAnnotations       map[string]any      `yaml:"pod_annotations"`
+	SecurityContext      map[string]any      `yaml:"security_context"`
+	TerminationGrace     *int                `yaml:"termination_grace_period"`
+	ServiceAccount       string              `yaml:"service_account"`
+	RolloutOn            rolloutOnSpec       `yaml:"rollout_on"`
+	Tools                []toolSpec          `yaml:"tools"`
+	InitContainers       []initContainerSpec `yaml:"init_containers"`
+	Registry             []registrySpec      `yaml:"registry"`
+	DNS                  []hostAliasSpec     `yaml:"dns"`
+	Arch                 string              `yaml:"arch"`
+	NodeSelector         map[string]any      `yaml:"node_selector"`
+	Tolerations          []any               `yaml:"tolerations"`
+	Scheduling           schedulingSpec      `yaml:"scheduling"`
+	Containers           []containerSpec     `yaml:"containers"`
 }
 
 type rolloutOnSpec struct {
@@ -174,11 +178,27 @@ type containerSpec struct {
 	Health               healthSpec                `yaml:"health"`
 	Probe                probeSpec                 `yaml:"probe"`
 	Probes               probesSpec                `yaml:"probes"`
+	Lifecycle            lifecycleSpec             `yaml:"lifecycle"`
 	SimpleInit           simpleInitSpec            `yaml:"simple_init"`
 	Startup              startupSpec               `yaml:"startup"`
 	EnableCgroupExporter bool                      `yaml:"enable_cgroup_exporter"`
 	Resources            map[string]map[string]any `yaml:"resources"`
+	SecurityContext      map[string]any            `yaml:"security_context"`
+	EnvFrom              []envFromSpec             `yaml:"env_from"`
 	Raw                  map[string]any            `yaml:"raw"`
+}
+
+type initContainerSpec struct {
+	Name            string                    `yaml:"name"`
+	Image           string                    `yaml:"image"`
+	Command         []string                  `yaml:"command"`
+	Arguments       []string                  `yaml:"arguments"`
+	Mounts          []mountSpec               `yaml:"mounts"`
+	EnvVars         []envVar                  `yaml:"env_vars"`
+	EnvFrom         []envFromSpec             `yaml:"env_from"`
+	Resources       map[string]map[string]any `yaml:"resources"`
+	SecurityContext map[string]any            `yaml:"security_context"`
+	Raw             map[string]any            `yaml:"raw"`
 }
 
 type simpleInitSpec struct {
@@ -186,8 +206,27 @@ type simpleInitSpec struct {
 	Exec    simpleInitExecSpec `yaml:"exec"`
 }
 
+type lifecycleSpec struct {
+	PreStop lifecycleHandlerSpec `yaml:"pre_stop"`
+}
+
+type lifecycleHandlerSpec struct {
+	Command []string       `yaml:"command"`
+	HTTP    httpHealthSpec `yaml:"http"`
+	Raw     map[string]any `yaml:"raw"`
+}
+
 type simpleInitExecSpec struct {
 	Command []string `yaml:"command"`
+}
+
+type envFromSpec struct {
+	ConfigMap    string         `yaml:"config_map"`
+	ConfigMapRef map[string]any `yaml:"configMapRef"`
+	Secret       string         `yaml:"secret"`
+	SecretRef    map[string]any `yaml:"secretRef"`
+	Prefix       string         `yaml:"prefix"`
+	Raw          map[string]any `yaml:"raw"`
 }
 
 type healthSpec struct {
@@ -1918,18 +1957,30 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 	for _, container := range app.Containers {
 		containers = append(containers, renderContainer(container, assets[container.Name], sharedAssets, len(app.Tools) > 0))
 	}
+	initContainers := renderInitContainers(app, assets, len(app.Tools) > 0)
 
 	podSpec := map[string]any{
 		"containers":       containers,
 		"imagePullSecrets": renderImagePullSecrets(app.Registry),
 		"volumes":          renderVolumes(app, assets, sharedAssets),
 	}
+	if len(app.SecurityContext) > 0 {
+		podSpec["securityContext"] = cloneMap(app.SecurityContext)
+	}
+	if app.TerminationGrace != nil {
+		podSpec["terminationGracePeriodSeconds"] = *app.TerminationGrace
+	}
+	if strings.TrimSpace(app.ServiceAccount) != "" {
+		podSpec["serviceAccountName"] = strings.TrimSpace(app.ServiceAccount)
+	}
 	if len(app.DNS) > 0 {
 		podSpec["hostAliases"] = renderHostAliases(app.DNS)
 	}
 	applyScheduling(podSpec, app)
+	if len(initContainers) > 0 {
+		podSpec["initContainers"] = initContainers
+	}
 	if len(app.Tools) > 0 {
-		podSpec["initContainers"] = renderToolInitContainers(app.Tools)
 		podSpec["volumes"] = append(podSpec["volumes"].([]any), map[string]any{
 			"name":     "app-tools",
 			"emptyDir": map[string]any{},
@@ -2222,12 +2273,21 @@ func renderContainer(container containerSpec, assets []resolvedAsset, sharedAsse
 	if len(container.Startup.Arguments) > 0 {
 		out["args"] = container.Startup.Arguments
 	}
+	if len(container.SecurityContext) > 0 {
+		out["securityContext"] = cloneMap(container.SecurityContext)
+	}
 	envVars := effectiveContainerEnvVars(container)
 	if len(envVars) > 0 {
 		out["env"] = renderEnvVars(envVars)
 	}
+	if envFrom := renderEnvFrom(container.EnvFrom); len(envFrom) > 0 {
+		out["envFrom"] = envFrom
+	}
 	if len(container.Ports) > 0 {
 		out["ports"] = renderContainerPorts(container.Ports)
+	}
+	if lifecycle := renderLifecycle(container.Lifecycle); lifecycle != nil {
+		out["lifecycle"] = lifecycle
 	}
 	if probe := renderHealth(container.Health, "live"); probe != nil {
 		out["livenessProbe"] = probe
@@ -2251,6 +2311,110 @@ func renderContainer(container containerSpec, assets []resolvedAsset, sharedAsse
 		out[key] = value
 	}
 	return out
+}
+
+func renderInitContainers(app appModel, assets map[string][]resolvedAsset, mountTools bool) []map[string]any {
+	out := renderToolInitContainers(app.Tools)
+	for _, container := range app.InitContainers {
+		out = append(out, renderInitContainer(container, assets[container.Name], mountTools))
+	}
+	return out
+}
+
+func renderInitContainer(container initContainerSpec, assets []resolvedAsset, mountTools bool) map[string]any {
+	mounts := renderVolumeMounts(assets)
+	if mountTools {
+		mounts = append(mounts, map[string]any{
+			"name":      "app-tools",
+			"mountPath": "/app/tools",
+			"readOnly":  true,
+		})
+	}
+	out := map[string]any{
+		"name":            container.Name,
+		"image":           container.Image,
+		"imagePullPolicy": "Always",
+	}
+	if len(container.Resources) > 0 {
+		out["resources"] = renderResources(container.Resources)
+	}
+	if len(mounts) > 0 {
+		out["volumeMounts"] = mounts
+	}
+	if len(container.Command) > 0 {
+		out["command"] = container.Command
+	}
+	if len(container.Arguments) > 0 {
+		out["args"] = container.Arguments
+	}
+	if len(container.SecurityContext) > 0 {
+		out["securityContext"] = cloneMap(container.SecurityContext)
+	}
+	if len(container.EnvVars) > 0 {
+		out["env"] = renderEnvVars(container.EnvVars)
+	}
+	if envFrom := renderEnvFrom(container.EnvFrom); len(envFrom) > 0 {
+		out["envFrom"] = envFrom
+	}
+	for key, value := range container.Raw {
+		out[key] = value
+	}
+	return out
+}
+
+func renderEnvFrom(items []envFromSpec) []any {
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		if len(item.Raw) > 0 {
+			out = append(out, cloneMap(item.Raw))
+			continue
+		}
+		entry := map[string]any{}
+		if len(item.ConfigMapRef) > 0 {
+			entry["configMapRef"] = cloneMap(item.ConfigMapRef)
+		} else if strings.TrimSpace(item.ConfigMap) != "" {
+			entry["configMapRef"] = map[string]any{"name": strings.TrimSpace(item.ConfigMap)}
+		}
+		if len(item.SecretRef) > 0 {
+			entry["secretRef"] = cloneMap(item.SecretRef)
+		} else if strings.TrimSpace(item.Secret) != "" {
+			entry["secretRef"] = map[string]any{"name": strings.TrimSpace(item.Secret)}
+		}
+		if strings.TrimSpace(item.Prefix) != "" {
+			entry["prefix"] = strings.TrimSpace(item.Prefix)
+		}
+		if len(entry) > 0 {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func renderLifecycle(lifecycle lifecycleSpec) map[string]any {
+	out := map[string]any{}
+	if preStop := renderLifecycleHandler(lifecycle.PreStop); preStop != nil {
+		out["preStop"] = preStop
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func renderLifecycleHandler(handler lifecycleHandlerSpec) map[string]any {
+	if len(handler.Raw) > 0 {
+		return cloneMap(handler.Raw)
+	}
+	if len(handler.Command) > 0 {
+		return map[string]any{"exec": map[string]any{"command": handler.Command}}
+	}
+	if hasHTTPHealth(handler.HTTP) {
+		return map[string]any{"httpGet": map[string]any{
+			"path": handler.HTTP.Path.For("live"),
+			"port": int(handler.HTTP.Port),
+		}}
+	}
+	return nil
 }
 
 func renderProbes(probes probesSpec) map[string]any {
@@ -2430,6 +2594,15 @@ func resolveAssets(app appModel, envDir string, vars map[string]string, opts Opt
 			}
 			out[container.Name] = append(out[container.Name], asset)
 		}
+		for _, item := range container.Mounts {
+			asset, err := resolveMount(app.Name, container.Name, item, envDir, vars, opts)
+			if err != nil {
+				return nil, err
+			}
+			out[container.Name] = append(out[container.Name], asset)
+		}
+	}
+	for _, container := range app.InitContainers {
 		for _, item := range container.Mounts {
 			asset, err := resolveMount(app.Name, container.Name, item, envDir, vars, opts)
 			if err != nil {

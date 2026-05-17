@@ -686,7 +686,147 @@ scheduling:
 
 Legacy `arch`, `node_selector` and `tolerations` remain supported. New files should prefer `scheduling`.
 
-### 12. Raw Container Fields
+### 12. Security Context
+
+Use `security_context` for common pod and container security settings.
+
+App-level `security_context` is rendered to pod spec `securityContext`:
+
+```yaml
+security_context:
+  runAsNonRoot: true
+  fsGroup: 2000
+```
+
+Container-level `security_context` is rendered to container `securityContext`:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    security_context:
+      allowPrivilegeEscalation: false
+      runAsUser: 1000
+      capabilities:
+        drop: ["ALL"]
+```
+
+Prefer this dedicated field over `raw.securityContext`. If both are used, `raw` remains a compatibility escape hatch and can override the generated field.
+
+### 13. Lifecycle and Termination Grace
+
+Use app-level `termination_grace_period` to render pod spec `terminationGracePeriodSeconds`:
+
+```yaml
+termination_grace_period: 45
+```
+
+Use container-level `lifecycle.pre_stop` for graceful shutdown hooks:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    lifecycle:
+      pre_stop:
+        command: ["/bin/sh", "-c", "sleep 10"]
+```
+
+This generates Kubernetes `lifecycle.preStop.exec.command`.
+
+For rare lifecycle handler forms, use explicit raw passthrough:
+
+```yaml
+containers:
+  - name: api
+    lifecycle:
+      pre_stop:
+        raw:
+          httpGet:
+            path: /shutdown
+            port: 8080
+```
+
+### 14. Service Account and Env From
+
+Use app-level `service_account` to render pod spec `serviceAccountName`:
+
+```yaml
+service_account: tsm-api
+```
+
+Use container-level `env_from` for common ConfigMap/Secret environment imports:
+
+```yaml
+containers:
+  - name: api
+    image: api:latest
+    env_from:
+      - config_map: api-config
+      - secret: api-secret
+        prefix: SECRET_
+```
+
+For less common Kubernetes options, use the native reference shape:
+
+```yaml
+env_from:
+  - configMapRef:
+      name: api-config
+      optional: true
+  - secretRef:
+      name: api-secret
+      optional: true
+```
+
+This renders to Kubernetes `envFrom`.
+
+### 15. Init Containers
+
+Use app-level `init_containers` for generic Kubernetes init containers:
+
+```yaml
+init_containers:
+  - name: migrate
+    image: registry.example.com/api-migrate:latest
+    command: ["/bin/sh", "-c"]
+    arguments: ["./migrate.sh"]
+    env_vars:
+      - name: LOG_LEVEL
+        value: INFO
+    env_from:
+      - config_map: api-config
+    mounts:
+      - type: empty_dir
+        name: work
+        mount_path: /work
+    security_context:
+      runAsNonRoot: true
+    resources:
+      cpu:
+        from: "50m"
+        to: "100m"
+      memory:
+        from: "64Mi"
+        to: "128Mi"
+```
+
+Supported init container fields intentionally mirror the common subset of regular containers:
+
+- `name`
+- `image`
+- `command`
+- `arguments`
+- `env_vars`
+- `env_from`
+- `mounts`
+- `security_context`
+- `resources`
+- `raw`
+
+Existing `tools` remain the preferred shortcut for exposing static utility binaries through generated init containers.
+
+### 16. Raw Container Fields
 
 Use raw passthrough only when the model does not expose a dedicated field:
 
@@ -701,7 +841,7 @@ containers:
 
 Dedicated model fields are preferred because they can be validated and represented in UI tooling.
 
-### 13. Cgroup Exporter Defaults
+### 17. Cgroup Exporter Defaults
 
 At container level you can enable automatic env var injection for cgroup exporter:
 
@@ -725,7 +865,7 @@ CGROUP_EXPORTER_MEMORY_LIMITS_MIB
 CGROUP_EXPORTER_NODE_NAME
 ```
 
-### 13. Ignored Apps
+### 18. Ignored Apps
 
 Exclude an app from build:
 

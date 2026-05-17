@@ -1,6 +1,6 @@
 # kube-build-app metamodel plan
 
-Last updated: 2026-05-14
+Last updated: 2026-05-17
 
 ## Core Principle
 
@@ -24,6 +24,7 @@ The metamodel should stay readable for L2/support/developers and should generate
 - Volume-like declarations are currently mixed into `assets`. `temp`, `pvc`, `nfs-server` and `host-path` are volumes, not assets.
 - `resources.cpu.from/to` works, but `from/to` is not Kubernetes vocabulary. Keep it for compatibility, but consider accepting `requests/limits` later.
 - `raw` exists at container level only; pod/deployment-level escape hatches should be added later.
+- Pod/container `security_context` now has a dedicated first-class field; `raw.securityContext` remains only a compatibility escape hatch.
 
 ## Probes Direction
 
@@ -232,19 +233,157 @@ Migration rules:
 - explicitly render `emptyDir: {}` for `temp` / `empty_dir`; a volume with only `name` is not a valid conceptual model
 - treat `host_path` as a high-risk escape hatch and document it as such
 
-## Future Metamodel Candidates
+## Security Context Direction
 
-Priority order:
+Add dedicated pod/container `security_context` fields for the common Kubernetes `securityContext` use cases.
 
-1. `probes`
-2. `scheduling`
-3. `mounts`
-4. pod/container `security_context`
-5. `lifecycle`, especially `preStop`
-6. `termination_grace_period`
-7. `service_account`
-8. `env_from`
-9. more general `init_containers`
+App-level form:
+
+```yaml
+security_context:
+  runAsNonRoot: true
+  fsGroup: 2000
+```
+
+Container-level form:
+
+```yaml
+containers:
+  - name: api
+    security_context:
+      allowPrivilegeEscalation: false
+      runAsUser: 1000
+      capabilities:
+        drop: ["ALL"]
+```
+
+Compatibility rule:
+
+```text
+security_context -> container raw
+```
+
+This keeps existing `raw.securityContext` behavior working, while giving new files a readable first-class model field.
+
+## Lifecycle and Termination Direction
+
+Add app-level `termination_grace_period` and container-level `lifecycle.pre_stop` for common graceful shutdown cases.
+
+App-level form:
+
+```yaml
+termination_grace_period: 45
+```
+
+Container-level simple exec form:
+
+```yaml
+containers:
+  - name: api
+    lifecycle:
+      pre_stop:
+        command: ["/bin/sh", "-c", "sleep 10"]
+```
+
+Raw handler passthrough remains available for uncommon Kubernetes lifecycle handler forms:
+
+```yaml
+containers:
+  - name: api
+    lifecycle:
+      pre_stop:
+        raw:
+          httpGet:
+            path: /shutdown
+            port: 8080
+```
+
+This supports graceful shutdown without forcing users into raw Kubernetes syntax for the common `preStop.exec.command` case.
+
+## Service Account and Env From Direction
+
+Add app-level `service_account` and container-level `env_from` for common identity and environment import use cases.
+
+App-level form:
+
+```yaml
+service_account: tsm-api
+```
+
+Container-level simple form:
+
+```yaml
+containers:
+  - name: api
+    env_from:
+      - config_map: api-config
+      - secret: api-secret
+        prefix: SECRET_
+```
+
+Native Kubernetes reference form remains available for less common options such as `optional`:
+
+```yaml
+env_from:
+  - configMapRef:
+      name: api-config
+      optional: true
+  - secretRef:
+      name: api-secret
+      optional: true
+```
+
+## Init Containers Direction
+
+Add app-level `init_containers` for generic Kubernetes init containers while keeping `tools` as the preferred shortcut for static utility binaries.
+
+Recommended form:
+
+```yaml
+init_containers:
+  - name: migrate
+    image: registry.example.com/api-migrate:latest
+    command: ["/bin/sh", "-c"]
+    arguments: ["./migrate.sh"]
+    env_vars:
+      - name: LOG_LEVEL
+        value: INFO
+    env_from:
+      - config_map: api-config
+    mounts:
+      - type: empty_dir
+        name: work
+        mount_path: /work
+    security_context:
+      runAsNonRoot: true
+    resources:
+      cpu:
+        from: "50m"
+        to: "100m"
+      memory:
+        from: "64Mi"
+        to: "128Mi"
+```
+
+Supported fields intentionally mirror the common subset of regular containers:
+
+```text
+name, image, command, arguments, env_vars, env_from, mounts, security_context, resources, raw
+```
+
+## Metamodel Candidate Status
+
+Priority order and current status:
+
+1. `probes` - done
+2. `scheduling` - done
+3. `mounts` - done
+4. pod/container `security_context` - done
+5. `lifecycle`, especially `preStop` - done
+6. `termination_grace_period` - done
+7. `service_account` - done
+8. `env_from` - done
+9. more general `init_containers` - done
 10. pod/deployment/container `raw` escape hatches
 11. optional HPA support, likely as a separate manifest/metamodel
 
@@ -257,3 +396,7 @@ Priority order:
 5. Add `mounts` without removing legacy `assets` volume forms.
 6. Add tests proving old YAML still generates the same output.
 7. Migrate real app YAML gradually only after the generator behavior is stable.
+8. Add `security_context` as a dedicated pod/container field while keeping `raw.securityContext`.
+9. Add `lifecycle.pre_stop` and `termination_grace_period` for graceful shutdown cases.
+10. Add `service_account` and `env_from` as dedicated fields.
+11. Add generic `init_containers` while keeping `tools` as a specialized shortcut.
