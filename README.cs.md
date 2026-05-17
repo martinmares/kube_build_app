@@ -96,6 +96,49 @@ kube-build-app list -e test -R environments
 kube-build-app completion zsh
 ```
 
+### Generator Commandy
+
+Vytvoření základního environmentu:
+
+```bash
+kube-build-app skeleton env \
+  --root environments \
+  --env dev \
+  --namespace app-dev \
+  --registry-url registry.example.com/project \
+  --release-id latest
+```
+
+Vytvoří:
+
+```text
+environments/dev/env.unsecured.json
+environments/dev/apps/_defaults.yml
+```
+
+Přidání základního app modelu:
+
+```bash
+kube-build-app app add api --root environments --environment dev
+```
+
+Generovaný app image defaultně používá obecné placeholdery:
+
+```yaml
+image: "{{REGISTRY_URL}}/api:{{RELEASE_ID}}"
+```
+
+Image lze podle potřeby přepsat:
+
+```bash
+kube-build-app app add worker \
+  --root environments \
+  --environment dev \
+  --image 'custom/worker:1.0.0'
+```
+
+Generator commandy nepřepisují existující soubory bez `--force`.
+
 Legacy root flagy zůstávají kvůli kompatibilitě:
 
 ```bash

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -35,6 +36,14 @@ type cliOptions struct {
 	color            string
 	debug            bool
 	showVersion      bool
+	skeletonEnv      string
+	skeletonNS       string
+	skeletonRegistry string
+	skeletonRelease  string
+	force            bool
+	appName          string
+	appImage         string
+	appContainer     string
 }
 
 func main() {
@@ -90,8 +99,52 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.AddCommand(newSummaryCommand(opts))
 	root.AddCommand(newInventoryCommand(opts))
 	root.AddCommand(newListCommand(opts))
+	root.AddCommand(newSkeletonCommand(opts))
+	root.AddCommand(newAppCommand(opts))
 	root.AddCommand(newCompletionCommand(root))
 	return root
+}
+
+func newSkeletonCommand(opts *cliOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "skeleton",
+		Short: "Generate starter environment files",
+	}
+	envCmd := &cobra.Command{
+		Use:   "env",
+		Short: "Generate an environment skeleton",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSkeletonEnv(cmd, opts)
+		},
+	}
+	envCmd.Flags().StringVar(&opts.skeletonEnv, "env", "", "environment name to create")
+	envCmd.Flags().StringVar(&opts.skeletonNS, "namespace", "", "Kubernetes namespace value")
+	envCmd.Flags().StringVar(&opts.skeletonRegistry, "registry-url", "registry.example.com/project", "default REGISTRY_URL value")
+	envCmd.Flags().StringVar(&opts.skeletonRelease, "release-id", "latest", "default RELEASE_ID value")
+	envCmd.Flags().BoolVar(&opts.force, "force", false, "overwrite existing generated files")
+	cmd.AddCommand(envCmd)
+	return cmd
+}
+
+func newAppCommand(opts *cliOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "app",
+		Short: "Manage app model files",
+	}
+	addCmd := &cobra.Command{
+		Use:   "add NAME",
+		Short: "Generate a starter app model",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.appName = args[0]
+			return runAppAdd(cmd, opts)
+		},
+	}
+	addCmd.Flags().StringVar(&opts.appImage, "image", "", "container image; defaults to {{REGISTRY_URL}}/<app>:{{RELEASE_ID}}")
+	addCmd.Flags().StringVar(&opts.appContainer, "container", "", "container name; defaults to app name")
+	addCmd.Flags().BoolVar(&opts.force, "force", false, "overwrite existing app file")
+	cmd.AddCommand(addCmd)
+	return cmd
 }
 
 func newBuildCommand(opts *cliOptions) *cobra.Command {
@@ -244,6 +297,105 @@ func runList(cmd *cobra.Command, opts *cliOptions) error {
 	}
 	fmt.Fprintln(cmd.OutOrStdout())
 	return nil
+}
+
+func runSkeletonEnv(cmd *cobra.Command, opts *cliOptions) error {
+	envName := strings.TrimSpace(opts.skeletonEnv)
+	if envName == "" {
+		envName = strings.TrimSpace(opts.envName)
+	}
+	if envName == "" {
+		return errors.New("skeleton env failed: --env or -e is required")
+	}
+	namespace := strings.TrimSpace(opts.skeletonNS)
+	if namespace == "" {
+		namespace = envName
+	}
+	envDir := filepath.Join(opts.root, envName)
+	appsDir := filepath.Join(envDir, "apps")
+	if err := os.MkdirAll(appsDir, 0o755); err != nil {
+		return fmt.Errorf("skeleton env failed: %w", err)
+	}
+	envPath := filepath.Join(envDir, "env.unsecured.json")
+	envPayload := map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":    namespace,
+			"REGISTRY_URL": strings.TrimSpace(opts.skeletonRegistry),
+			"RELEASE_ID":   strings.TrimSpace(opts.skeletonRelease),
+		},
+	}
+	envContent, err := json.MarshalIndent(envPayload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("skeleton env failed: %w", err)
+	}
+	envContent = append(envContent, '\n')
+	if err := writeFileNoClobber(envPath, envContent, opts.force); err != nil {
+		return fmt.Errorf("skeleton env failed: %w", err)
+	}
+	defaultsPath := filepath.Join(appsDir, "_defaults.yml")
+	defaults := []byte(`# Shared defaults for apps in this environment.
+vars: []
+container_env_vars: []
+`)
+	if err := writeFileNoClobber(defaultsPath, defaults, opts.force); err != nil {
+		return fmt.Errorf("skeleton env failed: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Created environment skeleton: %s\n", envDir)
+	return nil
+}
+
+func runAppAdd(cmd *cobra.Command, opts *cliOptions) error {
+	envName := strings.TrimSpace(opts.envName)
+	if envName == "" {
+		return errors.New("app add failed: --environment/-e is required")
+	}
+	appName := strings.TrimSpace(opts.appName)
+	if appName == "" {
+		return errors.New("app add failed: app name is required")
+	}
+	containerName := strings.TrimSpace(opts.appContainer)
+	if containerName == "" {
+		containerName = appName
+	}
+	image := strings.TrimSpace(opts.appImage)
+	if image == "" {
+		image = "{{REGISTRY_URL}}/" + appName + ":{{RELEASE_ID}}"
+	}
+	appsDir := filepath.Join(opts.root, envName, "apps")
+	if err := os.MkdirAll(appsDir, 0o755); err != nil {
+		return fmt.Errorf("app add failed: %w", err)
+	}
+	path := filepath.Join(appsDir, appName+".yml")
+	content := fmt.Sprintf(`name: %s
+replicas: 1
+
+containers:
+  - name: %s
+    image: "%s"
+    resources:
+      cpu:
+        requests: "100m"
+        limits: "500m"
+      memory:
+        requests: "128Mi"
+        limits: "512Mi"
+`, appName, containerName, image)
+	if err := writeFileNoClobber(path, []byte(content), opts.force); err != nil {
+		return fmt.Errorf("app add failed: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Created app model: %s\n", path)
+	return nil
+}
+
+func writeFileNoClobber(path string, content []byte, force bool) error {
+	if !force {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("%s already exists; use --force to overwrite", path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return os.WriteFile(path, content, 0o644)
 }
 
 func toBuildOptions(opts *cliOptions) buildapp.Options {

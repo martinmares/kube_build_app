@@ -96,6 +96,49 @@ kube-build-app list -e test -R environments
 kube-build-app completion zsh
 ```
 
+### Generator Commands
+
+Create a starter environment:
+
+```bash
+kube-build-app skeleton env \
+  --root environments \
+  --env dev \
+  --namespace app-dev \
+  --registry-url registry.example.com/project \
+  --release-id latest
+```
+
+This creates:
+
+```text
+environments/dev/env.unsecured.json
+environments/dev/apps/_defaults.yml
+```
+
+Add a starter app model:
+
+```bash
+kube-build-app app add api --root environments --environment dev
+```
+
+Generated app images use generic placeholders by default:
+
+```yaml
+image: "{{REGISTRY_URL}}/api:{{RELEASE_ID}}"
+```
+
+Override the image when needed:
+
+```bash
+kube-build-app app add worker \
+  --root environments \
+  --environment dev \
+  --image 'custom/worker:1.0.0'
+```
+
+Generator commands do not overwrite existing files unless `--force` is used.
+
 Legacy-compatible root flags are still supported:
 
 ```bash

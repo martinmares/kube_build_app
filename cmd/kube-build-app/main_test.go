@@ -134,6 +134,66 @@ func TestCobraBuildVerboseColorModes(t *testing.T) {
 	}
 }
 
+func TestSkeletonEnvAndAppAdd(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "environments")
+	out := runCLI(t, "skeleton", "env", "--root", root, "--env", "dev", "--namespace", "app-dev", "--registry-url", "registry.local/app", "--release-id", "1.0.0")
+	if !strings.Contains(out, "Created environment skeleton:") {
+		t.Fatalf("unexpected skeleton output:\n%s", out)
+	}
+	envPath := filepath.Join(root, "dev", "env.unsecured.json")
+	envContent, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`"NAMESPACE": "app-dev"`, `"REGISTRY_URL": "registry.local/app"`, `"RELEASE_ID": "1.0.0"`} {
+		if !strings.Contains(string(envContent), expected) {
+			t.Fatalf("env skeleton missing %q:\n%s", expected, envContent)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "dev", "apps", "_defaults.yml")); err != nil {
+		t.Fatal(err)
+	}
+
+	out = runCLI(t, "app", "add", "api", "-e", "dev", "--root", root)
+	if !strings.Contains(out, "Created app model:") {
+		t.Fatalf("unexpected app add output:\n%s", out)
+	}
+	appContent, err := os.ReadFile(filepath.Join(root, "dev", "apps", "api.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"name: api",
+		`image: "{{REGISTRY_URL}}/api:{{RELEASE_ID}}"`,
+		`requests: "100m"`,
+		`limits: "512Mi"`,
+	} {
+		if !strings.Contains(string(appContent), expected) {
+			t.Fatalf("app skeleton missing %q:\n%s", expected, appContent)
+		}
+	}
+}
+
+func TestAppAddImageOverrideAndNoClobber(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "environments")
+	runCLI(t, "skeleton", "env", "--root", root, "--env", "dev")
+	runCLI(t, "app", "add", "worker", "-e", "dev", "--root", root, "--image", "custom/worker:1")
+	content, err := os.ReadFile(filepath.Join(root, "dev", "apps", "worker.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `image: "custom/worker:1"`) {
+		t.Fatalf("app image override missing:\n%s", content)
+	}
+	out, err := runCLIError("app", "add", "worker", "-e", "dev", "--root", root)
+	if err == nil {
+		t.Fatalf("app add overwrote existing file, output:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("unexpected no-clobber error: %v\n%s", err, out)
+	}
+}
+
 func runCLI(t *testing.T, args ...string) string {
 	t.Helper()
 	out, err := runCLIError(args...)
