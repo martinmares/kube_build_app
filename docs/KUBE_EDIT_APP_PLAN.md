@@ -269,7 +269,7 @@ Avoid introducing a separate visual language.
 
 ## Current Work Snapshot
 
-Last updated: 2026-05-14
+Last updated: 2026-05-17
 
 Current implementation status:
 
@@ -278,6 +278,11 @@ Current implementation status:
 - HTML/JS/CSS are externalized under `internal/webapp/templates` and `internal/webapp/static`
 - read-only repository browsing works for environments, apps, assets and special files
 - app detail supports raw YAML, rendered preview, local vars and parsed model
+- app detail now has a read-only structured overview for:
+  - app kind, replicas, init containers and HPA/autoscaling
+  - container resources
+  - Java runtime JVM sizing
+  - probes, env vars, env_from, mounts and ports counts
 - unquoted app placeholders such as `port: {{var:EXPOSE_PORT}}` are handled for model preview
 - Build tab uses `internal/buildapp` through read-only endpoints:
   - `POST /api/v1/envs/{env}/validate`
@@ -291,6 +296,8 @@ Current implementation status:
 Open uncommitted UI work at this snapshot:
 
 ```text
+internal/repository/content.go
+internal/repository/repository_test.go
 internal/webapp/templates/index.html
 internal/webapp/static/ui.js
 internal/webapp/static/ui.css
@@ -299,21 +306,20 @@ internal/webapp/static/ui.css
 Verification already run for the snapshot:
 
 ```bash
-just go-test
-just build
+GOCACHE="$PWD/.tmp/go-build-cache" go test ./...
 ```
 
-Recommended commit message for the current UI-only snapshot:
+Recommended commit message for the current snapshot:
 
 ```bash
-git add internal/webapp/templates/index.html internal/webapp/static/ui.js internal/webapp/static/ui.css
-git commit -m "Polish kube-edit-app build view"
+git add docs/KUBE_EDIT_APP_PLAN.md internal/repository/content.go internal/repository/repository_test.go internal/webapp/templates/index.html internal/webapp/static/ui.js internal/webapp/static/ui.css
+git commit -m "Add kube-edit-app structured app overview"
 ```
 
 Recommended next steps for `kube-edit-app` after returning to it:
 
 1. Add Git status endpoint and show dirty state per environment/app/asset.
-2. Implement read-only app structured overview closer to the Rust UI: resources, container env vars, services/ports/expose_as.
+2. Extend read-only app structured overview with richer services/ports/expose_as details.
 3. Add `build-preview` endpoint that renders into a temp directory and returns generated file list/events without writing to deploy repo.
 4. Add safe write foundation: read-only guard, atomic writes, content hash precondition, structured JSON errors.
 5. Port the first mutating editor from Rust: replicas/resources is the lowest-risk starting point.

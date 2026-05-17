@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Environment struct {
@@ -212,6 +214,9 @@ func summarizeApp(path string) (App, error) {
 		return App{}, err
 	}
 	text := string(content)
+	if app, ok := summarizeAppYAML(path, text); ok {
+		return app, nil
+	}
 	return App{
 		FileName:        filepath.Base(path),
 		Path:            path,
@@ -219,6 +224,24 @@ func summarizeApp(path string) (App, error) {
 		Replicas:        firstTopLevelInt(text, "replicas"),
 		ContainersCount: countTopLevelSequenceItems(text, "containers"),
 	}, nil
+}
+
+func summarizeAppYAML(path string, content string) (App, bool) {
+	var root any
+	if err := yaml.Unmarshal([]byte(renderVarsPreview(content)), &root); err != nil {
+		return App{}, false
+	}
+	rootMap, ok := root.(map[string]any)
+	if !ok {
+		return App{}, false
+	}
+	return App{
+		FileName:        filepath.Base(path),
+		Path:            path,
+		AppName:         stringValue(rootMap["name"]),
+		Replicas:        intPtr(intValue(rootMap["replicas"])),
+		ContainersCount: len(anySlice(rootMap["containers"])),
+	}, true
 }
 
 func summarizeAsset(path, relativePath, driver, driverSource string) (Asset, error) {

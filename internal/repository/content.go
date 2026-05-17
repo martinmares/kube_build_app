@@ -62,11 +62,14 @@ type SpecialEntry struct {
 }
 
 type AppModel struct {
-	Env        string           `json:"env"`
-	FileName   string           `json:"file_name"`
-	AppName    *string          `json:"app_name"`
-	Replicas   *int             `json:"replicas"`
-	Containers []ContainerModel `json:"containers"`
+	Env                 string           `json:"env"`
+	FileName            string           `json:"file_name"`
+	AppName             *string          `json:"app_name"`
+	Replicas            *int             `json:"replicas"`
+	Kind                *string          `json:"kind"`
+	Autoscaling         AutoscalingModel `json:"autoscaling"`
+	InitContainersCount int              `json:"init_containers_count"`
+	Containers          []ContainerModel `json:"containers"`
 }
 
 type ContainerModel struct {
@@ -77,6 +80,10 @@ type ContainerModel struct {
 	EnvVars          []EnvVarModel `json:"env_vars"`
 	Resources        ResourceModel `json:"resources"`
 	Ports            []PortModel   `json:"ports"`
+	Runtime          RuntimeModel  `json:"runtime"`
+	Probes           ProbesModel   `json:"probes"`
+	EnvFromCount     int           `json:"env_from_count"`
+	MountsCount      int           `json:"mounts_count"`
 }
 
 type EnvVarModel struct {
@@ -93,10 +100,42 @@ type EnvVarModel struct {
 }
 
 type ResourceModel struct {
-	CPUFrom    *string `json:"cpu_from"`
-	CPUTo      *string `json:"cpu_to"`
-	MemoryFrom *string `json:"memory_from"`
-	MemoryTo   *string `json:"memory_to"`
+	CPURequest    *string `json:"cpu_request"`
+	CPULimit      *string `json:"cpu_limit"`
+	MemoryRequest *string `json:"memory_request"`
+	MemoryLimit   *string `json:"memory_limit"`
+	CPUFrom       *string `json:"cpu_from"`
+	CPUTo         *string `json:"cpu_to"`
+	MemoryFrom    *string `json:"memory_from"`
+	MemoryTo      *string `json:"memory_to"`
+}
+
+type RuntimeModel struct {
+	Java JavaRuntimeModel `json:"java"`
+}
+
+type JavaRuntimeModel struct {
+	Enabled       bool     `json:"enabled"`
+	Xms           *string  `json:"xms"`
+	Xmx           *string  `json:"xmx"`
+	Opts          []string `json:"opts"`
+	ExportEnvName string   `json:"export_env_name"`
+}
+
+type ProbesModel struct {
+	Preset  *string `json:"preset"`
+	Port    *string `json:"port"`
+	Path    *string `json:"path"`
+	Legacy  bool    `json:"legacy"`
+	Enabled bool    `json:"enabled"`
+}
+
+type AutoscalingModel struct {
+	Enabled                  bool `json:"enabled"`
+	MinReplicas              *int `json:"min_replicas"`
+	MaxReplicas              *int `json:"max_replicas"`
+	CPUAverageUtilization    *int `json:"cpu_average_utilization"`
+	MemoryAverageUtilization *int `json:"memory_average_utilization"`
 }
 
 type PortModel struct {
@@ -169,6 +208,9 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 	model := AppModel{Env: envName, FileName: detail.FileName}
 	model.AppName = stringPtr(stringValue(rootMap["name"]))
 	model.Replicas = intPtr(intValue(rootMap["replicas"]))
+	model.Kind = stringPtr(firstNonEmpty(stringValue(rootMap["kind"]), "Deployment"))
+	model.InitContainersCount = len(anySlice(rootMap["init_containers"]))
+	model.Autoscaling = autoscalingModel(nestedMap(rootMap, "autoscaling"))
 
 	for cIdx, rawContainer := range anySlice(rootMap["containers"]) {
 		containerMap, _ := rawContainer.(map[string]any)
@@ -178,11 +220,19 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 			StartupCommand:   stringSlice(nestedValue(containerMap, "startup", "command")),
 			StartupArguments: stringSlice(nestedValue(containerMap, "startup", "arguments")),
 			Resources: ResourceModel{
-				CPUFrom:    stringPtr(nestedString(containerMap, "resources", "cpu", "from")),
-				CPUTo:      stringPtr(nestedString(containerMap, "resources", "cpu", "to")),
-				MemoryFrom: stringPtr(nestedString(containerMap, "resources", "memory", "from")),
-				MemoryTo:   stringPtr(nestedString(containerMap, "resources", "memory", "to")),
+				CPURequest:    stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "cpu", "requests"), nestedString(containerMap, "resources", "cpu", "from"))),
+				CPULimit:      stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "cpu", "limits"), nestedString(containerMap, "resources", "cpu", "to"))),
+				MemoryRequest: stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "memory", "requests"), nestedString(containerMap, "resources", "memory", "from"))),
+				MemoryLimit:   stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "memory", "limits"), nestedString(containerMap, "resources", "memory", "to"))),
+				CPUFrom:       stringPtr(nestedString(containerMap, "resources", "cpu", "from")),
+				CPUTo:         stringPtr(nestedString(containerMap, "resources", "cpu", "to")),
+				MemoryFrom:    stringPtr(nestedString(containerMap, "resources", "memory", "from")),
+				MemoryTo:      stringPtr(nestedString(containerMap, "resources", "memory", "to")),
 			},
+			Runtime:      runtimeModel(nestedMap(containerMap, "runtime")),
+			Probes:       probesModel(containerMap),
+			EnvFromCount: len(anySlice(containerMap["env_from"])),
+			MountsCount:  len(anySlice(containerMap["mounts"])),
 		}
 		for idx, rawEnv := range anySlice(containerMap["env_vars"]) {
 			envMap, _ := rawEnv.(map[string]any)
@@ -520,6 +570,47 @@ func envVarModel(index int, envMap map[string]any) EnvVarModel {
 	return model
 }
 
+func autoscalingModel(data map[string]any) AutoscalingModel {
+	return AutoscalingModel{
+		Enabled:                  boolValue(data["enabled"]),
+		MinReplicas:              intPtr(intValue(data["min_replicas"])),
+		MaxReplicas:              intPtr(intValue(data["max_replicas"])),
+		CPUAverageUtilization:    intPtr(intValue(nestedValue(data, "cpu", "average_utilization"))),
+		MemoryAverageUtilization: intPtr(intValue(nestedValue(data, "memory", "average_utilization"))),
+	}
+}
+
+func runtimeModel(data map[string]any) RuntimeModel {
+	java := nestedMap(data, "java")
+	opts := stringSlice(java["opts"])
+	exportEnvName := nestedString(java, "export", "env_name")
+	if exportEnvName == "" {
+		exportEnvName = "JAVA_OPTS"
+	}
+	out := RuntimeModel{
+		Java: JavaRuntimeModel{
+			Xms:           stringPtr(stringValue(java["xms"])),
+			Xmx:           stringPtr(stringValue(java["xmx"])),
+			Opts:          opts,
+			ExportEnvName: exportEnvName,
+		},
+	}
+	out.Java.Enabled = out.Java.Xms != nil || out.Java.Xmx != nil || len(opts) > 0
+	return out
+}
+
+func probesModel(containerMap map[string]any) ProbesModel {
+	probes := nestedMap(containerMap, "probes")
+	out := ProbesModel{
+		Preset: stringPtr(stringValue(probes["preset"])),
+		Port:   stringPtr(stringValue(probes["port"])),
+		Path:   stringPtr(stringValue(probes["path"])),
+	}
+	out.Legacy = nestedValue(containerMap, "health") != nil || nestedValue(containerMap, "probe") != nil
+	out.Enabled = out.Preset != nil || out.Port != nil || out.Path != nil || out.Legacy
+	return out
+}
+
 func nestedValue(data map[string]any, keys ...string) any {
 	var current any = data
 	for _, key := range keys {
@@ -530,6 +621,14 @@ func nestedValue(data map[string]any, keys ...string) any {
 		current = m[key]
 	}
 	return current
+}
+
+func nestedMap(data map[string]any, keys ...string) map[string]any {
+	value, _ := nestedValue(data, keys...).(map[string]any)
+	if value == nil {
+		return map[string]any{}
+	}
+	return value
 }
 
 func nestedString(data map[string]any, keys ...string) string {

@@ -68,7 +68,21 @@ func TestNewRejectsMissingRoot(t *testing.T) {
 func TestAppsListsRegularYamlAppsAndSkipsSpecialFiles(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), "arch: amd64\n")
-	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\nreplicas: 2\ncontainers:\n  - name: api\n  - name: sidecar\n")
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `vars:
+  - name: APP_NAME
+    value: api
+name: "{{var:APP_NAME}}"
+replicas: 2
+containers:
+  - name: api
+    env_vars:
+      - name: ONE
+        value: "1"
+    ports:
+      - name: http
+        port: 8080
+  - name: sidecar
+`)
 	writeFile(t, filepath.Join(root, "test", "apps", "worker.yaml"), "name: \"worker\"\ncontainers:\n  - name: worker\n")
 	writeFile(t, filepath.Join(root, "test", "apps", "notes.txt"), "ignore\n")
 
@@ -154,11 +168,31 @@ func TestAppDetailRenderedVarsAndModel(t *testing.T) {
     value: 8080
 name: "{{var:APP_NAME}}"
 replicas: 2
+autoscaling:
+  enabled: true
+  min_replicas: 2
+  max_replicas: 4
+  cpu:
+    average_utilization: 75
 containers:
   - name: api
     startup:
       command: ["/bin/sh"]
       arguments: ["-c", "echo ok"]
+    runtime:
+      java:
+        xms: 512m
+        xmx: 1024m
+        opts: ["-XX:+UseG1GC"]
+    probes:
+      preset: spring-actuator
+      port: 8080
+    mounts:
+      - type: temp
+        name: work
+        mount_path: /work
+    env_from:
+      - config_map: api-env
     env_vars:
       - name: PLAIN
         value: hello
@@ -191,7 +225,7 @@ containers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.FileName != "api.yml" || detail.Summary.AppName != "{{var:APP_NAME}}" {
+	if detail.FileName != "api.yml" || detail.Summary.AppName != "api" {
 		t.Fatalf("unexpected detail: %#v", detail)
 	}
 
@@ -218,7 +252,19 @@ containers:
 	if model.AppName == nil || *model.AppName != "api" || len(model.Containers) != 1 {
 		t.Fatalf("unexpected model: %#v", model)
 	}
+	if !model.Autoscaling.Enabled || model.Autoscaling.CPUAverageUtilization == nil || *model.Autoscaling.CPUAverageUtilization != 75 {
+		t.Fatalf("unexpected autoscaling model: %#v", model.Autoscaling)
+	}
 	container := model.Containers[0]
+	if !container.Runtime.Java.Enabled || container.Runtime.Java.Xmx == nil || *container.Runtime.Java.Xmx != "1024m" {
+		t.Fatalf("unexpected runtime model: %#v", container.Runtime)
+	}
+	if !container.Probes.Enabled || container.Probes.Preset == nil || *container.Probes.Preset != "spring-actuator" {
+		t.Fatalf("unexpected probes model: %#v", container.Probes)
+	}
+	if container.EnvFromCount != 1 || container.MountsCount != 1 {
+		t.Fatalf("unexpected env_from/mounts count: env_from=%d mounts=%d", container.EnvFromCount, container.MountsCount)
+	}
 	if len(container.EnvVars) != 2 || container.EnvVars[1].Kind != "secret" || container.EnvVars[1].SecretName == nil || *container.EnvVars[1].SecretName != "app-secret" {
 		t.Fatalf("unexpected env model: %#v", container.EnvVars)
 	}
