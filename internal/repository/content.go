@@ -176,7 +176,7 @@ func (r *Repository) AppDetail(envName string, appFile string) (AppDetail, error
 	if err != nil {
 		return AppDetail{}, err
 	}
-	return AppDetail{Env: envName, FileName: filepath.Base(path), Path: path, Content: string(content), Summary: summary}, nil
+	return AppDetail{Env: envName, FileName: filepath.Base(path), Path: path, Content: string(content), Summary: summary, IsDirty: r.isDirtyPath(filepath.ToSlash(filepath.Join(envName, "apps", filepath.Base(path))))}, nil
 }
 
 func (r *Repository) AppRendered(envName string, appFile string) (AppRendered, error) {
@@ -274,7 +274,11 @@ func (r *Repository) AssetDetail(envName string, relativePath string) (AssetDeta
 	if err != nil {
 		return AssetDetail{}, err
 	}
-	return AssetDetail{Env: envName, RelativePath: rel, Path: path, Content: string(content)}, nil
+	dirtyPath := filepath.ToSlash(filepath.Join(envName, "assets", rel))
+	if isSpecialRootAsset(rel) {
+		dirtyPath = filepath.ToSlash(filepath.Join(envName, rel))
+	}
+	return AssetDetail{Env: envName, RelativePath: rel, Path: path, Content: string(content), IsDirty: r.isDirtyPath(dirtyPath)}, nil
 }
 
 func (r *Repository) SpecialEntries(envName string, specialFile string) (SpecialEntries, error) {
@@ -294,7 +298,7 @@ func (r *Repository) SpecialEntries(envName string, specialFile string) (Special
 	if !ok {
 		return SpecialEntries{}, fmt.Errorf("missing object at .%s", kind.rootKey)
 	}
-	out := SpecialEntries{Env: envName, SpecialFile: specialFile, Editable: !kind.secured}
+	out := SpecialEntries{Env: envName, SpecialFile: specialFile, Editable: !kind.secured, IsDirty: detail.IsDirty}
 	if kind.secured {
 		warning := "secured file is shown without decrypt; edit flow requires EncJson preflight"
 		out.Warning = &warning

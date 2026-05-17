@@ -2,6 +2,7 @@ package repository
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -149,6 +150,39 @@ func TestAssetsListsRecursiveAssetsAndSpecialRootAssets(t *testing.T) {
 	}
 }
 
+func TestGitStatusMarksDirtyAppsInNestedEnvironmentRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	project := t.TempDir()
+	runGit(t, project, "init")
+	envRoot := filepath.Join(project, "envs")
+	writeFile(t, filepath.Join(envRoot, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")
+
+	repo, err := New(envRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := repo.GitStatus()
+	if !status.Available || !status.Dirty {
+		t.Fatalf("git status = %#v, want available dirty repo", status)
+	}
+	apps, err := repo.Apps("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(apps) != 1 || !apps[0].IsDirty {
+		t.Fatalf("apps dirty state = %#v, want dirty api app", apps)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !detail.IsDirty {
+		t.Fatalf("detail IsDirty = false, want true")
+	}
+}
+
 func writeFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -156,6 +190,14 @@ func writeFile(t *testing.T, path string, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 type Environment struct {
 	Name                  string `json:"name"`
 	Path                  string `json:"path"`
+	IsDirty               bool   `json:"is_dirty"`
 	HasAppsDir            bool   `json:"has_apps_dir"`
 	HasAssetsDir          bool   `json:"has_assets_dir"`
 	HasEnvUnsecuredJSON   bool   `json:"has_env_unsecured_json"`
@@ -30,6 +31,7 @@ type App struct {
 	AppName         string `json:"app_name,omitempty"`
 	Replicas        *int   `json:"replicas,omitempty"`
 	ContainersCount int    `json:"containers_count"`
+	IsDirty         bool   `json:"is_dirty"`
 }
 
 type Asset struct {
@@ -39,6 +41,7 @@ type Asset struct {
 	SizeBytes    int64  `json:"size_bytes"`
 	Driver       string `json:"driver"`
 	DriverSource string `json:"driver_source"`
+	IsDirty      bool   `json:"is_dirty"`
 }
 
 type Repository struct {
@@ -73,13 +76,16 @@ func (r *Repository) Environments() ([]Environment, error) {
 		return nil, err
 	}
 
+	dirty := r.dirtyPathSet()
 	environments := make([]Environment, 0)
 	for _, entry := range entries {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		envPath := filepath.Join(r.root, entry.Name())
-		environments = append(environments, summarizeEnvironment(entry.Name(), envPath))
+		env := summarizeEnvironment(entry.Name(), envPath)
+		env.IsDirty = hasDirtyPrefix(dirty, entry.Name()+"/")
+		environments = append(environments, env)
 	}
 	sort.Slice(environments, func(i, j int) bool {
 		return environments[i].Name < environments[j].Name
@@ -101,6 +107,7 @@ func (r *Repository) Apps(envName string) ([]App, error) {
 		return nil, err
 	}
 
+	dirty := r.dirtyPathSet()
 	apps := make([]App, 0)
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -115,6 +122,7 @@ func (r *Repository) Apps(envName string) ([]App, error) {
 		if err != nil {
 			return nil, err
 		}
+		app.IsDirty = dirty[filepath.ToSlash(filepath.Join(envName, "apps", fileName))]
 		apps = append(apps, app)
 	}
 	sort.Slice(apps, func(i, j int) bool {
@@ -129,6 +137,7 @@ func (r *Repository) Assets(envName string) ([]Asset, error) {
 		return nil, err
 	}
 
+	dirty := r.dirtyPathSet()
 	assets := make([]Asset, 0)
 	assetsDir := filepath.Join(envDir, "assets")
 	if isDir(assetsDir) {
@@ -147,6 +156,7 @@ func (r *Repository) Assets(envName string) ([]Asset, error) {
 			if err != nil {
 				return err
 			}
+			asset.IsDirty = dirty[filepath.ToSlash(filepath.Join(envName, "assets", relative))]
 			assets = append(assets, asset)
 			return nil
 		})
@@ -164,6 +174,7 @@ func (r *Repository) Assets(envName string) ([]Asset, error) {
 		if err != nil {
 			return nil, err
 		}
+		asset.IsDirty = dirty[filepath.ToSlash(filepath.Join(envName, fileName))]
 		assets = append(assets, asset)
 	}
 
