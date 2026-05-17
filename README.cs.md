@@ -310,7 +310,22 @@ spec:
 
 ### 3. Resources
 
-Přidejte container resources:
+Přidejte container resources s Kubernetes slovníkem `requests` / `limits`:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    resources:
+      cpu:
+        requests: "100m"
+        limits: "500m"
+      memory:
+        requests: "128Mi"
+        limits: "512Mi"
+```
+
+Legacy `from` / `to` zůstává podporované:
 
 ```yaml
 containers:
@@ -826,7 +841,27 @@ Podporovaná pole init containeru záměrně kopírují běžnou podmnožinu sta
 
 Existující `tools` zůstávají preferovaná zkratka pro vystavení statických utilit přes generované init containery.
 
-### 16. Raw Container Fields
+### 16. Raw Escape Hatches
+
+`deployment_raw` použijte pro vzácná Deployment-level pole:
+
+```yaml
+deployment_raw:
+  spec:
+    revisionHistoryLimit: 2
+```
+
+`pod_raw` použijte pro vzácná pod spec pole:
+
+```yaml
+pod_raw:
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: false
+```
+
+`deployment_raw` se rekurzivně merguje do vygenerovaného Deployment objektu. `pod_raw` se aplikuje do `spec.template.spec`.
+
+### 17. Raw Container Fields
 
 Raw passthrough používejte jen tehdy, když model nemá dedikované pole:
 
@@ -841,7 +876,7 @@ containers:
 
 Dedikovaná modelová pole jsou lepší, protože se dají validovat a zobrazit v UI nástrojích.
 
-### 17. Cgroup Exporter Defaults
+### 18. Cgroup Exporter Defaults
 
 Na úrovni containeru lze zapnout automatické vkládání env var pro cgroup exporter:
 
@@ -865,7 +900,7 @@ CGROUP_EXPORTER_MEMORY_LIMITS_MIB
 CGROUP_EXPORTER_NODE_NAME
 ```
 
-### 18. Ignorované Appky
+### 19. Ignorované Appky
 
 Vynechání appky z buildu:
 

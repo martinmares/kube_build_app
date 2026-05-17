@@ -310,7 +310,22 @@ spec:
 
 ### 3. Resources
 
-Add container resources:
+Add container resources with Kubernetes-aligned `requests` / `limits`:
+
+```yaml
+containers:
+  - name: api
+    image: nginx:stable
+    resources:
+      cpu:
+        requests: "100m"
+        limits: "500m"
+      memory:
+        requests: "128Mi"
+        limits: "512Mi"
+```
+
+Legacy `from` / `to` remains supported:
 
 ```yaml
 containers:
@@ -826,7 +841,27 @@ Supported init container fields intentionally mirror the common subset of regula
 
 Existing `tools` remain the preferred shortcut for exposing static utility binaries through generated init containers.
 
-### 16. Raw Container Fields
+### 16. Raw Escape Hatches
+
+Use `deployment_raw` for rare Deployment-level fields:
+
+```yaml
+deployment_raw:
+  spec:
+    revisionHistoryLimit: 2
+```
+
+Use `pod_raw` for rare pod spec fields:
+
+```yaml
+pod_raw:
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: false
+```
+
+`deployment_raw` is recursively merged into the generated Deployment object. `pod_raw` is applied to `spec.template.spec`.
+
+### 17. Raw Container Fields
 
 Use raw passthrough only when the model does not expose a dedicated field:
 
@@ -841,7 +876,7 @@ containers:
 
 Dedicated model fields are preferred because they can be validated and represented in UI tooling.
 
-### 17. Cgroup Exporter Defaults
+### 18. Cgroup Exporter Defaults
 
 At container level you can enable automatic env var injection for cgroup exporter:
 
@@ -865,7 +900,7 @@ CGROUP_EXPORTER_MEMORY_LIMITS_MIB
 CGROUP_EXPORTER_NODE_NAME
 ```
 
-### 18. Ignored Apps
+### 19. Ignored Apps
 
 Exclude an app from build:
 

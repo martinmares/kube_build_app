@@ -22,8 +22,8 @@ The metamodel should stay readable for L2/support/developers and should generate
 - `probe` is flexible but verbose; Spring Boot services repeat the same actuator blocks many times.
 - Scheduling is limited to `arch`, `node_selector` and `tolerations`; full affinity/topology support is missing.
 - Volume-like declarations are currently mixed into `assets`. `temp`, `pvc`, `nfs-server` and `host-path` are volumes, not assets.
-- `resources.cpu.from/to` works, but `from/to` is not Kubernetes vocabulary. Keep it for compatibility, but consider accepting `requests/limits` later.
-- `raw` exists at container level only; pod/deployment-level escape hatches should be added later.
+- `resources.cpu.from/to` works, but `from/to` is not Kubernetes vocabulary. Keep it for compatibility. New files should prefer `requests/limits`.
+- Pod/deployment raw escape hatches now exist as explicit `deployment_raw` and `pod_raw` blocks.
 - Pod/container `security_context` now has a dedicated first-class field; `raw.securityContext` remains only a compatibility escape hatch.
 
 ## Probes Direction
@@ -371,6 +371,64 @@ Supported fields intentionally mirror the common subset of regular containers:
 name, image, command, arguments, env_vars, env_from, mounts, security_context, resources, raw
 ```
 
+## Resources Direction
+
+Keep legacy `from` / `to`, but prefer Kubernetes-aligned `requests` / `limits` in new files.
+
+Preferred form:
+
+```yaml
+resources:
+  cpu:
+    requests: "100m"
+    limits: "500m"
+  memory:
+    requests: "128Mi"
+    limits: "512Mi"
+```
+
+Legacy-compatible form:
+
+```yaml
+resources:
+  cpu:
+    from: "100m"
+    to: "500m"
+```
+
+If both forms are present for the same resource, `requests` / `limits` win.
+
+## Raw Escape Hatch Direction
+
+Use explicit raw blocks by target layer.
+
+Deployment-level:
+
+```yaml
+deployment_raw:
+  spec:
+    revisionHistoryLimit: 2
+```
+
+Pod spec-level:
+
+```yaml
+pod_raw:
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: false
+```
+
+Container-level `raw` remains supported:
+
+```yaml
+containers:
+  - name: api
+    raw:
+      stdin: true
+```
+
+This avoids an ambiguous root-level `raw` block and makes the target layer obvious.
+
 ## Metamodel Candidate Status
 
 Priority order and current status:
@@ -384,7 +442,7 @@ Priority order and current status:
 7. `service_account` - done
 8. `env_from` - done
 9. more general `init_containers` - done
-10. pod/deployment/container `raw` escape hatches
+10. pod/deployment/container `raw` escape hatches - done
 11. optional HPA support, likely as a separate manifest/metamodel
 
 ## Implementation Order
@@ -400,3 +458,5 @@ Priority order and current status:
 9. Add `lifecycle.pre_stop` and `termination_grace_period` for graceful shutdown cases.
 10. Add `service_account` and `env_from` as dedicated fields.
 11. Add generic `init_containers` while keeping `tools` as a specialized shortcut.
+12. Add `resources.requests/limits` aliases while keeping `from/to`.
+13. Add explicit `deployment_raw` and `pod_raw` escape hatches.

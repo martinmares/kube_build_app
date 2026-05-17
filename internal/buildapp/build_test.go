@@ -966,6 +966,115 @@ containers:
 	}
 }
 
+func TestBuildAcceptsRequestsLimitsResourceAliases(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 2
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    resources:
+      cpu:
+        requests: "250m"
+        limits: "750m"
+      memory:
+        requests: "384Mi"
+        limits: "768Mi"
+      ephemeral-storage:
+        requests: "1Gi"
+        limits: "2Gi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "resources", "requests", "cpu"); got != "250m" {
+		t.Fatalf("cpu request = %q, want 250m", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "resources", "limits", "memory"); got != "768Mi" {
+		t.Fatalf("memory limit = %q, want 768Mi", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "resources", "requests", "ephemeral-storage"); got != "1Gi" {
+		t.Fatalf("ephemeral-storage request = %q, want 1Gi", got)
+	}
+
+	summary, err := ResourceSummary(Options{Environment: "test", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Totals.CPURequestCores != 0.5 {
+		t.Fatalf("cpu request total = %v, want 0.5", summary.Totals.CPURequestCores)
+	}
+	if summary.Totals.MemoryLimitMiB != 1536 {
+		t.Fatalf("memory limit total = %v, want 1536", summary.Totals.MemoryLimitMiB)
+	}
+}
+
+func TestBuildAppliesDeploymentAndPodRaw(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+deployment_raw:
+  spec:
+    revisionHistoryLimit: 2
+pod_raw:
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: false
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digInt(deployment, "spec", "revisionHistoryLimit"); got != 2 {
+		t.Fatalf("revisionHistoryLimit = %d, want 2", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "dnsPolicy"); got != "ClusterFirst" {
+		t.Fatalf("dnsPolicy = %q, want ClusterFirst", got)
+	}
+	if got := digBool(deployment, "spec", "template", "spec", "enableServiceLinks"); got {
+		t.Fatal("enableServiceLinks = true, want false")
+	}
+	if got := digInt(deployment, "spec", "replicas"); got != 1 {
+		t.Fatalf("replicas = %d, want 1", got)
+	}
+}
+
 func TestBuildGeneratesModernSchedulingFields(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")

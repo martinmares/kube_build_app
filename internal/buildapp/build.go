@@ -117,6 +117,8 @@ type appModel struct {
 	SecurityContext      map[string]any      `yaml:"security_context"`
 	TerminationGrace     *int                `yaml:"termination_grace_period"`
 	ServiceAccount       string              `yaml:"service_account"`
+	DeploymentRaw        map[string]any      `yaml:"deployment_raw"`
+	PodRaw               map[string]any      `yaml:"pod_raw"`
 	RolloutOn            rolloutOnSpec       `yaml:"rollout_on"`
 	Tools                []toolSpec          `yaml:"tools"`
 	InitContainers       []initContainerSpec `yaml:"init_containers"`
@@ -756,10 +758,10 @@ func ResourceSummary(opts Options) (ResourceSummaryData, error) {
 		summary.Totals.Replicas += app.Replicas
 		replicas := app.Replicas
 		for _, container := range app.Containers {
-			cpuRequestRaw := resourceValue(container.Resources, "cpu", "from")
-			cpuLimitRaw := resourceValue(container.Resources, "cpu", "to")
-			memRequestRaw := resourceValue(container.Resources, "memory", "from")
-			memLimitRaw := resourceValue(container.Resources, "memory", "to")
+			cpuRequestRaw := resourceRequestValue(container.Resources, "cpu")
+			cpuLimitRaw := resourceLimitValue(container.Resources, "cpu")
+			memRequestRaw := resourceRequestValue(container.Resources, "memory")
+			memLimitRaw := resourceLimitValue(container.Resources, "memory")
 			cpuRequest := parseCPU(cpuRequestRaw)
 			cpuLimit := parseCPU(cpuLimitRaw)
 			memRequest := parseMemoryMiB(memRequestRaw)
@@ -883,6 +885,20 @@ func resourceValue(resources map[string]map[string]any, resource string, key str
 		return ""
 	}
 	return fmt.Sprint(resources[resource][key])
+}
+
+func resourceRequestValue(resources map[string]map[string]any, resource string) string {
+	if value := resourceValue(resources, resource, "requests"); value != "" && value != "<nil>" {
+		return value
+	}
+	return resourceValue(resources, resource, "from")
+}
+
+func resourceLimitValue(resources map[string]map[string]any, resource string) string {
+	if value := resourceValue(resources, resource, "limits"); value != "" && value != "<nil>" {
+		return value
+	}
+	return resourceValue(resources, resource, "to")
 }
 
 func emptyDash(value string) string {
@@ -1986,6 +2002,9 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 			"emptyDir": map[string]any{},
 		})
 	}
+	for key, value := range app.PodRaw {
+		podSpec[key] = value
+	}
 
 	metadata := map[string]any{
 		"labels":    labels,
@@ -2033,12 +2052,14 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 		spec["serviceName"] = serviceName
 	}
 
-	return map[string]any{
+	deployment := map[string]any{
 		"apiVersion": "apps/v1",
 		"kind":       app.Kind,
 		"metadata":   metadata,
 		"spec":       spec,
-	}, nil
+	}
+	mergeRawMap(deployment, app.DeploymentRaw)
+	return deployment, nil
 }
 
 func applyScheduling(podSpec map[string]any, app appModel) {
@@ -2149,6 +2170,18 @@ func cloneMap(in map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func mergeRawMap(target map[string]any, raw map[string]any) {
+	for key, value := range raw {
+		if nestedTarget, ok := target[key].(map[string]any); ok {
+			if nestedRaw, ok := value.(map[string]any); ok {
+				mergeRawMap(nestedTarget, nestedRaw)
+				continue
+			}
+		}
+		target[key] = value
+	}
 }
 
 func rolloutChecksumAnnotations(app appModel, envDir string) (map[string]string, error) {
@@ -3378,7 +3411,7 @@ func renderResources(resources map[string]map[string]any) map[string]any {
 		if !ok {
 			continue
 		}
-		if value, ok := values["from"]; ok {
+		if value, ok := firstResourceValue(values, "requests", "from"); ok {
 			requests, _ := out["requests"].(map[string]any)
 			if requests == nil {
 				requests = map[string]any{}
@@ -3386,7 +3419,7 @@ func renderResources(resources map[string]map[string]any) map[string]any {
 			}
 			requests[name] = value
 		}
-		if value, ok := values["to"]; ok {
+		if value, ok := firstResourceValue(values, "limits", "to"); ok {
 			limits, _ := out["limits"].(map[string]any)
 			if limits == nil {
 				limits = map[string]any{}
@@ -3396,6 +3429,14 @@ func renderResources(resources map[string]map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+func firstResourceValue(values map[string]any, preferred string, legacy string) (any, bool) {
+	if value, ok := values[preferred]; ok {
+		return value, true
+	}
+	value, ok := values[legacy]
+	return value, ok
 }
 
 func applyEnvPlaceholders(content string, vars map[string]string) string {
