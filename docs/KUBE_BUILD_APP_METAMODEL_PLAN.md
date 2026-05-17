@@ -443,7 +443,41 @@ Priority order and current status:
 8. `env_from` - done
 9. more general `init_containers` - done
 10. pod/deployment/container `raw` escape hatches - done
-11. optional HPA support, likely as a separate manifest/metamodel
+11. optional HPA support - done
+
+## Autoscaling / HPA Direction
+
+`autoscaling` is an app-level block that generates a separate Kubernetes `HorizontalPodAutoscaler` manifest:
+
+```yaml
+replicas: 2
+autoscaling:
+  enabled: true
+  min_replicas: 2
+  max_replicas: 6
+  cpu:
+    average_utilization: 75
+  memory:
+    average_utilization: 80
+  raw:
+    spec:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+```
+
+Generated file:
+
+```text
+deployments/<app>-hpa.yml
+```
+
+Contract:
+
+- `autoscaling.enabled=true` means runtime replica count is controlled by HPA.
+- `replicas` remains in the Deployment/StatefulSet as initial desired state.
+- CPU and memory utilization metrics require `resources.requests`.
+- `autoscaling.raw` is the escape hatch for advanced HPA fields, for example `spec.behavior`.
 
 ## Implementation Order
 
@@ -460,3 +494,4 @@ Priority order and current status:
 11. Add generic `init_containers` while keeping `tools` as a specialized shortcut.
 12. Add `resources.requests/limits` aliases while keeping `from/to`.
 13. Add explicit `deployment_raw` and `pod_raw` escape hatches.
+14. Add `autoscaling` and generate `HorizontalPodAutoscaler`.

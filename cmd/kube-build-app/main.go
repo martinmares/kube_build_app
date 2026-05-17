@@ -453,6 +453,8 @@ func printBuildEvents(out io.Writer, events []buildapp.BuildEvent, format string
 			}
 		case "budget":
 			fmt.Fprintf(out, "  %s %s -> %s\n", paint("budget", ansiMagenta, color), event.Name, paint(event.Path, ansiDim, color))
+		case "autoscaling":
+			fmt.Fprintf(out, "  %s %s -> %s\n", paint("autoscaling", ansiMagenta, color), event.Name, paint(event.Path, ansiDim, color))
 		}
 	}
 	return nil

@@ -401,6 +401,64 @@ Summary command tyto hodnoty používá a celkové součty násobí počtem repl
 kube-build-app summary -e test -R environments
 ```
 
+#### Autoscaling / HPA
+
+App-level `autoscaling` použijte ve chvíli, kdy má runtime počet replik řídit Kubernetes HPA:
+
+```yaml
+replicas: 2
+autoscaling:
+  enabled: true
+  min_replicas: 2
+  max_replicas: 6
+  cpu:
+    average_utilization: 75
+  memory:
+    average_utilization: 80
+containers:
+  - name: api
+    image: nginx:stable
+    resources:
+      cpu:
+        requests: "100m"
+        limits: "500m"
+      memory:
+        requests: "128Mi"
+        limits: "512Mi"
+```
+
+Výsledné manifesty obsahují navíc `deployments/<app>-hpa.yml`:
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+spec:
+  minReplicas: 2
+  maxReplicas: 6
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+```
+
+Pokud `autoscaling.enabled=true`, runtime počet replik řídí HPA. Hodnota `replicas` zůstává ve výsledném Deployment/StatefulSet jako počáteční požadovaný stav, ale po spuštění objektu ji může HPA měnit.
+
+CPU a memory utilization metriky vyžadují container `resources.requests`. Pro pokročilá HPA pole, například `spec.behavior`, použijte `autoscaling.raw`:
+
+```yaml
+autoscaling:
+  enabled: true
+  min_replicas: 2
+  max_replicas: 6
+  cpu:
+    average_utilization: 75
+  raw:
+    spec:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+```
+
 ### 4. Container Environment Variables
 
 Přidejte:

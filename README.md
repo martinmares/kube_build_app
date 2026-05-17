@@ -401,6 +401,64 @@ The summary command uses these values and multiplies totals by replicas:
 kube-build-app summary -e test -R environments
 ```
 
+#### Autoscaling / HPA
+
+Use app-level `autoscaling` when runtime replica count should be controlled by Kubernetes HPA:
+
+```yaml
+replicas: 2
+autoscaling:
+  enabled: true
+  min_replicas: 2
+  max_replicas: 6
+  cpu:
+    average_utilization: 75
+  memory:
+    average_utilization: 80
+containers:
+  - name: api
+    image: nginx:stable
+    resources:
+      cpu:
+        requests: "100m"
+        limits: "500m"
+      memory:
+        requests: "128Mi"
+        limits: "512Mi"
+```
+
+Generated manifests contain an additional `deployments/<app>-hpa.yml`:
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+spec:
+  minReplicas: 2
+  maxReplicas: 6
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+```
+
+If `autoscaling.enabled=true`, the runtime replica count is controlled by HPA. The `replicas` value remains in the generated Deployment/StatefulSet as the initial desired state, but HPA can change it after the object is running.
+
+CPU and memory utilization metrics require container `resources.requests`. Use `autoscaling.raw` for advanced HPA fields such as `spec.behavior`:
+
+```yaml
+autoscaling:
+  enabled: true
+  min_replicas: 2
+  max_replicas: 6
+  cpu:
+    average_utilization: 75
+  raw:
+    spec:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+```
+
 ### 4. Container Environment Variables
 
 Add:

@@ -41,6 +41,7 @@ type Result struct {
 	Services    []string
 	Assets      []string
 	Budgets     []string
+	Autoscaling []string
 	Externals   []string
 	Events      []BuildEvent
 }
@@ -119,6 +120,7 @@ type appModel struct {
 	ServiceAccount       string              `yaml:"service_account"`
 	DeploymentRaw        map[string]any      `yaml:"deployment_raw"`
 	PodRaw               map[string]any      `yaml:"pod_raw"`
+	Autoscaling          autoscalingSpec     `yaml:"autoscaling"`
 	RolloutOn            rolloutOnSpec       `yaml:"rollout_on"`
 	Tools                []toolSpec          `yaml:"tools"`
 	InitContainers       []initContainerSpec `yaml:"init_containers"`
@@ -155,6 +157,19 @@ type schedulingSpec struct {
 	Affinity     map[string]any   `yaml:"affinity"`
 	Spread       spreadSpec       `yaml:"spread"`
 	AntiAffinity antiAffinitySpec `yaml:"anti_affinity"`
+}
+
+type autoscalingSpec struct {
+	Enabled     bool                  `yaml:"enabled"`
+	MinReplicas int                   `yaml:"min_replicas"`
+	MaxReplicas int                   `yaml:"max_replicas"`
+	CPU         autoscalingMetricSpec `yaml:"cpu"`
+	Memory      autoscalingMetricSpec `yaml:"memory"`
+	Raw         map[string]any        `yaml:"raw"`
+}
+
+type autoscalingMetricSpec struct {
+	AverageUtilization int `yaml:"average_utilization"`
 }
 
 type spreadSpec struct {
@@ -613,6 +628,19 @@ func Build(opts Options) (Result, error) {
 			}
 			result.Budgets = append(result.Budgets, outPath)
 			result.Events = append(result.Events, BuildEvent{Type: "budget", App: app.Name, Name: app.Name, Path: outPath})
+		}
+
+		if autoscaling := renderAutoscaling(app, vars["NAMESPACE"]); autoscaling != nil {
+			out, err := yaml.Marshal(autoscaling)
+			if err != nil {
+				return Result{}, err
+			}
+			outPath := filepath.Join(deploymentsDir, app.Name+"-hpa.yml")
+			if err := os.WriteFile(outPath, out, 0o644); err != nil {
+				return Result{}, err
+			}
+			result.Autoscaling = append(result.Autoscaling, outPath)
+			result.Events = append(result.Events, BuildEvent{Type: "autoscaling", App: app.Name, Name: app.Name, Path: outPath})
 		}
 	}
 
@@ -1273,6 +1301,23 @@ func loadApps(appFiles []string, defaultsPath string, vars map[string]string) ([
 
 func validateApps(apps []appModel) error {
 	for _, app := range apps {
+		if app.Autoscaling.Enabled {
+			if app.Autoscaling.MinReplicas < 1 {
+				return fmt.Errorf("%s: autoscaling.min_replicas must be greater than 0", app.Name)
+			}
+			if app.Autoscaling.MaxReplicas < app.Autoscaling.MinReplicas {
+				return fmt.Errorf("%s: autoscaling.max_replicas must be greater than or equal to min_replicas", app.Name)
+			}
+			if app.Autoscaling.CPU.AverageUtilization == 0 && app.Autoscaling.Memory.AverageUtilization == 0 && !autoscalingHasRawMetrics(app.Autoscaling) {
+				return fmt.Errorf("%s: autoscaling requires at least one metric: cpu.average_utilization, memory.average_utilization or raw.spec.metrics", app.Name)
+			}
+			if !validAutoscalingUtilization(app.Autoscaling.CPU.AverageUtilization) {
+				return fmt.Errorf("%s: autoscaling.cpu.average_utilization must be between 1 and 100", app.Name)
+			}
+			if !validAutoscalingUtilization(app.Autoscaling.Memory.AverageUtilization) {
+				return fmt.Errorf("%s: autoscaling.memory.average_utilization must be between 1 and 100", app.Name)
+			}
+		}
 		for _, container := range app.Containers {
 			if !container.SimpleInit.Enabled {
 				continue
@@ -1286,6 +1331,19 @@ func validateApps(apps []appModel) error {
 		}
 	}
 	return nil
+}
+
+func validAutoscalingUtilization(value int) bool {
+	return value == 0 || (value >= 1 && value <= 100)
+}
+
+func autoscalingHasRawMetrics(autoscaling autoscalingSpec) bool {
+	spec, ok := autoscaling.Raw["spec"].(map[string]any)
+	if !ok {
+		return false
+	}
+	metrics, ok := spec["metrics"].([]any)
+	return ok && len(metrics) > 0
 }
 
 func applyReplicaProfile(apps []appModel, envDir string, opts Options) error {
@@ -2257,6 +2315,65 @@ func renderBudget(app appModel, namespace string) map[string]any {
 		spec["maxUnavailable"] = app.MaxUnavailable
 	}
 	return map[string]any{"apiVersion": "policy/v1", "kind": "PodDisruptionBudget", "metadata": map[string]any{"labels": labels, "name": app.Name, "namespace": namespace}, "spec": spec}
+}
+
+func renderAutoscaling(app appModel, namespace string) map[string]any {
+	if !app.Autoscaling.Enabled {
+		return nil
+	}
+	labels := map[string]any{appLabel: app.Name}
+	for key, value := range app.Labels {
+		labels[key] = value
+	}
+	metadata := map[string]any{
+		"labels":    labels,
+		"name":      app.Name,
+		"namespace": namespace,
+	}
+	if len(app.Annotations) > 0 {
+		metadata["annotations"] = cloneMap(app.Annotations)
+	}
+	hpa := map[string]any{
+		"apiVersion": "autoscaling/v2",
+		"kind":       "HorizontalPodAutoscaler",
+		"metadata":   metadata,
+		"spec": map[string]any{
+			"scaleTargetRef": map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       app.Kind,
+				"name":       app.Name,
+			},
+			"minReplicas": app.Autoscaling.MinReplicas,
+			"maxReplicas": app.Autoscaling.MaxReplicas,
+			"metrics":     renderAutoscalingMetrics(app.Autoscaling),
+		},
+	}
+	mergeRawMap(hpa, app.Autoscaling.Raw)
+	return hpa
+}
+
+func renderAutoscalingMetrics(autoscaling autoscalingSpec) []any {
+	metrics := []any{}
+	if autoscaling.CPU.AverageUtilization > 0 {
+		metrics = append(metrics, renderAutoscalingResourceMetric("cpu", autoscaling.CPU.AverageUtilization))
+	}
+	if autoscaling.Memory.AverageUtilization > 0 {
+		metrics = append(metrics, renderAutoscalingResourceMetric("memory", autoscaling.Memory.AverageUtilization))
+	}
+	return metrics
+}
+
+func renderAutoscalingResourceMetric(name string, averageUtilization int) map[string]any {
+	return map[string]any{
+		"type": "Resource",
+		"resource": map[string]any{
+			"name": name,
+			"target": map[string]any{
+				"type":               "Utilization",
+				"averageUtilization": averageUtilization,
+			},
+		},
+	}
 }
 
 func renderImagePullSecrets(registry []registrySpec) []any {

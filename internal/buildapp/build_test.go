@@ -1308,6 +1308,137 @@ containers:
 	}
 }
 
+func TestBuildGeneratesAutoscalingHPA(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 2
+labels:
+  tier: backend
+annotations:
+  argocd.argoproj.io/sync-wave: "20"
+autoscaling:
+  enabled: true
+  min_replicas: 2
+  max_replicas: 6
+  cpu:
+    average_utilization: 75
+  memory:
+    average_utilization: 80
+  raw:
+    spec:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    resources:
+      cpu: {requests: "100m", limits: "500m"}
+      memory: {requests: "128Mi", limits: "512Mi"}
+`)
+
+	result, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Autoscaling) != 1 {
+		t.Fatalf("len(autoscaling) = %d, want 1", len(result.Autoscaling))
+	}
+
+	hpa := loadYAML(t, filepath.Join(target, "deployments", "api-hpa.yml"))
+	if got := digString(hpa, "apiVersion"); got != "autoscaling/v2" {
+		t.Fatalf("apiVersion = %q, want autoscaling/v2", got)
+	}
+	if got := digString(hpa, "kind"); got != "HorizontalPodAutoscaler" {
+		t.Fatalf("kind = %q, want HorizontalPodAutoscaler", got)
+	}
+	if got := digString(hpa, "metadata", "name"); got != "api" {
+		t.Fatalf("metadata.name = %q, want api", got)
+	}
+	if got := digString(hpa, "metadata", "namespace"); got != "nac-test" {
+		t.Fatalf("metadata.namespace = %q, want nac-test", got)
+	}
+	if got := digString(hpa, "metadata", "labels", "tier"); got != "backend" {
+		t.Fatalf("metadata.labels.tier = %q, want backend", got)
+	}
+	if got := digString(hpa, "metadata", "annotations", "argocd.argoproj.io/sync-wave"); got != "20" {
+		t.Fatalf("metadata annotation = %q, want 20", got)
+	}
+	if got := digString(hpa, "spec", "scaleTargetRef", "kind"); got != "Deployment" {
+		t.Fatalf("scaleTargetRef.kind = %q, want Deployment", got)
+	}
+	if got := digString(hpa, "spec", "scaleTargetRef", "name"); got != "api" {
+		t.Fatalf("scaleTargetRef.name = %q, want api", got)
+	}
+	if got := digInt(hpa, "spec", "minReplicas"); got != 2 {
+		t.Fatalf("minReplicas = %d, want 2", got)
+	}
+	if got := digInt(hpa, "spec", "maxReplicas"); got != 6 {
+		t.Fatalf("maxReplicas = %d, want 6", got)
+	}
+	if got := digString(hpa, "spec", "metrics", "0", "resource", "name"); got != "cpu" {
+		t.Fatalf("first metric resource name = %q, want cpu", got)
+	}
+	if got := digInt(hpa, "spec", "metrics", "0", "resource", "target", "averageUtilization"); got != 75 {
+		t.Fatalf("cpu averageUtilization = %d, want 75", got)
+	}
+	if got := digString(hpa, "spec", "metrics", "1", "resource", "name"); got != "memory" {
+		t.Fatalf("second metric resource name = %q, want memory", got)
+	}
+	if got := digInt(hpa, "spec", "metrics", "1", "resource", "target", "averageUtilization"); got != 80 {
+		t.Fatalf("memory averageUtilization = %d, want 80", got)
+	}
+	if got := digInt(hpa, "spec", "behavior", "scaleDown", "stabilizationWindowSeconds"); got != 300 {
+		t.Fatalf("raw behavior scaleDown stabilizationWindowSeconds = %d, want 300", got)
+	}
+}
+
+func TestValidateRejectsInvalidAutoscaling(t *testing.T) {
+	root := t.TempDir()
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "invalid.yml"), `
+name: invalid
+replicas: 1
+autoscaling:
+  enabled: true
+  min_replicas: 4
+  max_replicas: 2
+  cpu:
+    average_utilization: 75
+containers:
+  - name: invalid
+    image: "{{TSM_REGISTRY_URL}}/invalid:{{TSM_RELEASE_ID}}"
+    resources:
+      cpu: {requests: "100m", limits: "500m"}
+      memory: {requests: "128Mi", limits: "512Mi"}
+`)
+
+	err := Validate(Options{Environment: "test", Root: root})
+	if err == nil {
+		t.Fatal("expected autoscaling validation error")
+	}
+	if !strings.Contains(err.Error(), "autoscaling.max_replicas") {
+		t.Fatalf("validation error = %v", err)
+	}
+}
+
 func TestBuildGeneratesRolloutChecksumAnnotations(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
