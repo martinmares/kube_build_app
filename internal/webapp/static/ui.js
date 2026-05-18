@@ -414,8 +414,8 @@ function assetFileName(path) {
 function assetIcon(asset) {
   if (asset.driver === 'special') return 'ti-lock-square-rounded';
   const name = asset.relative_path.toLowerCase();
-  if (name.endsWith('.yml') || name.endsWith('.yaml')) return 'ti-file-type-yml';
-  if (name.endsWith('.json')) return 'ti-file-type-json';
+  if (name.endsWith('.yml') || name.endsWith('.yaml')) return 'ti-file-code';
+  if (name.endsWith('.json')) return 'ti-json';
   if (name.endsWith('.conf') || name.endsWith('.tpl')) return 'ti-file-settings';
   return 'ti-file';
 }
