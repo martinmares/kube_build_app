@@ -66,12 +66,12 @@ type AppContainerResources struct {
 	Resources      ResourceModel `json:"resources"`
 }
 
-type AppContainerVars struct {
+type AppContainerEnvs struct {
 	Env            string        `json:"env"`
 	FileName       string        `json:"file_name"`
 	ContentHash    string        `json:"content_hash"`
 	ContainerIndex int           `json:"container_index"`
-	Vars           []EnvVarModel `json:"vars"`
+	Envs           []EnvVarModel `json:"envs"`
 }
 
 type AppContainerProbes struct {
@@ -188,7 +188,7 @@ type ContainerModel struct {
 	Name             *string       `json:"name"`
 	StartupCommand   []string      `json:"startup_command"`
 	StartupArguments []string      `json:"startup_arguments"`
-	Vars             []EnvVarModel `json:"vars"`
+	Envs             []EnvVarModel `json:"envs"`
 	Resources        ResourceModel `json:"resources"`
 	Ports            []PortModel   `json:"ports"`
 	Runtime          RuntimeModel  `json:"runtime"`
@@ -435,40 +435,40 @@ func (r *Repository) UpdateAppContainerResources(envName string, appFile string,
 	return AppContainerResources{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Resources: model.Containers[containerIndex].Resources}, nil
 }
 
-func (r *Repository) UpdateAppContainerVars(envName string, appFile string, containerIndex int, items []VarItem, expectedHash string) (AppContainerVars, error) {
+func (r *Repository) UpdateAppContainerEnvs(envName string, appFile string, containerIndex int, items []VarItem, expectedHash string) (AppContainerEnvs, error) {
 	if containerIndex < 0 {
-		return AppContainerVars{}, errors.New("container index must be greater than or equal to 0")
+		return AppContainerEnvs{}, errors.New("container index must be greater than or equal to 0")
 	}
 	path, err := r.AppPath(envName, appFile)
 	if err != nil {
-		return AppContainerVars{}, err
+		return AppContainerEnvs{}, err
 	}
 	contentBytes, err := os.ReadFile(path)
 	if err != nil {
-		return AppContainerVars{}, err
+		return AppContainerEnvs{}, err
 	}
 	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
-		return AppContainerVars{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+		return AppContainerEnvs{}, NewConflictError("app file changed before save; refresh and apply the edit again")
 	}
-	updated, err := replaceContainerVarsBlock(string(contentBytes), containerIndex, items)
+	updated, err := replaceContainerEnvsBlock(string(contentBytes), containerIndex, items)
 	if err != nil {
-		return AppContainerVars{}, err
+		return AppContainerEnvs{}, err
 	}
 	if err := atomicWriteFile(path, []byte(updated)); err != nil {
-		return AppContainerVars{}, err
+		return AppContainerEnvs{}, err
 	}
 	model, err := r.AppModel(envName, filepath.Base(path))
 	if err != nil {
-		return AppContainerVars{}, err
+		return AppContainerEnvs{}, err
 	}
 	if containerIndex >= len(model.Containers) {
-		return AppContainerVars{}, errors.New("container index not found after update")
+		return AppContainerEnvs{}, errors.New("container index not found after update")
 	}
 	detail, err := r.AppDetail(envName, filepath.Base(path))
 	if err != nil {
-		return AppContainerVars{}, err
+		return AppContainerEnvs{}, err
 	}
-	return AppContainerVars{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Vars: model.Containers[containerIndex].Vars}, nil
+	return AppContainerEnvs{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Envs: model.Containers[containerIndex].Envs}, nil
 }
 
 func (r *Repository) UpdateAppContainerProbes(envName string, appFile string, containerIndex int, probes ProbeUpdate, expectedHash string) (AppContainerProbes, error) {
@@ -659,9 +659,9 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 			EnvFromCount: len(anySlice(containerMap["env_from"])),
 			MountsCount:  len(anySlice(containerMap["mounts"])),
 		}
-		for idx, rawEnv := range anySlice(containerMap["vars"]) {
+		for idx, rawEnv := range anySlice(containerMap["envs"]) {
 			varMap, _ := rawEnv.(map[string]any)
-			container.Vars = append(container.Vars, envVarModel(idx, varMap))
+			container.Envs = append(container.Envs, envVarModel(idx, varMap))
 		}
 		for pIdx, rawPort := range anySlice(containerMap["ports"]) {
 			portMap, _ := rawPort.(map[string]any)
@@ -1096,13 +1096,13 @@ func replaceContainerResourcesBlock(content string, containerIndex int, resource
 	return out, nil
 }
 
-func replaceContainerVarsBlock(content string, containerIndex int, items []VarItem) (string, error) {
+func replaceContainerEnvsBlock(content string, containerIndex int, items []VarItem) (string, error) {
 	lines, start, end, err := containerBlockRange(content, containerIndex)
 	if err != nil {
 		return "", err
 	}
 
-	varsStart, varsEnd := containerChildBlockRange(lines, start, end, "vars")
+	varsStart, varsEnd := containerChildBlockRange(lines, start, end, "envs")
 
 	preserved := [][]string{}
 	preservedNames := map[string]bool{}
@@ -1117,11 +1117,11 @@ func replaceContainerVarsBlock(content string, containerIndex int, items []VarIt
 			}
 		}
 	}
-	if err := validateContainerVarItems(items, preservedNames); err != nil {
+	if err := validateContainerEnvItems(items, preservedNames); err != nil {
 		return "", err
 	}
 
-	replacement := renderContainerVarsBlock(items, preserved)
+	replacement := renderContainerEnvsBlock(items, preserved)
 	insertAt := start + 1
 	if varsStart >= 0 {
 		insertAt = varsStart
@@ -1820,11 +1820,11 @@ func varBlockName(lines []string) string {
 	return ""
 }
 
-func renderContainerVarsBlock(items []VarItem, preserved [][]string) []string {
+func renderContainerEnvsBlock(items []VarItem, preserved [][]string) []string {
 	if len(items) == 0 && len(preserved) == 0 {
 		return nil
 	}
-	lines := []string{"    vars:"}
+	lines := []string{"    envs:"}
 	for _, item := range items {
 		lines = append(lines, "      - name: "+strings.TrimSpace(item.Name), "        value: "+strconv.Quote(item.Value))
 	}
@@ -1834,7 +1834,7 @@ func renderContainerVarsBlock(items []VarItem, preserved [][]string) []string {
 	return lines
 }
 
-func validateContainerVarItems(items []VarItem, preservedNames map[string]bool) error {
+func validateContainerEnvItems(items []VarItem, preservedNames map[string]bool) error {
 	if err := validateVarItems(items); err != nil {
 		return err
 	}

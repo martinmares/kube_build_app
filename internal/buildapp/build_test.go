@@ -900,7 +900,7 @@ init_containers:
     image: "{{TSM_REGISTRY_URL}}/api-migrate:{{TSM_RELEASE_ID}}"
     command: ["/bin/sh", "-c"]
     arguments: ["./migrate.sh"]
-    vars:
+    envs:
       - name: LOG_LEVEL
         value: INFO
     env_from:
@@ -1292,7 +1292,7 @@ containers:
   - name: api
     image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
     enable_cgroup_exporter: true
-    vars:
+    envs:
       - name: CGROUP_EXPORTER_LISTEN
         value: "127.0.0.1:9393"
     startup:
@@ -1512,7 +1512,7 @@ containers:
       java:
         xms: "512m"
         xmx: "1024m"
-    vars:
+    envs:
       - name: JAVA_OPTS
         value: "-Xmx256m"
     resources:
@@ -2575,7 +2575,7 @@ containers:
 	}
 }
 
-func TestBuildAppliesContainerVarDefaultsOverrideAndRemove(t *testing.T) {
+func TestBuildAppliesContainerEnvDefaultsOverrideAndRemove(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
 	envDir := filepath.Join(root, "test")
@@ -2587,16 +2587,16 @@ func TestBuildAppliesContainerVarDefaultsOverrideAndRemove(t *testing.T) {
 		},
 	})
 	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
-container_vars:
+container_envs:
   - name: "*"
-    vars:
+    envs:
       - name: GLOBAL_FLAG
         value: "true"
       - name: SHARED_SECRET
         secret_name: shared-secret
         key: shared-key
   - name: "api"
-    vars:
+    envs:
       - name: SERVICE_ONLY
         value: "service-default"
 `)
@@ -2606,7 +2606,7 @@ replicas: 1
 containers:
   - name: api
     image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
-    vars:
+    envs:
       - name: GLOBAL_FLAG
         value: "false"
       - name: SHARED_SECRET

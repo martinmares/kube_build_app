@@ -98,7 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/replicas", s.handleAppReplicasUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/autoscaling", s.handleAppAutoscalingUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/resources", s.handleAppContainerResourcesUpdate)
-	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/vars", s.handleAppContainerVarsUpdate)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/envs", s.handleAppContainerEnvsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/runtime/java", s.handleAppContainerRuntimeUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/ports", s.handleAppContainerPortsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/probes", s.handleAppContainerProbesUpdate)
@@ -397,7 +397,7 @@ func (s *Server) handleAppContainerResourcesUpdate(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, resources)
 }
 
-func (s *Server) handleAppContainerVarsUpdate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAppContainerEnvsUpdate(w http.ResponseWriter, r *http.Request) {
 	if s.repo == nil {
 		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
 		return
@@ -419,7 +419,7 @@ func (s *Server) handleAppContainerVarsUpdate(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	vars, err := s.repo.UpdateAppContainerVars(r.PathValue("env"), r.PathValue("app_file"), containerIndex, payload.Items, payload.ExpectedHash)
+	vars, err := s.repo.UpdateAppContainerEnvs(r.PathValue("env"), r.PathValue("app_file"), containerIndex, payload.Items, payload.ExpectedHash)
 	if err != nil {
 		writeError(w, statusForError(err), err.Error())
 		return

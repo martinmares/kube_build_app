@@ -143,8 +143,8 @@ async function init() {
   qs('#app-overview')?.addEventListener('click', (e) => {
     const saveResources = e.target.closest('[data-save-resources]');
     if (saveResources && !state.readOnly) return saveContainerResources(Number(saveResources.dataset.saveResources));
-    const saveVars = e.target.closest('[data-save-container-vars]');
-    if (saveVars && !state.readOnly) return saveContainerVars(Number(saveVars.dataset.saveContainerVars));
+    const saveVars = e.target.closest('[data-save-container-envs]');
+    if (saveVars && !state.readOnly) return saveContainerEnvs(Number(saveVars.dataset.saveContainerEnvs));
     const saveRuntime = e.target.closest('[data-save-runtime]');
     if (saveRuntime && !state.readOnly) return saveContainerRuntime(Number(saveRuntime.dataset.saveRuntime));
     const saveProbes = e.target.closest('[data-save-probes]');
@@ -155,15 +155,15 @@ async function init() {
     if (editPanel && !state.readOnly) return openEditPanel(editPanel.dataset.editPanel, Number(editPanel.dataset.containerIndex));
     const fixLegacyProbes = e.target.closest('[data-fix-legacy-probes]');
     if (fixLegacyProbes && !state.readOnly) return fixContainerLegacyProbes(Number(fixLegacyProbes.dataset.fixLegacyProbes));
-    const addVar = e.target.closest('[data-add-container-var]');
-    if (addVar && !state.readOnly) return addContainerVarRow(Number(addVar.dataset.addContainerVar));
+    const addVar = e.target.closest('[data-add-container-env]');
+    if (addVar && !state.readOnly) return addContainerEnvRow(Number(addVar.dataset.addContainerEnv));
     const editPorts = e.target.closest('[data-edit-ports]');
     if (editPorts && !state.readOnly) return openPortsEditorModal(Number(editPorts.dataset.editPorts));
-    const removeVar = e.target.closest('[data-remove-container-var]');
+    const removeVar = e.target.closest('[data-remove-container-env]');
     if (removeVar && !state.readOnly) {
-      const index = Number(removeVar.dataset.removeContainerVar);
+      const index = Number(removeVar.dataset.removeContainerEnv);
       removeVar.closest('tr')?.remove();
-      syncContainerVarsEmptyState(index);
+      syncContainerEnvsEmptyState(index);
     }
   });
   qs('#ports-edit-modal')?.addEventListener('click', (e) => handlePortsModalClick(e));
@@ -460,10 +460,8 @@ async function selectApp(file) {
     setText('#app-detail-meta', `${model.containers?.length || 0} container(s), ${vars.items?.length || 0} local variable(s)${detail.is_dirty ? ', dirty file' : ''}`);
     setHTML('#app-detail-badges', renderAppDetailBadges(model, detail));
     renderAppOverview(model);
-    renderAppReplicasEditor(model);
     setText('#app-raw', detail.content);
     setText('#app-rendered', rendered.content);
-    renderAppVarsEditor(vars.items || []);
     await loadGitDiff(`${state.env}/apps/${detail.file_name}`, detail.is_dirty, '#app-diff-section', '#app-diff');
   } catch (e) { showError(e); }
 }
@@ -593,6 +591,7 @@ function renderAppOverview(model) {
   const containers = (model.containers || []).map((container) => renderContainerOverview(container)).join('');
   host.innerHTML = `
     <div class="overview-grid">${appFacts.join('')}</div>
+    ${renderAppVarsPreview(state.appVars || [])}
     ${autoscalingMetrics}
     ${renderAppQuickEditors(model, autoscaling)}
     <div class="overview-section">
@@ -605,7 +604,7 @@ function renderContainerOverview(container) {
   const java = container.runtime?.java || {};
   const probes = container.probes || {};
   const ports = container.ports || [];
-  const vars = container.vars || [];
+  const vars = container.envs || [];
   const javaBlock = java.enabled ? `
     <div class="chip-row">
       ${chip('JVM Xms', java.xms || '-')}
@@ -634,7 +633,7 @@ function renderContainerOverview(container) {
         <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div>${renderProbePreview(container.index, probes)}${editButton('probes', 'Edit probes')}</div>
       </div>
       ${renderPortsPreview(container.index, ports)}
-      ${renderContainerVarsPreview(container.index, vars)}
+      ${renderContainerEnvsPreview(container.index, vars)}
     </div>`;
 }
 function renderAppQuickEditors(model, autoscaling) {
@@ -643,7 +642,19 @@ function renderAppQuickEditors(model, autoscaling) {
     <div class="overview-section compact-actions">
       <button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="autoscaling"><i class="ti ti-arrows-maximize me-1"></i>Edit autoscaling</button>
       <button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="replicas"><i class="ti ti-copy me-1"></i>Edit replicas</button>
-      <button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="app-vars"><i class="ti ti-variable me-1"></i>Edit local variables (${state.appVars?.length || 0})</button>
+    </div>`;
+}
+function renderAppVarsPreview(items) {
+  const edit = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="app-vars"><i class="ti ti-pencil me-1"></i>Edit local variables</button>`;
+  const chips = (items || []).slice(0, 10).map((item) => chip(item.name || '?', item.value || '')).join('');
+  const more = (items || []).length > 10 ? `<span class="badge bg-secondary-lt">+${items.length - 10} more</span>` : '';
+  return `
+    <div class="overview-section">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Local variables</div>
+        ${edit}
+      </div>
+      ${(items || []).length ? `<div class="chip-row">${chips}${more}</div>` : emptyState('ti-variable', 'No local variables', state.readOnly ? '' : 'Use Edit local variables to add top-level vars.')}
     </div>`;
 }
 function renderAutoscalingEditor(autoscaling) {
@@ -888,7 +899,7 @@ function renderPortsEditor(index, ports) {
   const disabled = state.readOnly ? 'disabled' : '';
   const rows = (ports || []).map((port) => renderPortRow(index, port)).join('');
   return `
-    <div class="container-var-editor mt-3" data-ports-editor="${index}">
+    <div class="container-env-editor mt-3" data-ports-editor="${index}">
       <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
         <div class="overview-subtitle mb-0">Ports / services / ingress</div>
         <button class="btn btn-sm btn-outline-primary" type="button" data-add-port="${index}" ${disabled}><i class="ti ti-plus me-1"></i>Add port</button>
@@ -912,17 +923,17 @@ function renderPortsPreview(index, ports) {
       <div class="ports-preview">${rows || emptyState('ti-route', 'No ports', state.readOnly ? 'No container ports configured.' : 'Use Edit ports to add container ports.')}</div>
     </div>`;
 }
-function renderContainerVarsPreview(index, vars) {
-  const edit = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="container-vars" data-container-index="${index}"><i class="ti ti-pencil me-1"></i>Edit variables</button>`;
+function renderContainerEnvsPreview(index, vars) {
+  const edit = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="container-envs" data-container-index="${index}"><i class="ti ti-pencil me-1"></i>Edit envs</button>`;
   const chips = (vars || []).slice(0, 8).map((item) => chip(item.name || '?', item.kind === 'value' ? (item.value || '') : item.kind)).join('');
   const more = (vars || []).length > 8 ? `<span class="badge bg-secondary-lt">+${vars.length - 8} more</span>` : '';
   return `
     <div class="overview-section">
       <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
-        <div class="overview-subtitle mb-0">Container variables</div>
+        <div class="overview-subtitle mb-0">Container envs</div>
         ${edit}
       </div>
-      ${(vars || []).length ? `<div class="chip-row">${chips}${more}</div>` : emptyState('ti-variable', 'No container variables', state.readOnly ? '' : 'Use Edit variables to add container variables.')}
+      ${(vars || []).length ? `<div class="chip-row">${chips}${more}</div>` : emptyState('ti-variable', 'No container envs', state.readOnly ? '' : 'Use Edit envs to add container envs.')}
     </div>`;
 }
 function renderPortPreviewLine(port) {
@@ -970,10 +981,10 @@ function openEditPanel(panel, index) {
     title = `Edit probes: ${titleName}`;
     subtitle = 'Modern probes preset/port/path and legacy conversion.';
     body = renderProbesEditor(index, container.probes || {});
-  } else if (panel === 'container-vars' && container) {
-    title = `Edit variables: ${titleName}`;
-    subtitle = 'Container-local variables.';
-    body = renderContainerVarsEditor(index, container.vars || []);
+  } else if (panel === 'container-envs' && container) {
+    title = `Edit envs: ${titleName}`;
+    subtitle = 'Container-local environment variables.';
+    body = renderContainerEnvsEditor(index, container.envs || []);
   } else if (panel === 'autoscaling') {
     title = 'Edit autoscaling';
     subtitle = 'Top-level HPA settings.';
@@ -1003,15 +1014,15 @@ function handleEditModalClick(e) {
   if (saveProbes && !state.readOnly) return saveContainerProbes(Number(saveProbes.dataset.saveProbes));
   const fixLegacyProbes = e.target.closest('[data-fix-legacy-probes]');
   if (fixLegacyProbes && !state.readOnly) return fixContainerLegacyProbes(Number(fixLegacyProbes.dataset.fixLegacyProbes));
-  const saveVars = e.target.closest('[data-save-container-vars]');
-  if (saveVars && !state.readOnly) return saveContainerVars(Number(saveVars.dataset.saveContainerVars));
-  const addVar = e.target.closest('[data-add-container-var]');
-  if (addVar && !state.readOnly) return addContainerVarRow(Number(addVar.dataset.addContainerVar));
-  const removeVar = e.target.closest('[data-remove-container-var]');
+  const saveVars = e.target.closest('[data-save-container-envs]');
+  if (saveVars && !state.readOnly) return saveContainerEnvs(Number(saveVars.dataset.saveContainerEnvs));
+  const addVar = e.target.closest('[data-add-container-env]');
+  if (addVar && !state.readOnly) return addContainerEnvRow(Number(addVar.dataset.addContainerEnv));
+  const removeVar = e.target.closest('[data-remove-container-env]');
   if (removeVar && !state.readOnly) {
-    const index = Number(removeVar.dataset.removeContainerVar);
+    const index = Number(removeVar.dataset.removeContainerEnv);
     removeVar.closest('tr')?.remove();
-    syncContainerVarsEmptyState(index);
+    syncContainerEnvsEmptyState(index);
   }
   const saveAutoscaling = e.target.closest('[data-save-autoscaling]');
   if (saveAutoscaling && !state.readOnly) return saveAppAutoscaling();
@@ -1019,6 +1030,11 @@ function handleEditModalClick(e) {
   if (saveReplicas && !state.readOnly) return saveAppReplicas();
   const addAppVar = e.target.closest('[data-add-app-var-modal]');
   if (addAppVar && !state.readOnly) return addAppVarRow();
+  const removeAppVar = e.target.closest('[data-remove-app-var]');
+  if (removeAppVar && !state.readOnly) {
+    removeAppVar.closest('tr')?.remove();
+    syncAppVarsEmptyState();
+  }
   const saveAppVar = e.target.closest('[data-save-app-vars-modal]');
   if (saveAppVar && !state.readOnly) return saveAppVars();
 }
@@ -1208,41 +1224,41 @@ async function saveContainerPorts(index) {
     await selectApp(state.appFile);
   } catch (e) { showError(e); }
 }
-function renderContainerVarsEditor(index, vars) {
+function renderContainerEnvsEditor(index, vars) {
   if (state.readOnly) return '';
   const disabled = state.readOnly ? 'disabled' : '';
-  const rows = (vars || []).map((item) => renderContainerVarRow(index, item)).join('');
+  const rows = (vars || []).map((item) => renderContainerEnvRow(index, item)).join('');
   return `
-    <div class="container-var-editor mt-3" data-container-var-editor="${index}">
+    <div class="container-env-editor mt-3" data-container-env-editor="${index}">
       <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
-        <div class="overview-subtitle mb-0">Container variables</div>
-        <button class="btn btn-sm btn-outline-primary" type="button" data-add-container-var="${index}" ${disabled}><i class="ti ti-plus me-1"></i>Add variable</button>
+        <div class="overview-subtitle mb-0">Container envs</div>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-add-container-env="${index}" ${disabled}><i class="ti ti-plus me-1"></i>Add env</button>
       </div>
       <div class="table-responsive">
-        <table class="table table-sm align-middle mb-0 container-var-table">
-          <tbody data-container-var-body="${index}">
-            ${rows || renderContainerVarsEmpty(index)}
+        <table class="table table-sm align-middle mb-0 container-env-table">
+          <tbody data-container-env-body="${index}">
+            ${rows || renderContainerEnvsEmpty(index)}
           </tbody>
         </table>
       </div>
       <div class="d-flex align-items-center justify-content-between gap-2 mt-2">
-        <div class="text-muted small">Edits name/value vars. valueFrom entries are preserved read-only.</div>
-        <button class="btn btn-sm btn-primary" type="button" data-save-container-vars="${index}" ${disabled}><i class="ti ti-device-floppy me-1"></i>Save variables</button>
+        <div class="text-muted small">Edits name/value environment entries. valueFrom entries are preserved read-only.</div>
+        <button class="btn btn-sm btn-primary" type="button" data-save-container-envs="${index}" ${disabled}><i class="ti ti-device-floppy me-1"></i>Save envs</button>
       </div>
     </div>`;
 }
-function renderContainerVarRow(index, item = {}) {
+function renderContainerEnvRow(index, item = {}) {
   const editable = item.is_value_editable !== false;
   const disabled = state.readOnly || !editable ? 'disabled' : '';
   const valueText = editable ? (item.value || '') : envVarReadOnlyValue(item);
   const kind = item.kind || 'value';
   const remove = editable
-    ? `<button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-container-var="${index}" title="Remove variable" ${state.readOnly ? 'disabled' : ''}><i class="ti ti-trash"></i></button>`
+    ? `<button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-container-env="${index}" title="Remove env" ${state.readOnly ? 'disabled' : ''}><i class="ti ti-trash"></i></button>`
     : `<span class="badge bg-secondary-lt">read-only</span>`;
   return `
-    <tr data-container-var-row="${index}" data-var-editable="${editable ? 'true' : 'false'}">
-      <td><input class="form-control form-control-sm font-monospace" data-container-var-field="${index}:name" placeholder="NAME" value="${esc(item.name || '')}" ${disabled}></td>
-      <td><input class="form-control form-control-sm font-monospace" data-container-var-field="${index}:value" placeholder="value" value="${esc(valueText)}" ${disabled}></td>
+    <tr data-container-env-row="${index}" data-env-editable="${editable ? 'true' : 'false'}">
+      <td><input class="form-control form-control-sm font-monospace" data-container-env-field="${index}:name" placeholder="NAME" value="${esc(item.name || '')}" ${disabled}></td>
+      <td><input class="form-control form-control-sm font-monospace" data-container-env-field="${index}:value" placeholder="value" value="${esc(valueText)}" ${disabled}></td>
       <td class="text-nowrap"><span class="badge ${editable ? 'bg-blue-lt' : 'bg-secondary-lt'}">${esc(kind)}</span></td>
       <td class="table-action-col">${remove}</td>
     </tr>`;
@@ -1253,32 +1269,32 @@ function envVarReadOnlyValue(item) {
   if (item.kind === 'field') return item.field_path || 'fieldRef';
   return item.value || '';
 }
-function renderContainerVarsEmpty(index) {
-  return `<tr data-container-var-empty="${index}"><td colspan="4">${emptyState('ti-variable', 'No container variables', state.readOnly ? 'Start with --allow-write to add variables.' : 'Use Add variable to create the first one.')}</td></tr>`;
+function renderContainerEnvsEmpty(index) {
+  return `<tr data-container-env-empty="${index}"><td colspan="4">${emptyState('ti-variable', 'No container envs', state.readOnly ? 'Start with --allow-write to add envs.' : 'Use Add env to create the first one.')}</td></tr>`;
 }
-function syncContainerVarsEmptyState(index) {
-  const body = qs(`[data-container-var-body="${index}"]`);
+function syncContainerEnvsEmptyState(index) {
+  const body = qs(`[data-container-env-body="${index}"]`);
   if (!body) return;
-  const hasRows = qsa(`[data-container-var-row="${index}"]`).length > 0;
-  if (!hasRows) body.innerHTML = renderContainerVarsEmpty(index);
+  const hasRows = qsa(`[data-container-env-row="${index}"]`).length > 0;
+  if (!hasRows) body.innerHTML = renderContainerEnvsEmpty(index);
 }
-function addContainerVarRow(index) {
+function addContainerEnvRow(index) {
   if (state.readOnly || !state.appFile || !Number.isInteger(index)) return;
-  const body = qs(`[data-container-var-body="${index}"]`);
+  const body = qs(`[data-container-env-body="${index}"]`);
   if (!body) return;
-  body.querySelector(`[data-container-var-empty="${index}"]`)?.remove();
-  body.insertAdjacentHTML('beforeend', renderContainerVarRow(index));
-  qsa(`[data-container-var-row="${index}"]`).at(-1)?.querySelector(`[data-container-var-field="${index}:name"]`)?.focus();
+  body.querySelector(`[data-container-env-empty="${index}"]`)?.remove();
+  body.insertAdjacentHTML('beforeend', renderContainerEnvRow(index));
+  qsa(`[data-container-env-row="${index}"]`).at(-1)?.querySelector(`[data-container-env-field="${index}:name"]`)?.focus();
 }
-async function saveContainerVars(index) {
+async function saveContainerEnvs(index) {
   if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
-  const items = qsa(`[data-container-var-row="${index}"][data-var-editable="true"]`).map((row) => ({
-    name: row.querySelector(`[data-container-var-field="${index}:name"]`)?.value?.trim() || '',
-    value: row.querySelector(`[data-container-var-field="${index}:value"]`)?.value || '',
+  const items = qsa(`[data-container-env-row="${index}"][data-env-editable="true"]`).map((row) => ({
+    name: row.querySelector(`[data-container-env-field="${index}:name"]`)?.value?.trim() || '',
+    value: row.querySelector(`[data-container-env-field="${index}:value"]`)?.value || '',
   })).filter((item) => item.name !== '');
   clearError();
   try {
-    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/vars`, {items, expected_hash: state.appContentHash});
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/envs`, {items, expected_hash: state.appContentHash});
     state.editModalClose?.();
     state.editModalClose = null;
     await refreshRepositorySnapshot();

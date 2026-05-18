@@ -264,7 +264,7 @@ name: "{{var:APP_NAME}}"
 replicas: 1
 containers:
   - name: api
-    vars:
+    envs:
       - name: MODE
         value: test
 `)
@@ -399,7 +399,7 @@ func TestAppContainerResourcesUpdateEndpoint(t *testing.T) {
 	}
 }
 
-func TestAppContainerVarsUpdateEndpoint(t *testing.T) {
+func TestAppContainerEnvsUpdateEndpoint(t *testing.T) {
 	root := t.TempDir()
 	appPath := filepath.Join(root, "test", "apps", "api.yml")
 	writeFile(t, appPath, "name: api\ncontainers:\n  - name: api\n")
@@ -414,7 +414,7 @@ func TestAppContainerVarsUpdateEndpoint(t *testing.T) {
 
 	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
 	body := `{"expected_hash":"` + detail.ContentHash + `","items":[{"name":"MODE","value":"api"},{"name":"PORT","value":"8080"}]}`
-	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/vars", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/envs", strings.NewReader(body))
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {

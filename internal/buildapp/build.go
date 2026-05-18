@@ -191,7 +191,7 @@ type containerSpec struct {
 	Image                string                    `yaml:"image"`
 	Assets               []assetSpec               `yaml:"assets"`
 	Mounts               []mountSpec               `yaml:"mounts"`
-	Vars                 []envVar                  `yaml:"vars"`
+	Envs                 []envVar                  `yaml:"envs"`
 	MTLS                 mtlsSpec                  `yaml:"mtls"`
 	Ports                []portSpec                `yaml:"ports"`
 	Health               healthSpec                `yaml:"health"`
@@ -229,7 +229,7 @@ type initContainerSpec struct {
 	Command         []string                  `yaml:"command"`
 	Arguments       []string                  `yaml:"arguments"`
 	Mounts          []mountSpec               `yaml:"mounts"`
-	Vars            []envVar                  `yaml:"vars"`
+	Envs            []envVar                  `yaml:"envs"`
 	EnvFrom         []envFromSpec             `yaml:"env_from"`
 	Resources       map[string]map[string]any `yaml:"resources"`
 	SecurityContext map[string]any            `yaml:"security_context"`
@@ -446,9 +446,9 @@ type envVar struct {
 	Remove       bool   `yaml:"remove,omitempty"`
 }
 
-type containerVarDefault struct {
+type containerEnvDefault struct {
 	Name string   `yaml:"name"`
-	Vars []envVar `yaml:"vars"`
+	Envs []envVar `yaml:"envs"`
 }
 
 type startupSpec struct {
@@ -1364,8 +1364,8 @@ func validateApps(apps []appModel) error {
 			}
 			if javaRuntimeEnabled(container.Runtime.Java) {
 				envName := javaRuntimeEnvName(container.Runtime.Java)
-				if containerHasEnvVar(container.Vars, envName) {
-					return fmt.Errorf("%s: container %q defines runtime.java export env %q and vars with the same name", app.Name, container.Name, envName)
+				if containerHasEnvVar(container.Envs, envName) {
+					return fmt.Errorf("%s: container %q defines runtime.java export env %q and envs with the same name", app.Name, container.Name, envName)
 				}
 			}
 			if !container.SimpleInit.Enabled {
@@ -1747,7 +1747,7 @@ func mergeDefaults(defaultsContent, appContent string) (string, error) {
 		return "", err
 	}
 
-	containerVarDefaults, err := parseContainerVarDefaults(mappingValue(defaultsNode, "container_vars"))
+	containerEnvDefaults, err := parseContainerEnvDefaults(mappingValue(defaultsNode, "container_envs"))
 	if err != nil {
 		return "", err
 	}
@@ -1758,8 +1758,8 @@ func mergeDefaults(defaultsContent, appContent string) (string, error) {
 		return "", err
 	}
 	setMappingValue(merged, "vars", mergedVars)
-	removeMappingValue(merged, "container_vars")
-	if err := applyContainerVarDefaults(merged, containerVarDefaults); err != nil {
+	removeMappingValue(merged, "container_envs")
+	if err := applyContainerEnvDefaults(merged, containerEnvDefaults); err != nil {
 		return "", err
 	}
 
@@ -1770,18 +1770,18 @@ func mergeDefaults(defaultsContent, appContent string) (string, error) {
 	return string(out), nil
 }
 
-func parseContainerVarDefaults(node *yaml.Node) ([]containerVarDefault, error) {
+func parseContainerEnvDefaults(node *yaml.Node) ([]containerEnvDefault, error) {
 	if node == nil {
 		return nil, nil
 	}
-	var items []containerVarDefault
+	var items []containerEnvDefault
 	if err := node.Decode(&items); err != nil {
 		return nil, err
 	}
 	return items, nil
 }
 
-func applyContainerVarDefaults(root *yaml.Node, defaults []containerVarDefault) error {
+func applyContainerEnvDefaults(root *yaml.Node, defaults []containerEnvDefault) error {
 	if len(defaults) == 0 {
 		return nil
 	}
@@ -1798,24 +1798,24 @@ func applyContainerVarDefaults(root *yaml.Node, defaults []containerVarDefault) 
 		effective := []envVar{}
 		for _, item := range defaults {
 			if item.Name == "*" {
-				effective = mergeVars(effective, item.Vars)
+				effective = mergeVars(effective, item.Envs)
 			}
 		}
 		for _, item := range defaults {
 			if item.Name != "*" && item.Name == containerName {
-				effective = mergeVars(effective, item.Vars)
+				effective = mergeVars(effective, item.Envs)
 			}
 		}
 
-		local, err := parseVarsNode(mappingValue(containerNode, "vars"), true)
+		local, err := parseVarsNode(mappingValue(containerNode, "envs"), true)
 		if err != nil {
 			return err
 		}
 		effective = mergeVars(effective, local)
 		if len(effective) == 0 {
-			removeMappingValue(containerNode, "vars")
+			removeMappingValue(containerNode, "envs")
 		} else {
-			setMappingValue(containerNode, "vars", varsToNode(effective))
+			setMappingValue(containerNode, "envs", varsToNode(effective))
 		}
 	}
 	return nil
@@ -2484,7 +2484,7 @@ func renderContainer(container containerSpec, assets []resolvedAsset, sharedAsse
 	if len(container.SecurityContext) > 0 {
 		out["securityContext"] = cloneMap(container.SecurityContext)
 	}
-	vars := effectiveContainerVars(container)
+	vars := effectiveContainerEnvs(container)
 	if len(vars) > 0 {
 		out["env"] = renderVars(vars)
 	}
@@ -2558,8 +2558,8 @@ func renderInitContainer(container initContainerSpec, assets []resolvedAsset, mo
 	if len(container.SecurityContext) > 0 {
 		out["securityContext"] = cloneMap(container.SecurityContext)
 	}
-	if len(container.Vars) > 0 {
-		out["env"] = renderVars(container.Vars)
+	if len(container.Envs) > 0 {
+		out["env"] = renderVars(container.Envs)
 	}
 	if envFrom := renderEnvFrom(container.EnvFrom); len(envFrom) > 0 {
 		out["envFrom"] = envFrom
@@ -3499,7 +3499,7 @@ func renderVars(items []envVar) []map[string]any {
 	return out
 }
 
-func effectiveContainerVars(container containerSpec) []envVar {
+func effectiveContainerEnvs(container containerSpec) []envVar {
 	items := []envVar{}
 	if container.EnableCgroupExporter {
 		items = append(items, cgroupExporterDefaultVars...)
@@ -3507,7 +3507,7 @@ func effectiveContainerVars(container containerSpec) []envVar {
 	if item, ok := renderJavaRuntimeEnvVar(container.Runtime.Java); ok {
 		items = append(items, item)
 	}
-	items = append(items, container.Vars...)
+	items = append(items, container.Envs...)
 	if len(items) == 0 {
 		return nil
 	}

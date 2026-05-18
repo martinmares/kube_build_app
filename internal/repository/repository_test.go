@@ -76,7 +76,7 @@ name: "{{var:APP_NAME}}"
 replicas: 2
 containers:
   - name: api
-    vars:
+    envs:
       - name: ONE
         value: "1"
     ports:
@@ -244,7 +244,7 @@ containers:
         mount_path: /work
     env_from:
       - config_map: api-env
-    vars:
+    envs:
       - name: PLAIN
         value: hello
       - name: SECRET
@@ -316,8 +316,8 @@ containers:
 	if container.EnvFromCount != 1 || container.MountsCount != 1 {
 		t.Fatalf("unexpected env_from/mounts count: env_from=%d mounts=%d", container.EnvFromCount, container.MountsCount)
 	}
-	if len(container.Vars) != 2 || container.Vars[1].Kind != "secret" || container.Vars[1].SecretName == nil || *container.Vars[1].SecretName != "app-secret" {
-		t.Fatalf("unexpected vars model: %#v", container.Vars)
+	if len(container.Envs) != 2 || container.Envs[1].Kind != "secret" || container.Envs[1].SecretName == nil || *container.Envs[1].SecretName != "app-secret" {
+		t.Fatalf("unexpected envs model: %#v", container.Envs)
 	}
 	if len(container.Ports) != 1 || len(container.Ports[0].ExposeAs) != 1 || !container.Ports[0].ExposeAs[0].IngressEnabled {
 		t.Fatalf("unexpected ports model: %#v", container.Ports)
@@ -535,16 +535,16 @@ func TestUpdateAppContainerResourcesInsertsMissingBlock(t *testing.T) {
 	}
 }
 
-func TestUpdateAppContainerVarsUpdatesSelectedContainer(t *testing.T) {
+func TestUpdateAppContainerEnvsUpdatesSelectedContainer(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
 containers:
   - name: api
-    vars:
+    envs:
       - name: API_ONLY
         value: "1"
   - name: worker
-    vars:
+    envs:
       - name: MODE
         value: "old"
     image: worker:1
@@ -554,31 +554,31 @@ containers:
 		t.Fatal(err)
 	}
 
-	result, err := repo.UpdateAppContainerVars("test", "api.yml", 1, []VarItem{{Name: "MODE", Value: "new"}, {Name: "QUEUE", Value: "critical"}}, "")
+	result, err := repo.UpdateAppContainerEnvs("test", "api.yml", 1, []VarItem{{Name: "MODE", Value: "new"}, {Name: "QUEUE", Value: "critical"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Vars) != 2 || result.Vars[0].Value == nil || *result.Vars[0].Value != "new" {
-		t.Fatalf("variables = %#v, want updated MODE", result.Vars)
+	if len(result.Envs) != 2 || result.Envs[0].Value == nil || *result.Envs[0].Value != "new" {
+		t.Fatalf("envs = %#v, want updated MODE", result.Envs)
 	}
 	detail, err := repo.AppDetail("test", "api.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !contains(detail.Content, "API_ONLY") {
-		t.Fatalf("first container variable was changed unexpectedly:\n%s", detail.Content)
+		t.Fatalf("first container env was changed unexpectedly:\n%s", detail.Content)
 	}
-	if !contains(detail.Content, "  - name: worker\n    vars:\n      - name: MODE\n        value: \"new\"\n      - name: QUEUE\n        value: \"critical\"\n    image: worker:1") {
-		t.Fatalf("worker vars not updated in place:\n%s", detail.Content)
+	if !contains(detail.Content, "  - name: worker\n    envs:\n      - name: MODE\n        value: \"new\"\n      - name: QUEUE\n        value: \"critical\"\n    image: worker:1") {
+		t.Fatalf("worker envs not updated in place:\n%s", detail.Content)
 	}
 }
 
-func TestUpdateAppContainerVarsPreservesValueFromItems(t *testing.T) {
+func TestUpdateAppContainerEnvsPreservesValueFromItems(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
 containers:
   - name: api
-    vars:
+    envs:
       - name: PLAIN
         value: "old"
       - name: SECRET_TOKEN
@@ -592,12 +592,12 @@ containers:
 		t.Fatal(err)
 	}
 
-	result, err := repo.UpdateAppContainerVars("test", "api.yml", 0, []VarItem{{Name: "PLAIN", Value: "new"}}, "")
+	result, err := repo.UpdateAppContainerEnvs("test", "api.yml", 0, []VarItem{{Name: "PLAIN", Value: "new"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Vars) != 2 || result.Vars[1].Kind != "secret" {
-		t.Fatalf("variables = %#v, want preserved secret", result.Vars)
+	if len(result.Envs) != 2 || result.Envs[1].Kind != "secret" {
+		t.Fatalf("envs = %#v, want preserved secret", result.Envs)
 	}
 	detail, err := repo.AppDetail("test", "api.yml")
 	if err != nil {
