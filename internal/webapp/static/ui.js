@@ -80,11 +80,30 @@ function renderGitStatus() {
   const branch = git.branch || git.commit || 'detached';
   badge.innerHTML = `<i class="ti ti-git-branch me-1"></i>${esc(branch)}${git.dirty ? ` · ${git.dirty_count}` : ''}`;
 }
+function gitFilesForEnv(env) {
+  const prefix = `${env}/`;
+  return (state.git?.files || []).filter((file) => file.path === env || file.path.startsWith(prefix));
+}
+function gitFile(path) {
+  return (state.git?.files || []).find((file) => file.path === path);
+}
+function gitCodeLabel(code) {
+  if (code === '??') return 'untracked';
+  if (code === 'M') return 'modified';
+  if (code === 'A') return 'added';
+  if (code === 'D') return 'deleted';
+  return code || 'dirty';
+}
+function dirtyBadge(file) {
+  if (!file) return '';
+  return `<span class="badge bg-yellow-lt ms-2"><i class="ti ti-alert-triangle me-1"></i>${esc(gitCodeLabel(file.code))}</span>`;
+}
 async function selectEnv(env) {
   if (!state.envs.some((x) => x.name === env)) env = state.envs[0]?.name;
   if (!env) return;
   state.env = env; localStorage.setItem('activeEnv', env);
   renderEnvs();
+  renderEnvChanges();
   await Promise.all([loadApps(), loadAssets()]);
   setActive(state.active === 'dashboard' ? 'apps' : state.active);
 }
@@ -103,12 +122,47 @@ function renderEnvs() {
             <span class="badge bg-blue-lt">apps ${e.app_files_count ?? 0}</span>
             <span class="badge bg-cyan-lt">assets ${e.asset_files_count ?? 0}</span>
             <span class="badge ${e.has_env_secured_json ? 'bg-yellow-lt' : 'bg-secondary-lt'}">secured ${e.has_env_secured_json ? 'yes' : 'no'}</span>
-            ${e.is_dirty ? '<span class="badge bg-yellow-lt"><i class="ti ti-alert-triangle me-1"></i>dirty</span>' : ''}
+            ${e.is_dirty ? `<span class="badge bg-yellow-lt"><i class="ti ti-alert-triangle me-1"></i>dirty ${gitFilesForEnv(e.name).length || ''}</span>` : ''}
           </div>
         </div>
       </a>
     </div>`).join('');
   qsa('[data-env]').forEach((x) => x.addEventListener('click', (e) => { e.preventDefault(); selectEnv(x.dataset.env); }));
+  renderEnvChanges();
+}
+function renderEnvChanges() {
+  const row = qs('#env-changes-row');
+  const list = qs('#env-changes-list');
+  if (!row || !list || !state.env) return;
+  const files = gitFilesForEnv(state.env);
+  row.classList.toggle('hidden', files.length === 0);
+  list.innerHTML = files.map((file) => {
+    const target = dirtyNavigationTarget(file.path);
+    return `
+      <a href="#" class="list-group-item list-group-item-action d-flex align-items-center justify-content-between gap-3 ${target ? '' : 'disabled'}" data-dirty-path="${esc(file.path)}">
+        <span class="font-monospace text-break">${esc(file.path)}</span>
+        <span class="badge bg-yellow-lt">${esc(gitCodeLabel(file.code))}</span>
+      </a>`;
+  }).join('');
+  qsa('[data-dirty-path]').forEach((item) => item.addEventListener('click', (event) => {
+    event.preventDefault();
+    openDirtyPath(item.dataset.dirtyPath);
+  }));
+}
+function dirtyNavigationTarget(path) {
+  if (!state.env || !path.startsWith(`${state.env}/`)) return null;
+  const rest = path.slice(state.env.length + 1);
+  if (rest.startsWith('apps/')) return { page: 'apps', value: rest.slice('apps/'.length) };
+  if (rest.startsWith('assets/')) return { page: 'assets', value: rest.slice('assets/'.length) };
+  if (isSpecial(rest)) return { page: 'assets', value: rest };
+  return null;
+}
+function openDirtyPath(path) {
+  const target = dirtyNavigationTarget(path);
+  if (!target) return;
+  setActive(target.page);
+  if (target.page === 'apps') selectApp(target.value);
+  if (target.page === 'assets') selectAsset(target.value);
 }
 async function loadApps() {
   if (!state.env) return;
@@ -119,6 +173,12 @@ async function loadApps() {
 }
 function renderApps() {
   const body = qs('#apps-table tbody');
+  const dirtyApps = state.apps.filter((a) => gitFile(`${state.env}/apps/${a.file_name}`));
+  const dirtyBadgeEl = qs('#apps-dirty-count');
+  if (dirtyBadgeEl) {
+    dirtyBadgeEl.classList.toggle('hidden', dirtyApps.length === 0);
+    dirtyBadgeEl.textContent = dirtyApps.length ? `${dirtyApps.length} changed` : '';
+  }
   const query = (qs('#apps-filter')?.value || '').trim().toLowerCase();
   const apps = state.apps.filter((a) => {
     if (!query) return true;
@@ -127,7 +187,7 @@ function renderApps() {
   body.innerHTML = apps.map((a) => `
     <tr class="row-link ${state.appFile === a.file_name ? 'selected-row' : ''}" data-app="${esc(a.file_name)}">
       <td>
-        <div class="fw-semibold app-list-name">${a.is_dirty ? '<span class="status-dot status-dot-animated bg-yellow me-1"></span>' : ''}${esc(a.app_name || a.file_name)}</div>
+        <div class="fw-semibold app-list-name">${esc(a.app_name || a.file_name)}${dirtyBadge(gitFile(`${state.env}/apps/${a.file_name}`))}</div>
         <div class="text-muted small font-monospace text-break">${esc(a.file_name)}</div>
       </td>
       <td class="text-end">
@@ -236,8 +296,17 @@ async function loadAssets() {
 }
 function renderAssets() {
   const body = qs('#assets-table tbody');
-  body.innerHTML = state.assets.map((a) => `<tr class="row-link ${state.assetPath === a.relative_path ? 'selected-row' : ''}" data-asset="${esc(a.relative_path)}"><td class="font-monospace">${a.is_dirty ? '<span class="status-dot status-dot-animated bg-yellow me-1"></span>' : ''}${esc(a.relative_path)}</td><td>${esc(a.driver)}</td><td class="text-end">${a.size_bytes ?? 0}</td></tr>`).join('') || '<tr><td colspan="3" class="text-muted">No assets.</td></tr>';
+  const dirtyAssets = state.assets.filter((a) => gitFile(assetGitPath(a.relative_path)));
+  const dirtyBadgeEl = qs('#assets-dirty-count');
+  if (dirtyBadgeEl) {
+    dirtyBadgeEl.classList.toggle('hidden', dirtyAssets.length === 0);
+    dirtyBadgeEl.textContent = dirtyAssets.length ? `${dirtyAssets.length} changed` : '';
+  }
+  body.innerHTML = state.assets.map((a) => `<tr class="row-link ${state.assetPath === a.relative_path ? 'selected-row' : ''}" data-asset="${esc(a.relative_path)}"><td class="font-monospace">${esc(a.relative_path)}${dirtyBadge(gitFile(assetGitPath(a.relative_path)))}</td><td>${esc(a.driver)}</td><td class="text-end">${a.size_bytes ?? 0}</td></tr>`).join('') || '<tr><td colspan="3" class="text-muted">No assets.</td></tr>';
   qsa('[data-asset]').forEach((x) => x.addEventListener('click', () => selectAsset(x.dataset.asset)));
+}
+function assetGitPath(relativePath) {
+  return isSpecial(relativePath) ? `${state.env}/${relativePath}` : `${state.env}/assets/${relativePath}`;
 }
 async function selectAsset(path) {
   state.assetPath = path; renderAssets(); clearError();
