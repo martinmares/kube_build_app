@@ -218,7 +218,7 @@ Required app detail sections:
 Overview
 Summary context
 Local variables
-Container variables
+Container envs
 Services / ports / ingress / routes
 Resources
 Startup
@@ -284,7 +284,7 @@ Current implementation status:
   - app kind, replicas, init containers and HPA/autoscaling
   - container resources
   - Java runtime JVM sizing
-  - probes, container variables, env_from, mounts and ports counts
+  - probes, container envs, env_from, mounts and ports counts
 - unquoted app placeholders such as `port: {{var:EXPOSE_PORT}}` are handled for model preview
 - Build tab uses `internal/buildapp` through read-only endpoints:
   - `POST /api/v1/envs/{env}/validate`
@@ -370,7 +370,7 @@ Do not start with broad YAML reserialization. Prefer targeted patches that prese
 - vars patch
 - resources patch
 - startup patch
-- container variable add/update/delete
+- container env add/update/delete
 - git restore
 
 ### Phase 5: Structured Editors

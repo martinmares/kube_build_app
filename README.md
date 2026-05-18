@@ -242,7 +242,7 @@ name: "{{var:APP_NAME}}"
 containers:
   - name: "{{var:APP_NAME}}"
     image: "{{env:TSM_REGISTRY_URL}}/{{var:APP_NAME}}:{{env:TSM_RELEASE_ID}}"
-    vars:
+    envs:
       - name: RUNTIME_VALUE
         value: "{{RUNTIME_VALUE}}"
 ```
@@ -492,7 +492,7 @@ Add:
 containers:
   - name: api
     image: nginx:stable
-    vars:
+    envs:
       - name: JAVA_OPTS
         value: "-Xms256m -Xmx512m"
       - name: POD_NAME
@@ -969,7 +969,7 @@ init_containers:
     image: registry.example.com/api-migrate:latest
     command: ["/bin/sh", "-c"]
     arguments: ["./migrate.sh"]
-    vars:
+    envs:
       - name: LOG_LEVEL
         value: INFO
     env_from:
@@ -1090,14 +1090,14 @@ vars:
   - name: LOG_LEVEL
     value: INFO
 
-container_vars:
+container_envs:
   - name: "*"
-    vars:
+    envs:
       - name: GLOBAL_FLAG
         value: "true"
 
   - name: api
-    vars:
+    envs:
       - name: JAVA_OPTS
         value: "-Xms256m"
 ```
@@ -1106,10 +1106,10 @@ Semantics:
 
 - generic map keys are recursively merged, app values win
 - `vars` are matched by `name`; app-level item fully replaces default item
-- `container_vars` are applied by `container.name`
+- `container_envs` are applied by `container.name`
 - `name: "*"` applies to all containers first
 - concrete container defaults are applied next
-- local `containers[].vars` are applied last
+- local `containers[].envs` are applied last
 - matching variables are fully replaced by `name`
 
 Removal / tombstone:
@@ -1123,7 +1123,7 @@ vars:
 ```yaml
 containers:
   - name: api
-    vars:
+    envs:
       - name: GLOBAL_FLAG
         remove: true
 ```

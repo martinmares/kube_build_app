@@ -52,7 +52,7 @@ kube-env-gui
 - structured defaults editor model
 - structured env editor model
 - structured virtual asset editor model
-- partial effective vars / container vars preview logic
+- partial effective vars / container envs preview logic
 
 This is useful for the Go rewrite, but it must not become the primary rendering reference.
 
@@ -67,7 +67,7 @@ Practical implication:
 
 - When designing Go structs, compare them with both Ruby classes and Rust `kube-env-core` structs.
 - When behavior differs between Ruby and Rust UI preview logic, Ruby wins for rendering.
-- Rust UI preview logic can reveal useful intended semantics, especially for `_defaults.yml`, `vars`, `container_vars` and virtual assets.
+- Rust UI preview logic can reveal useful intended semantics, especially for `_defaults.yml`, `vars`, `container_envs` and virtual assets.
 
 ### CETIN TSM
 
@@ -267,7 +267,7 @@ These areas are easy to accidentally change during rewrite:
 - env resolution order
 - `apps/_defaults.yml` merge semantics
 - `vars` replacement and `remove: true`
-- `container_vars` wildcard and container-specific overrides
+- `container_envs` wildcard and container-specific overrides
 - asset `transform: true` vs `transform: false`
 - asset ConfigMap CRC32 naming
 - rollout checksum SHA256 annotations
@@ -285,7 +285,7 @@ Implemented in the initial Go renderer skeleton:
 - basic Deployment and StatefulSet generation
 - PodDisruptionBudget generation
 - `apps/_defaults.yml` recursive merge
-- `vars` and `container_vars` override/remove semantics
+- `vars` and `container_envs` override/remove semantics
 - `ignore`, `disable_create_service` and `disable_shared_assets`
 - `replica-profiles.yml` via `-p`, `REPLICA_PROFILE` or `defaults.profile`
 - standard file assets, transformed assets, binary assets and MTLS assets

@@ -142,7 +142,7 @@ Kontrakt:
 - `requests/limits` mají přednost před `from/to`
 - staré YAML soubory musí zůstat validní
 
-### 6. Editor `Container variables`
+### 6. Editor `Container envs`
 
 Model: `gpt-5.5 medium`
 
@@ -150,20 +150,20 @@ Stav: první verze hotová.
 
 Úkoly:
 
-- editovat `containers[].vars` - hotovo
+- editovat `containers[].envs` - hotovo
 - add/update/delete - hotovo
 - per-container zobrazení - hotovo
 - po uložení refresh detailu a diffu - hotovo
 - testy na více containerů - hotovo
-- write endpoint `PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/vars` - hotovo
+- write endpoint `PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/envs` - hotovo
 - read-only režim schovává write controls - hotovo
 
 Kontrakt:
 
 - app-level lokální proměnné jsou `vars:`
-- container-level lokální proměnné jsou `containers[].vars`
-- `_defaults.yml` používá `container_vars`
-- staré `env_vars` / `container_env_vars` nejsou preferovaný Go metamodel
+- container-level lokální proměnné jsou `containers[].envs`
+- `_defaults.yml` používá `container_envs`
+- staré `env_vars`, `container_env_vars`, `container_vars` a `containers[].vars` už nejsou podporovaný metamodel
 
 ### 7. Editor `probes`
 
@@ -190,7 +190,7 @@ Model: `gpt-5.5 medium`
 
 - zobrazit `Defaults` - read-only view hotovo přes Assets
 - zobrazit a editovat `Local variables`
-- zobrazit a editovat `Container variables`
+- zobrazit a editovat `Container envs`
 - podporovat `containers: name: "*"`
 - podporovat konkrétní container override
 - respektovat `remove: true`
@@ -287,7 +287,7 @@ Stav: základní README sekce hotová.
 - editaci `Local variables`
 - editaci `replicas`
 - editaci `resources`
-- editaci `Container variables`
+- editaci `Container envs`
 - editaci `_defaults.yml`
 - validaci/build preview přes `kube-build-app` internals
 

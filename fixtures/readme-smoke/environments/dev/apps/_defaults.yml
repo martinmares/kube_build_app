@@ -3,14 +3,14 @@ vars:
     value: platform
 labels:
   team: "{{var:TEAM}}"
-container_vars:
+container_envs:
   - name: "*"
-    vars:
+    envs:
       - name: GLOBAL_FLAG
         value: "true"
       - name: REMOVE_ME
         value: "from-defaults"
   - name: api
-    vars:
+    envs:
       - name: API_DEFAULT
         value: "from-container-defaults"
