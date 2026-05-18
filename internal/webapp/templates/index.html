@@ -19,6 +19,7 @@
           <span class="badge bg-blue-lt"><i class="ti ti-stack-2 me-1"></i><span id="env-count">-</span> envs</span>
           <span class="badge bg-green-lt"><i class="ti ti-apps me-1"></i><span id="apps-count">-</span> apps</span>
           <span class="badge bg-cyan-lt"><i class="ti ti-files me-1"></i><span id="assets-count">-</span> assets</span>
+          <span class="badge bg-secondary-lt" id="git-status-badge"><i class="ti ti-git-branch me-1"></i>git -</span>
           <span class="badge bg-yellow-lt hidden" id="read-only-badge"><i class="ti ti-lock me-1"></i>read-only</span>
           <div class="nav-item d-none d-md-flex position-relative ms-1">
             <a href="#" class="nav-link px-0" id="theme-toggle" aria-label="Toggle theme"><i class="ti ti-sun"></i></a>
@@ -68,13 +69,13 @@
           <section data-page="apps" class="hidden">
             <div class="row g-3">
               <div class="col-12 col-lg-4"><div class="card apps-list-card"><div class="card-header"><div class="w-100"><h3 class="card-title mb-2"><i class="ti ti-apps me-2"></i>Applications</h3><div class="input-icon"><span class="input-icon-addon"><i class="ti ti-search"></i></span><input class="form-control" id="apps-filter" placeholder="Filter applications..."></div></div></div><div class="table-responsive apps-list-table"><table class="table table-vcenter table-hover mb-0" id="apps-table"><thead><tr><th>Application</th><th class="text-end">Runtime</th></tr></thead><tbody></tbody></table></div></div></div>
-              <div class="col-12 col-lg-8"><div class="card"><div class="card-header"><div><h3 class="card-title" id="app-detail-title">Select app</h3><div class="text-muted small font-monospace" id="app-detail-path"></div><div class="text-muted small" id="app-detail-meta"></div></div></div><div class="card-body"><div class="row g-3"><div class="col-12"><h4>Overview</h4><div id="app-overview" class="app-overview-empty text-muted">Select an application to show structured model overview.</div></div><div class="col-12"><h4>Local variables</h4><div class="table-responsive"><table class="table table-sm" id="app-vars"><tbody></tbody></table></div></div><div class="col-12"><h4>Raw YAML</h4><pre class="code-block" id="app-raw"></pre></div><div class="col-12"><h4>Rendered preview</h4><pre class="code-block" id="app-rendered"></pre></div></div></div></div></div>
+              <div class="col-12 col-lg-8"><div class="card"><div class="card-header"><div><h3 class="card-title" id="app-detail-title">Select app</h3><div class="text-muted small font-monospace" id="app-detail-path"></div><div class="text-muted small" id="app-detail-meta"></div></div></div><div class="card-body"><div class="row g-3"><div class="col-12"><h4>Overview</h4><div id="app-overview" class="app-overview-empty text-muted">Select an application to show structured model overview.</div></div><div class="col-12"><h4>Local variables</h4><div class="table-responsive"><table class="table table-sm" id="app-vars"><tbody></tbody></table></div></div><div class="col-12"><h4>Raw YAML</h4><pre class="code-block" id="app-raw"></pre></div><div class="col-12"><h4>Rendered preview</h4><pre class="code-block" id="app-rendered"></pre></div><div class="col-12 hidden" id="app-diff-section"><h4>Git diff</h4><pre class="code-block diff-block" id="app-diff"></pre></div></div></div></div></div>
             </div>
           </section>
           <section data-page="assets" class="hidden">
             <div class="row g-3">
               <div class="col-12 col-lg-5"><div class="card"><div class="card-header"><h3 class="card-title"><i class="ti ti-folders me-2"></i>Assets</h3></div><div class="table-responsive"><table class="table table-vcenter table-hover mb-0" id="assets-table"><thead><tr><th>Path</th><th>Driver</th><th class="text-end">Bytes</th></tr></thead><tbody></tbody></table></div></div></div>
-              <div class="col-12 col-lg-7"><div class="card"><div class="card-header"><div><h3 class="card-title" id="asset-detail-title">Select asset</h3><div class="text-muted small font-monospace" id="asset-detail-path"></div></div></div><div class="card-body"><pre class="code-block" id="asset-raw"></pre></div></div></div>
+              <div class="col-12 col-lg-7"><div class="card"><div class="card-header"><div><h3 class="card-title" id="asset-detail-title">Select asset</h3><div class="text-muted small font-monospace" id="asset-detail-path"></div></div></div><div class="card-body"><pre class="code-block" id="asset-raw"></pre><div class="mt-3 hidden" id="asset-diff-section"><h4>Git diff</h4><pre class="code-block diff-block" id="asset-diff"></pre></div></div></div></div>
             </div>
           </section>
           <section data-page="build" class="hidden">

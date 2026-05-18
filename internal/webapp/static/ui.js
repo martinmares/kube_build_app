@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], inventory: null, appFile: null, assetPath: null, active: 'dashboard' };
+const state = { envs: [], env: null, apps: [], assets: [], inventory: null, git: null, appFile: null, assetPath: null, active: 'dashboard' };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -54,13 +54,31 @@ async function loadAll() {
     const info = await api('/api/v1/info');
     setText('#app-version', `${info.version} / ${info.commit}`);
     qs('#read-only-badge').classList.toggle('hidden', !info.read_only);
-    const data = await api('/api/v1/envs');
+    const [git, data] = await Promise.all([
+      api('/api/v1/git/status'),
+      api('/api/v1/envs'),
+    ]);
+    state.git = git;
+    renderGitStatus();
     state.envs = data.items || [];
     setText('#repo-root', data.root || '-');
     setText('#env-count', state.envs.length);
     renderEnvs();
     if (!state.env && state.envs.length) selectEnv(localStorage.getItem('activeEnv') || state.envs[0].name);
   } catch (e) { showError(e); }
+}
+function renderGitStatus() {
+  const badge = qs('#git-status-badge');
+  if (!badge) return;
+  const git = state.git || {};
+  if (!git.available) {
+    badge.className = 'badge bg-secondary-lt';
+    badge.innerHTML = '<i class="ti ti-git-branch me-1"></i>no git';
+    return;
+  }
+  badge.className = `badge ${git.dirty ? 'bg-yellow-lt' : 'bg-green-lt'}`;
+  const branch = git.branch || git.commit || 'detached';
+  badge.innerHTML = `<i class="ti ti-git-branch me-1"></i>${esc(branch)}${git.dirty ? ` · ${git.dirty_count}` : ''}`;
 }
 async function selectEnv(env) {
   if (!state.envs.some((x) => x.name === env)) env = state.envs[0]?.name;
@@ -85,6 +103,7 @@ function renderEnvs() {
             <span class="badge bg-blue-lt">apps ${e.app_files_count ?? 0}</span>
             <span class="badge bg-cyan-lt">assets ${e.asset_files_count ?? 0}</span>
             <span class="badge ${e.has_env_secured_json ? 'bg-yellow-lt' : 'bg-secondary-lt'}">secured ${e.has_env_secured_json ? 'yes' : 'no'}</span>
+            ${e.is_dirty ? '<span class="badge bg-yellow-lt"><i class="ti ti-alert-triangle me-1"></i>dirty</span>' : ''}
           </div>
         </div>
       </a>
@@ -108,7 +127,7 @@ function renderApps() {
   body.innerHTML = apps.map((a) => `
     <tr class="row-link ${state.appFile === a.file_name ? 'selected-row' : ''}" data-app="${esc(a.file_name)}">
       <td>
-        <div class="fw-semibold app-list-name">${esc(a.app_name || a.file_name)}</div>
+        <div class="fw-semibold app-list-name">${a.is_dirty ? '<span class="status-dot status-dot-animated bg-yellow me-1"></span>' : ''}${esc(a.app_name || a.file_name)}</div>
         <div class="text-muted small font-monospace text-break">${esc(a.file_name)}</div>
       </td>
       <td class="text-end">
@@ -129,11 +148,12 @@ async function selectApp(file) {
     ]);
     setText('#app-detail-title', model.app_name || detail.summary?.app_name || detail.file_name);
     setText('#app-detail-path', detail.path);
-    setText('#app-detail-meta', `${model.containers?.length || 0} container(s), ${vars.items?.length || 0} local variable(s)`);
+    setText('#app-detail-meta', `${model.containers?.length || 0} container(s), ${vars.items?.length || 0} local variable(s)${detail.is_dirty ? ', dirty file' : ''}`);
     renderAppOverview(model);
     setText('#app-raw', detail.content);
     setText('#app-rendered', rendered.content);
     qs('#app-vars').innerHTML = (vars.items || []).map((v) => `<tr><td class="font-monospace">${esc(v.name)}</td><td class="font-monospace text-break">${esc(v.value)}</td></tr>`).join('') || '<tr><td colspan="2" class="text-muted">No local variables.</td></tr>';
+    await loadGitDiff(`${state.env}/apps/${detail.file_name}`, detail.is_dirty, '#app-diff-section', '#app-diff');
   } catch (e) { showError(e); }
 }
 function renderAppOverview(model) {
@@ -216,7 +236,7 @@ async function loadAssets() {
 }
 function renderAssets() {
   const body = qs('#assets-table tbody');
-  body.innerHTML = state.assets.map((a) => `<tr class="row-link ${state.assetPath === a.relative_path ? 'selected-row' : ''}" data-asset="${esc(a.relative_path)}"><td class="font-monospace">${esc(a.relative_path)}</td><td>${esc(a.driver)}</td><td class="text-end">${a.size_bytes ?? 0}</td></tr>`).join('') || '<tr><td colspan="3" class="text-muted">No assets.</td></tr>';
+  body.innerHTML = state.assets.map((a) => `<tr class="row-link ${state.assetPath === a.relative_path ? 'selected-row' : ''}" data-asset="${esc(a.relative_path)}"><td class="font-monospace">${a.is_dirty ? '<span class="status-dot status-dot-animated bg-yellow me-1"></span>' : ''}${esc(a.relative_path)}</td><td>${esc(a.driver)}</td><td class="text-end">${a.size_bytes ?? 0}</td></tr>`).join('') || '<tr><td colspan="3" class="text-muted">No assets.</td></tr>';
   qsa('[data-asset]').forEach((x) => x.addEventListener('click', () => selectAsset(x.dataset.asset)));
 }
 async function selectAsset(path) {
@@ -227,14 +247,30 @@ async function selectAsset(path) {
       const entries = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/special/${encodeURIComponent(path)}/entries`);
       setText('#asset-detail-path', `${entries.entries?.length || 0} entrie(s), editable=${entries.editable}`);
       setText('#asset-raw', (entries.entries || []).map((e) => `${e.key} [${e.value_type}] = ${e.value_text}`).join('\n'));
+      await loadGitDiff(`${state.env}/${path}`, entries.is_dirty, '#asset-diff-section', '#asset-diff');
     } else {
       const detail = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/content/${path.split('/').map(encodeURIComponent).join('/')}`);
       setText('#asset-detail-path', detail.path);
       setText('#asset-raw', detail.content);
+      await loadGitDiff(`${state.env}/assets/${detail.relative_path}`, detail.is_dirty, '#asset-diff-section', '#asset-diff');
     }
   } catch (e) { showError(e); }
 }
 function isSpecial(path) { return ['env.secured.json','env.unsecured.json','assets.secured.json','assets.unsecured.json'].includes(path); }
+async function loadGitDiff(relativePath, isDirty, sectionSelector, targetSelector) {
+  const section = qs(sectionSelector);
+  const target = qs(targetSelector);
+  if (!section || !target) return;
+  if (!isDirty) {
+    section.classList.add('hidden');
+    target.textContent = '';
+    return;
+  }
+  const encoded = relativePath.split('/').map(encodeURIComponent).join('/');
+  const diff = await api(`/api/v1/git/diff/${encoded}`);
+  section.classList.remove('hidden');
+  target.textContent = diff.content || diff.error || 'No textual diff available.';
+}
 async function runBuildValidate() {
   if (!state.env) return showError('Select environment first.');
   clearError();

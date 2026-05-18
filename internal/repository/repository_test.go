@@ -181,6 +181,14 @@ func TestGitStatusMarksDirtyAppsInNestedEnvironmentRoot(t *testing.T) {
 	if !detail.IsDirty {
 		t.Fatalf("detail IsDirty = false, want true")
 	}
+
+	diff := repo.GitDiff("test/apps/api.yml")
+	if !diff.Available {
+		t.Fatalf("git diff unavailable: %#v", diff)
+	}
+	if !strings.Contains(diff.Content, "+++ b/test/apps/api.yml") || !strings.Contains(diff.Content, "+name: api") {
+		t.Fatalf("unexpected diff content:\n%s", diff.Content)
+	}
 }
 
 func writeFile(t *testing.T, path string, content string) {

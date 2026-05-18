@@ -25,6 +25,13 @@ type GitFileStatus struct {
 	Code string `json:"code"`
 }
 
+type GitDiff struct {
+	Available bool   `json:"available"`
+	Path      string `json:"path,omitempty"`
+	Content   string `json:"content,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
 func (r *Repository) GitStatus() GitStatus {
 	topLevel, err := gitOutput(r.root, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -63,6 +70,34 @@ func (r *Repository) GitStatus() GitStatus {
 	return status
 }
 
+func (r *Repository) GitDiff(relativePath string) GitDiff {
+	rel, err := validateRelativePath(relativePath)
+	if err != nil {
+		return GitDiff{Available: false, Error: err.Error()}
+	}
+	if _, err := gitOutput(r.root, "rev-parse", "--show-toplevel"); err != nil {
+		return GitDiff{Available: false, Path: rel, Error: "repository root is not inside a Git work tree"}
+	}
+
+	diff := GitDiff{Available: true, Path: rel}
+	staged, stagedErr := gitOutputRaw(r.root, "diff", "--cached", "--", rel)
+	unstaged, unstagedErr := gitOutputRaw(r.root, "diff", "--", rel)
+	if stagedErr != nil && unstagedErr != nil {
+		diff.Error = stagedErr.Error()
+		return diff
+	}
+	diff.Content = strings.TrimSpace(strings.TrimSpace(staged) + "\n" + strings.TrimSpace(unstaged))
+	if diff.Content == "" && r.gitStatusCode(rel) == "??" {
+		content, err := os.ReadFile(filepath.Join(r.root, filepath.FromSlash(rel)))
+		if err != nil {
+			diff.Error = err.Error()
+			return diff
+		}
+		diff.Content = untrackedFileDiff(rel, string(content))
+	}
+	return diff
+}
+
 func (r *Repository) dirtyPathSet() map[string]bool {
 	status := r.GitStatus()
 	out := map[string]bool{}
@@ -73,6 +108,15 @@ func (r *Repository) dirtyPathSet() map[string]bool {
 		out[file.Path] = true
 	}
 	return out
+}
+
+func (r *Repository) gitStatusCode(path string) string {
+	for _, file := range r.GitStatus().Files {
+		if file.Path == path {
+			return file.Code
+		}
+	}
+	return ""
 }
 
 func (r *Repository) isDirtyPath(path string) bool {
@@ -123,6 +167,11 @@ func hasDirtyPrefix(dirty map[string]bool, prefix string) bool {
 }
 
 func gitOutput(dir string, args ...string) (string, error) {
+	out, err := gitOutputRaw(dir, args...)
+	return strings.TrimSpace(out), err
+}
+
+func gitOutputRaw(dir string, args ...string) (string, error) {
 	if _, err := os.Stat(dir); err != nil {
 		return "", err
 	}
@@ -135,5 +184,23 @@ func gitOutput(dir string, args ...string) (string, error) {
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil
+}
+
+func untrackedFileDiff(path string, content string) string {
+	lines := strings.Split(content, "\n")
+	var builder strings.Builder
+	builder.WriteString("--- /dev/null\n")
+	builder.WriteString("+++ b/")
+	builder.WriteString(path)
+	builder.WriteString("\n@@\n")
+	for i, line := range lines {
+		if i == len(lines)-1 && line == "" {
+			continue
+		}
+		builder.WriteByte('+')
+		builder.WriteString(line)
+		builder.WriteByte('\n')
+	}
+	return strings.TrimRight(builder.String(), "\n")
 }

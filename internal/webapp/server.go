@@ -57,6 +57,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(mustSubFS(contentFiles, "static")))))
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/v1/info", s.handleInfo)
+	mux.HandleFunc("GET /api/v1/git/status", s.handleGitStatus)
+	mux.HandleFunc("GET /api/v1/git/diff/{file_path...}", s.handleGitDiff)
 	mux.HandleFunc("GET /api/v1/envs", s.handleEnvironments)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps", s.handleApps)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}", s.handleAppDetail)
@@ -111,6 +113,27 @@ func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 		"base_path": s.options.BasePath,
 		"read_only": s.options.ReadOnly,
 	})
+}
+
+func (s *Server) handleGitStatus(w http.ResponseWriter, _ *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.repo.GitStatus())
+}
+
+func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	diff := s.repo.GitDiff(r.PathValue("file_path"))
+	if !diff.Available && diff.Error != "" {
+		writeJSON(w, http.StatusBadRequest, diff)
+		return
+	}
+	writeJSON(w, http.StatusOK, diff)
 }
 
 func (s *Server) handleEnvironments(w http.ResponseWriter, _ *http.Request) {
