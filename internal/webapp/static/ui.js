@@ -1879,7 +1879,7 @@ function renderSpecialEntryPreview(item) {
   return `
     <div class="special-entry-card" data-special-preview-card>
       <div class="special-entry-card-head">
-        <div class="font-monospace fw-semibold text-break">${esc(item.key)}</div>
+        <div class="special-entry-name font-monospace text-break">${esc(item.key)}</div>
         <div class="special-entry-card-actions">
           <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-copy-special-entry="name" data-copy-value="${esc(item.key)}" title="Copy name"><i class="ti ti-copy"></i></button>
           <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-copy-special-entry="value" data-copy-value="${esc(item.value_text)}" title="Copy value"><i class="ti ti-copy-check"></i></button>

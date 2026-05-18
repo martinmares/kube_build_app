@@ -59,8 +59,9 @@
 .special-entry-preview-list { display: grid; gap: .55rem; max-height: min(62vh, 44rem); overflow: auto; padding: .55rem; border: 1px solid color-mix(in srgb, var(--tblr-border-color) 72%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface) 84%, var(--tblr-primary) 16%); }
 .special-entry-card { padding: .65rem .75rem; border: 1px solid color-mix(in srgb, var(--tblr-border-color) 74%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 76%, transparent); }
 .special-entry-card-head { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: start; gap: .75rem; margin-bottom: .4rem; }
+.special-entry-name { color: var(--tblr-muted); font-size: .72rem; font-weight: 500; letter-spacing: .015em; }
 .special-entry-card-actions { display: flex; align-items: center; gap: .35rem; }
-.special-entry-preview-value { max-height: 7.5rem; overflow: auto; padding: .5rem .6rem; border-radius: 6px; background: color-mix(in srgb, var(--tblr-bg-surface) 82%, #000 18%); color: var(--tblr-body-color); font-size: .78rem; line-height: 1.35; white-space: pre; word-break: normal; }
+.special-entry-preview-value { max-height: 7.5rem; overflow: auto; padding: .65rem .75rem; border-radius: 6px; background: color-mix(in srgb, var(--tblr-bg-surface) 82%, #000 18%); color: var(--tblr-body-color); font-size: .9rem; font-weight: 600; line-height: 1.42; white-space: pre; word-break: normal; }
 .special-entry-editor-list { max-height: 62vh; overflow: auto; border: 1px solid color-mix(in srgb, var(--tblr-border-color) 72%, transparent); border-radius: 8px; }
 .special-entry-editor-table { min-width: 1180px; margin-bottom: 0; }
 .special-entry-editor-table th { position: sticky; top: 0; z-index: 1; background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 92%, #000 8%); }
