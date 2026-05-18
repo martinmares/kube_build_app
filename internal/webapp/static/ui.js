@@ -4,6 +4,7 @@ const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const api = async (url) => { const r = await fetch(url, { credentials: 'same-origin' }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
 const apiPost = async (url) => { const r = await fetch(url, { method: 'POST', credentials: 'same-origin' }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
+const apiPatch = async (url, payload) => { const r = await fetch(url, { method: 'PATCH', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
 function showError(e) { const el = qs('#ui-error'); el.textContent = String(e); el.classList.remove('hidden'); }
 function clearError() { const el = qs('#ui-error'); el.textContent = ''; el.classList.add('hidden'); }
 function setText(id, value) { const el = qs(id); if (el) el.textContent = value ?? '-'; }
@@ -47,12 +48,21 @@ async function init() {
     if (path) path.value = '';
     renderInventory();
   });
+  qs('#app-vars-save-btn')?.addEventListener('click', () => saveAppVars());
+  qs('#app-vars-add-btn')?.addEventListener('click', () => addAppVarRow());
+  qs('#app-vars')?.addEventListener('click', (e) => {
+    const button = e.target.closest('[data-remove-app-var]');
+    if (!button || state.readOnly) return;
+    button.closest('tr')?.remove();
+    syncAppVarsEmptyState();
+  });
   await loadAll();
 }
 async function loadAll() {
   clearError();
   try {
     const info = await api('/api/v1/info');
+    state.readOnly = !!info.read_only;
     setText('#app-version', `${info.version} / ${info.commit}`);
     qs('#read-only-badge').classList.toggle('hidden', !info.read_only);
     const [git, data] = await Promise.all([
@@ -278,8 +288,57 @@ async function selectApp(file) {
     renderAppOverview(model);
     setText('#app-raw', detail.content);
     setText('#app-rendered', rendered.content);
-    qs('#app-vars').innerHTML = (vars.items || []).map((v) => `<tr><td class="font-monospace">${esc(v.name)}</td><td class="font-monospace text-break">${esc(v.value)}</td></tr>`).join('') || '<tr><td colspan="2" class="text-muted">No local variables.</td></tr>';
+    renderAppVarsEditor(vars.items || []);
     await loadGitDiff(`${state.env}/apps/${detail.file_name}`, detail.is_dirty, '#app-diff-section', '#app-diff');
+  } catch (e) { showError(e); }
+}
+function renderAppVarsEditor(items) {
+  const body = qs('#app-vars tbody');
+  if (!body) return;
+  body.innerHTML = items.map((v) => renderAppVarRow(v.name, v.value)).join('');
+  syncAppVarsEmptyState();
+  const save = qs('#app-vars-save-btn');
+  if (save) save.disabled = state.readOnly || !state.appFile;
+  const add = qs('#app-vars-add-btn');
+  if (add) add.disabled = state.readOnly || !state.appFile;
+}
+function renderAppVarRow(name = '', value = '') {
+  const disabled = state.readOnly ? 'disabled' : '';
+  return `
+    <tr>
+      <td><input class="form-control form-control-sm font-monospace app-var-name" placeholder="NAME" value="${esc(name)}" ${disabled}></td>
+      <td><input class="form-control form-control-sm font-monospace app-var-value" placeholder="value" value="${esc(value)}" ${disabled}></td>
+      <td class="table-action-col"><button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-app-var title="Remove variable" ${disabled}><i class="ti ti-trash"></i></button></td>
+    </tr>`;
+}
+function syncAppVarsEmptyState() {
+  const body = qs('#app-vars tbody');
+  if (!body) return;
+  const hasRows = qsa('#app-vars tbody tr').some((row) => row.querySelector('.app-var-name'));
+  if (!hasRows) body.innerHTML = '<tr><td colspan="3" class="text-muted">No local variables.</td></tr>';
+}
+function addAppVarRow() {
+  if (state.readOnly || !state.appFile) return;
+  const body = qs('#app-vars tbody');
+  if (!body) return;
+  if (!qsa('#app-vars tbody tr').some((row) => row.querySelector('.app-var-name'))) body.innerHTML = '';
+  body.insertAdjacentHTML('beforeend', renderAppVarRow());
+  qsa('#app-vars tbody tr').at(-1)?.querySelector('.app-var-name')?.focus();
+}
+async function saveAppVars() {
+  if (!state.env || !state.appFile || state.readOnly) return;
+  clearError();
+  const items = qsa('#app-vars tbody tr').map((row) => ({
+    name: row.querySelector('.app-var-name')?.value?.trim() || '',
+    value: row.querySelector('.app-var-value')?.value || '',
+  })).filter((item) => item.name !== '');
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/vars`, {items});
+    state.git = await api('/api/v1/git/status');
+    renderGitStatus();
+    renderEnvChanges();
+    await loadApps();
+    await selectApp(state.appFile);
   } catch (e) { showError(e); }
 }
 function renderAppDetailBadges(model, detail) {

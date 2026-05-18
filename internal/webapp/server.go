@@ -64,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}", s.handleAppDetail)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/rendered", s.handleAppRendered)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVars)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVarsUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/model", s.handleAppModel)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets", s.handleAssets)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/content/{asset_path...}", s.handleAssetContent)
@@ -219,6 +220,30 @@ func (s *Server) handleAppVars(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vars, err := s.repo.AppVars(r.PathValue("env"), r.PathValue("app_file"))
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, vars)
+}
+
+func (s *Server) handleAppVarsUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	if s.options.ReadOnly {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "mutating API endpoints are disabled"})
+		return
+	}
+	var payload struct {
+		Items []repository.VarItem `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	vars, err := s.repo.UpdateAppVars(r.PathValue("env"), r.PathValue("app_file"), payload.Items)
 	if err != nil {
 		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
 		return

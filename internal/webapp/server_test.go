@@ -256,6 +256,34 @@ containers:
 	}
 }
 
+func TestAppVarsUpdateEndpointRequiresWriteMode(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "vars:\n  - name: APP_NAME\n    value: api\nname: \"{{var:APP_NAME}}\"\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readOnlyServer := NewServer(appinfo.For(appinfo.EditAppName), repo)
+	readOnlyReq := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/vars", strings.NewReader(`{"items":[{"name":"APP_NAME","value":"worker"}]}`))
+	readOnlyRes := httptest.NewRecorder()
+	readOnlyServer.Handler().ServeHTTP(readOnlyRes, readOnlyReq)
+	if readOnlyRes.Code != http.StatusForbidden {
+		t.Fatalf("read-only status = %d, want 403: %s", readOnlyRes.Code, readOnlyRes.Body.String())
+	}
+
+	writeServer := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	writeReq := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/vars", strings.NewReader(`{"items":[{"name":"APP_NAME","value":"worker"}]}`))
+	writeRes := httptest.NewRecorder()
+	writeServer.Handler().ServeHTTP(writeRes, writeReq)
+	if writeRes.Code != http.StatusOK {
+		t.Fatalf("write status = %d, want 200: %s", writeRes.Code, writeRes.Body.String())
+	}
+	if !strings.Contains(writeRes.Body.String(), `"value":"worker"`) {
+		t.Fatalf("unexpected write response:\n%s", writeRes.Body.String())
+	}
+}
+
 func TestAssetContentEndpoint(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "assets", "ui", "nginx.conf"), "server {}\n")

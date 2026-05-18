@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -193,6 +194,25 @@ func (r *Repository) AppVars(envName string, appFile string) (AppVars, error) {
 		return AppVars{}, err
 	}
 	return AppVars{Env: envName, FileName: detail.FileName, Items: extractVars(detail.Content)}, nil
+}
+
+func (r *Repository) UpdateAppVars(envName string, appFile string, items []VarItem) (AppVars, error) {
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return AppVars{}, err
+	}
+	if err := validateVarItems(items); err != nil {
+		return AppVars{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return AppVars{}, err
+	}
+	updated := replaceVarsBlock(string(contentBytes), items)
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		return AppVars{}, err
+	}
+	return r.AppVars(envName, filepath.Base(path))
 }
 
 func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) {
@@ -479,10 +499,62 @@ func extractVars(content string) []VarItem {
 	return parseVarsLines(lines[start:end])
 }
 
+func replaceVarsBlock(content string, items []VarItem) string {
+	lines, start, end := splitVarsBlock(content)
+	var replacement []string
+	if len(items) > 0 {
+		replacement = renderVarsBlock(items)
+	}
+	if start >= 0 && end >= 0 {
+		updated := make([]string, 0, len(lines)-end+start+len(replacement))
+		updated = append(updated, lines[:start]...)
+		updated = append(updated, replacement...)
+		updated = append(updated, lines[end:]...)
+		lines = updated
+	} else if len(replacement) > 0 {
+		lines = append(append(replacement, ""), lines...)
+	}
+	out := strings.Join(lines, "\n")
+	if strings.HasSuffix(content, "\n") {
+		out += "\n"
+	}
+	return out
+}
+
+func renderVarsBlock(items []VarItem) []string {
+	lines := []string{"vars:"}
+	for _, item := range items {
+		lines = append(lines, "  - name: "+strings.TrimSpace(item.Name), "    value: "+strconv.Quote(item.Value))
+	}
+	return lines
+}
+
+func validateVarItems(items []VarItem) error {
+	seen := map[string]bool{}
+	for _, item := range items {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			return errors.New("variable name is required")
+		}
+		if strings.ContainsAny(name, "\r\n:") {
+			return fmt.Errorf("invalid variable name %q", name)
+		}
+		if seen[name] {
+			return fmt.Errorf("duplicate variable name %q", name)
+		}
+		seen[name] = true
+		if strings.ContainsAny(item.Value, "\r\n") {
+			return fmt.Errorf("variable %q contains unsupported newline", name)
+		}
+	}
+	return nil
+}
+
 func renderVarsPreview(content string) string {
 	lines, start, end := splitVarsBlock(content)
-	vars := parseVarsLines(lines)
+	var vars []VarItem
 	if start >= 0 && end >= 0 {
+		vars = parseVarsLines(lines[start:end])
 		lines = append(lines[:start], lines[end:]...)
 	}
 	out := strings.Join(lines, "\n")

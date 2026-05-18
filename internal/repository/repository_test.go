@@ -326,6 +326,35 @@ containers:
 	}
 }
 
+func TestUpdateAppVarsReplacesOnlyVarsBlock(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `vars:
+  - name: APP_NAME
+    value: api
+name: "{{var:APP_NAME}}"
+replicas: 1
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	vars, err := repo.UpdateAppVars("test", "api.yml", []VarItem{{Name: "APP_NAME", Value: "worker"}, {Name: "PORT", Value: "8080"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vars.Items) != 2 || vars.Items[0].Value != "worker" || vars.Items[1].Name != "PORT" {
+		t.Fatalf("unexpected vars: %#v", vars.Items)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, `value: "worker"`) || !contains(detail.Content, `name: "{{var:APP_NAME}}"`) || !contains(detail.Content, "replicas: 1") {
+		t.Fatalf("unexpected updated content:\n%s", detail.Content)
+	}
+}
+
 func TestAssetDetailSupportsSpecialRootAndRejectsEscapes(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "assets", "ui", "nginx.conf"), "server {}\n")
