@@ -323,6 +323,30 @@ func TestAppVarsUpdateEndpointRequiresWriteMode(t *testing.T) {
 	}
 }
 
+func TestAppVarsUpdateEndpointRejectsStaleHash(t *testing.T) {
+	root := t.TempDir()
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, "vars:\n  - name: APP_NAME\n    value: api\nname: \"{{var:APP_NAME}}\"\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vars, err := repo.AppVars("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, appPath, "vars:\n  - name: APP_NAME\n    value: changed\nname: \"{{var:APP_NAME}}\"\n")
+
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	body := `{"expected_hash":"` + vars.ContentHash + `","items":[{"name":"APP_NAME","value":"worker"}]}`
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/vars", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAssetContentEndpoint(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "assets", "ui", "nginx.conf"), "server {}\n")

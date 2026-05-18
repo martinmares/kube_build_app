@@ -14,12 +14,13 @@ import (
 )
 
 type AppDetail struct {
-	Env      string `json:"env"`
-	FileName string `json:"file_name"`
-	Path     string `json:"path"`
-	Content  string `json:"content"`
-	Summary  App    `json:"summary"`
-	IsDirty  bool   `json:"is_dirty"`
+	Env         string `json:"env"`
+	FileName    string `json:"file_name"`
+	Path        string `json:"path"`
+	Content     string `json:"content"`
+	ContentHash string `json:"content_hash"`
+	Summary     App    `json:"summary"`
+	IsDirty     bool   `json:"is_dirty"`
 }
 
 type AssetDetail struct {
@@ -37,9 +38,10 @@ type AppRendered struct {
 }
 
 type AppVars struct {
-	Env      string    `json:"env"`
-	FileName string    `json:"file_name"`
-	Items    []VarItem `json:"items"`
+	Env         string    `json:"env"`
+	FileName    string    `json:"file_name"`
+	ContentHash string    `json:"content_hash"`
+	Items       []VarItem `json:"items"`
 }
 
 type VarItem struct {
@@ -177,7 +179,7 @@ func (r *Repository) AppDetail(envName string, appFile string) (AppDetail, error
 	if err != nil {
 		return AppDetail{}, err
 	}
-	return AppDetail{Env: envName, FileName: filepath.Base(path), Path: path, Content: string(content), Summary: summary, IsDirty: r.isDirtyPath(filepath.ToSlash(filepath.Join(envName, "apps", filepath.Base(path))))}, nil
+	return AppDetail{Env: envName, FileName: filepath.Base(path), Path: path, Content: string(content), ContentHash: contentHash(content), Summary: summary, IsDirty: r.isDirtyPath(filepath.ToSlash(filepath.Join(envName, "apps", filepath.Base(path))))}, nil
 }
 
 func (r *Repository) AppRendered(envName string, appFile string) (AppRendered, error) {
@@ -193,10 +195,10 @@ func (r *Repository) AppVars(envName string, appFile string) (AppVars, error) {
 	if err != nil {
 		return AppVars{}, err
 	}
-	return AppVars{Env: envName, FileName: detail.FileName, Items: extractVars(detail.Content)}, nil
+	return AppVars{Env: envName, FileName: detail.FileName, ContentHash: detail.ContentHash, Items: extractVars(detail.Content)}, nil
 }
 
-func (r *Repository) UpdateAppVars(envName string, appFile string, items []VarItem) (AppVars, error) {
+func (r *Repository) UpdateAppVars(envName string, appFile string, items []VarItem, expectedHash string) (AppVars, error) {
 	path, err := r.AppPath(envName, appFile)
 	if err != nil {
 		return AppVars{}, err
@@ -208,8 +210,11 @@ func (r *Repository) UpdateAppVars(envName string, appFile string, items []VarIt
 	if err != nil {
 		return AppVars{}, err
 	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return AppVars{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
 	updated := replaceVarsBlock(string(contentBytes), items)
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
 		return AppVars{}, err
 	}
 	return r.AppVars(envName, filepath.Base(path))

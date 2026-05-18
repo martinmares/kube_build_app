@@ -95,13 +95,15 @@ Poznámka: s mazáním untracked souborů zacházet opatrně. Ideálně oddělit
 
 Model: `gpt-5.5 medium`
 
+Stav: základ hotový pro první mutující editor.
+
 Úkoly:
 
-- atomic writes
-- content hash precondition
-- strukturované JSON chyby
-- jednotný mechanismus pro všechny editory
-- jasné chování při konfliktu
+- atomic writes - hotovo pro `UpdateAppVars`
+- content hash precondition - hotovo pro `UpdateAppVars`
+- strukturované JSON chyby - hotovo pro nové mutující endpointy
+- jednotný mechanismus pro všechny editory - základ připraven
+- jasné chování při konfliktu - hotovo, API vrací `409 conflict`
 
 Toto je důležité před rozšiřováním dalších mutujících editorů.
 

@@ -33,6 +33,12 @@ type Server struct {
 	options Options
 }
 
+type apiError struct {
+	Error  string `json:"error"`
+	Status int    `json:"status"`
+	Code   string `json:"code,omitempty"`
+}
+
 type Options struct {
 	BasePath          string
 	ReadOnly          bool
@@ -141,11 +147,11 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGitRestore(w http.ResponseWriter, r *http.Request) {
 	if s.repo == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
 		return
 	}
 	if s.options.ReadOnly {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "mutating API endpoints are disabled"})
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
 		return
 	}
 	var payload struct {
@@ -153,13 +159,13 @@ func (s *Server) handleGitRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Body != nil {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil && !errors.Is(err, io.EOF) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
 	result, err := s.repo.GitRestore(r.PathValue("file_path"), payload.DeleteUntracked)
 	if err != nil {
-		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		writeError(w, statusForError(err), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -257,23 +263,24 @@ func (s *Server) handleAppVars(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAppVarsUpdate(w http.ResponseWriter, r *http.Request) {
 	if s.repo == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
 		return
 	}
 	if s.options.ReadOnly {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "mutating API endpoints are disabled"})
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
 		return
 	}
 	var payload struct {
-		Items []repository.VarItem `json:"items"`
+		ExpectedHash string               `json:"expected_hash"`
+		Items        []repository.VarItem `json:"items"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	vars, err := s.repo.UpdateAppVars(r.PathValue("env"), r.PathValue("app_file"), payload.Items)
+	vars, err := s.repo.UpdateAppVars(r.PathValue("env"), r.PathValue("app_file"), payload.Items, payload.ExpectedHash)
 	if err != nil {
-		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		writeError(w, statusForError(err), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, vars)
@@ -428,6 +435,9 @@ func statusForError(err error) int {
 	if errors.Is(err, os.ErrNotExist) {
 		return http.StatusNotFound
 	}
+	if repository.IsConflictError(err) {
+		return http.StatusConflict
+	}
 	return http.StatusBadRequest
 }
 
@@ -435,4 +445,12 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	code := ""
+	if status == http.StatusConflict {
+		code = "conflict"
+	}
+	writeJSON(w, status, apiError{Error: message, Status: status, Code: code})
 }

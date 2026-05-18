@@ -1,11 +1,19 @@
-const state = { envs: [], env: null, apps: [], assets: [], inventory: null, git: null, appFile: null, assetPath: null, active: 'dashboard' };
+const state = { envs: [], env: null, apps: [], assets: [], inventory: null, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard' };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const api = async (url) => { const r = await fetch(url, { credentials: 'same-origin' }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
-const apiPost = async (url) => { const r = await fetch(url, { method: 'POST', credentials: 'same-origin' }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
-const apiPostJSON = async (url, payload) => { const r = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload || {}) }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
-const apiPatch = async (url, payload) => { const r = await fetch(url, { method: 'PATCH', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
+async function apiErrorMessage(response) {
+  const body = await response.text();
+  try {
+    const payload = JSON.parse(body);
+    if (payload?.error) return `${response.status} ${response.statusText}: ${payload.error}`;
+  } catch (_) {}
+  return `${response.status} ${response.statusText}: ${body}`;
+}
+const api = async (url) => { const r = await fetch(url, { credentials: 'same-origin' }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
+const apiPost = async (url) => { const r = await fetch(url, { method: 'POST', credentials: 'same-origin' }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
+const apiPostJSON = async (url, payload) => { const r = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload || {}) }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
+const apiPatch = async (url, payload) => { const r = await fetch(url, { method: 'PATCH', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
 function showError(e) { const el = qs('#ui-error'); el.textContent = String(e); el.classList.remove('hidden'); }
 function clearError() { const el = qs('#ui-error'); el.textContent = ''; el.classList.add('hidden'); }
 function setText(id, value) { const el = qs(id); if (el) el.textContent = value ?? '-'; }
@@ -256,6 +264,7 @@ function resetSelectedDetails() {
   setText('#app-detail-title', 'Select app');
   setText('#app-detail-path', '');
   setText('#app-detail-meta', '');
+  state.appContentHash = null;
   setHTML('#app-detail-badges', '');
   setHTML('#app-overview', '<div class="text-muted">Select an application to show structured model overview.</div>');
   setText('#app-raw', '');
@@ -330,6 +339,7 @@ async function selectApp(file) {
       api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(file)}/model`),
     ]);
     setText('#app-detail-title', model.app_name || detail.summary?.app_name || detail.file_name);
+    state.appContentHash = detail.content_hash || vars.content_hash || null;
     setText('#app-detail-path', detail.path);
     setText('#app-detail-meta', `${model.containers?.length || 0} container(s), ${vars.items?.length || 0} local variable(s)${detail.is_dirty ? ', dirty file' : ''}`);
     setHTML('#app-detail-badges', renderAppDetailBadges(model, detail));
@@ -381,7 +391,7 @@ async function saveAppVars() {
     value: row.querySelector('.app-var-value')?.value || '',
   })).filter((item) => item.name !== '');
   try {
-    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/vars`, {items});
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/vars`, {items, expected_hash: state.appContentHash});
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);

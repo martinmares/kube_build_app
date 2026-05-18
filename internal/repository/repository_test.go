@@ -339,7 +339,7 @@ replicas: 1
 		t.Fatal(err)
 	}
 
-	vars, err := repo.UpdateAppVars("test", "api.yml", []VarItem{{Name: "APP_NAME", Value: "worker"}, {Name: "PORT", Value: "8080"}})
+	vars, err := repo.UpdateAppVars("test", "api.yml", []VarItem{{Name: "APP_NAME", Value: "worker"}, {Name: "PORT", Value: "8080"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,6 +352,32 @@ replicas: 1
 	}
 	if !contains(detail.Content, `value: "worker"`) || !contains(detail.Content, `name: "{{var:APP_NAME}}"`) || !contains(detail.Content, "replicas: 1") {
 		t.Fatalf("unexpected updated content:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppVarsRejectsStaleContentHash(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "vars:\n  - name: APP_NAME\n    value: api\nname: api\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vars, err := repo.AppVars("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "vars:\n  - name: APP_NAME\n    value: changed\nname: api\n")
+
+	_, err = repo.UpdateAppVars("test", "api.yml", []VarItem{{Name: "APP_NAME", Value: "worker"}}, vars.ContentHash)
+	if !IsConflictError(err) {
+		t.Fatalf("UpdateAppVars error = %v, want conflict", err)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, "value: changed") {
+		t.Fatalf("stale write changed content unexpectedly:\n%s", detail.Content)
 	}
 }
 
