@@ -4,11 +4,15 @@ const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const api = async (url) => { const r = await fetch(url, { credentials: 'same-origin' }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
 const apiPost = async (url) => { const r = await fetch(url, { method: 'POST', credentials: 'same-origin' }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
+const apiPostJSON = async (url, payload) => { const r = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload || {}) }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
 const apiPatch = async (url, payload) => { const r = await fetch(url, { method: 'PATCH', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) }); if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`); return await r.json(); };
 function showError(e) { const el = qs('#ui-error'); el.textContent = String(e); el.classList.remove('hidden'); }
 function clearError() { const el = qs('#ui-error'); el.textContent = ''; el.classList.add('hidden'); }
 function setText(id, value) { const el = qs(id); if (el) el.textContent = value ?? '-'; }
 function setHTML(id, value) { const el = qs(id); if (el) el.innerHTML = value ?? ''; }
+function emptyState(icon, title, text = '') {
+  return `<div class="empty-state-lite"><i class="ti ${icon}"></i><div><div class="fw-semibold">${esc(title)}</div>${text ? `<div class="text-muted small">${esc(text)}</div>` : ''}</div></div>`;
+}
 function setActive(page) {
   state.active = page;
   for (const link of qsa('[data-nav]')) {
@@ -65,6 +69,7 @@ async function loadAll() {
     state.readOnly = !!info.read_only;
     setText('#app-version', `${info.version} / ${info.commit}`);
     qs('#read-only-badge').classList.toggle('hidden', !info.read_only);
+    qs('#write-mode-badge')?.classList.toggle('hidden', !!info.read_only);
     qs('#read-only-hint')?.classList.toggle('hidden', !info.read_only);
     await refreshRepositorySnapshot();
     if (state.envs.length) await selectEnv(state.env || localStorage.getItem('activeEnv') || state.envs[0].name);
@@ -140,7 +145,7 @@ async function selectEnv(env) {
 }
 function renderEnvs() {
   const host = qs('#env-list');
-  if (!state.envs.length) { host.innerHTML = '<div class="text-muted">No environments found.</div>'; return; }
+  if (!state.envs.length) { host.innerHTML = `<div class="col-12">${emptyState('ti-stack-2', 'No environments found', 'Check --root or ENVIRONMENTS_ROOT.')}</div>`; return; }
   host.innerHTML = state.envs.map((e) => `
     <div class="col-sm-6 col-xl-4">
       <a href="#" class="card env-card text-reset text-decoration-none h-100 ${state.env === e.name ? 'border-primary' : ''}" data-env="${esc(e.name)}">
@@ -169,10 +174,15 @@ function renderEnvChanges() {
   const files = gitFilesForEnv(state.env);
   if (navItem) navItem.classList.toggle('hidden', files.length === 0);
   if (count) count.textContent = String(files.length);
-  list.innerHTML = files.length ? renderChangedFileGroups(files) : '<div class="list-group-item text-muted">No changed files in selected environment.</div>';
+  list.innerHTML = files.length ? renderChangedFileGroups(files) : `<div class="list-group-item">${emptyState('ti-git-compare', 'No changed files', 'The selected environment matches the current Git working tree.')}</div>`;
   qsa('[data-dirty-path]').forEach((item) => item.addEventListener('click', (event) => {
     event.preventDefault();
     openDirtyPath(item.dataset.dirtyPath);
+  }));
+  qsa('[data-restore-path]').forEach((item) => item.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    restoreGitPath(item.dataset.restorePath, item.dataset.restoreCode);
   }));
 }
 function renderChangedFileGroups(files) {
@@ -197,11 +207,17 @@ function changedFileGroupIndex(path) {
 }
 function renderChangedFileRow(file) {
   const target = dirtyNavigationTarget(file.path);
+  const restore = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-danger" type="button" data-restore-path="${esc(file.path)}" data-restore-code="${esc(file.code)}" title="Discard this change"><i class="ti ti-restore me-1"></i>Discard</button>`;
   return `
-    <a href="#" class="list-group-item list-group-item-action d-flex align-items-center justify-content-between gap-3 ${target ? '' : 'disabled'}" data-dirty-path="${esc(file.path)}">
-      <span class="font-monospace text-break">${esc(file.path)}</span>
-      <span class="badge bg-yellow-lt">${esc(gitCodeLabel(file.code))}</span>
-    </a>`;
+    <div class="list-group-item d-flex align-items-center justify-content-between gap-3">
+      <a href="#" class="text-reset text-decoration-none flex-fill ${target ? '' : 'disabled'}" data-dirty-path="${esc(file.path)}">
+        <span class="font-monospace text-break">${esc(file.path)}</span>
+      </a>
+      <div class="d-flex align-items-center gap-2">
+        <span class="badge bg-yellow-lt">${esc(gitCodeLabel(file.code))}</span>
+        ${restore}
+      </div>
+    </div>`;
 }
 function dirtyNavigationTarget(path) {
   if (!state.env || !path.startsWith(`${state.env}/`)) return null;
@@ -217,6 +233,21 @@ function openDirtyPath(path) {
   setActive(target.page);
   if (target.page === 'apps') selectApp(target.value);
   if (target.page === 'assets') selectAsset(target.value);
+}
+async function restoreGitPath(path, code) {
+  if (state.readOnly || !path) return;
+  const untracked = code === '??';
+  const message = untracked
+    ? `Delete untracked file?\n\n${path}\n\nThis removes the file from disk.`
+    : `Discard local Git changes?\n\n${path}\n\nThis restores the file from Git.`;
+  if (!window.confirm(message)) return;
+  clearError();
+  try {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    const result = await apiPostJSON(`/api/v1/git/restore/${encoded}`, {delete_untracked: untracked});
+    state.git = result.status;
+    await refreshCurrentView();
+  } catch (e) { showError(e); }
 }
 function resetSelectedDetails() {
   state.appFile = null;
@@ -286,7 +317,7 @@ function renderApps() {
         <div class="badge bg-blue-lt" title="replicas">${a.replicas ?? '-'}</div>
         <div class="text-muted small mt-1">${a.containers_count ?? 0} ctr</div>
       </td>
-    </tr>`).join('') || '<tr><td colspan="2" class="text-muted">No apps.</td></tr>';
+    </tr>`).join('') || `<tr><td colspan="2">${emptyState('ti-apps', query ? 'No matching apps' : 'No apps', query ? 'Try a different filter.' : 'No app YAML files were found.')}</td></tr>`;
   qsa('[data-app]').forEach((x) => x.addEventListener('click', () => selectApp(x.dataset.app)));
 }
 async function selectApp(file) {
@@ -332,7 +363,7 @@ function syncAppVarsEmptyState() {
   const body = qs('#app-vars tbody');
   if (!body) return;
   const hasRows = qsa('#app-vars tbody tr').some((row) => row.querySelector('.app-var-name'));
-  if (!hasRows) body.innerHTML = '<tr><td colspan="3" class="text-muted">No local variables.</td></tr>';
+  if (!hasRows) body.innerHTML = `<tr><td colspan="3">${emptyState('ti-variable', 'No local variables', state.readOnly ? 'Start with --allow-write to add variables.' : 'Use Add variable to create the first one.')}</td></tr>`;
 }
 function addAppVarRow() {
   if (state.readOnly || !state.appFile) return;
@@ -400,7 +431,7 @@ function renderAppOverview(model) {
     ${autoscalingMetrics}
     <div class="overview-section">
       <div class="overview-title"><i class="ti ti-box me-1"></i>Containers</div>
-      <div class="container-stack">${containers || '<div class="text-muted">No containers.</div>'}</div>
+      <div class="container-stack">${containers || emptyState('ti-box', 'No containers', 'This app model does not declare containers.')}</div>
     </div>`;
 }
 function renderContainerOverview(container) {
@@ -466,11 +497,11 @@ function renderAssets() {
     return [asset.relative_path, asset.file_name, asset.driver, asset.size_bytes].some((value) => String(value ?? '').toLowerCase().includes(query));
   });
   setText('#assets-filter-count', `${assets.length}/${state.assets.length}`);
-  host.innerHTML = renderAssetTree(assets);
+  host.innerHTML = renderAssetTree(assets, query);
   qsa('[data-asset]').forEach((x) => x.addEventListener('click', () => selectAsset(x.dataset.asset)));
 }
-function renderAssetTree(assets) {
-  if (!assets.length) return '<div class="asset-empty text-muted">No assets.</div>';
+function renderAssetTree(assets, query = '') {
+  if (!assets.length) return `<div class="asset-empty">${emptyState('ti-folders', query ? 'No matching assets' : 'No assets', query ? 'Try a different filter.' : 'No assets were found for this environment.')}</div>`;
   const root = { dirs: new Map(), files: [] };
   for (const asset of assets) addAssetTreeNode(root, asset);
   return renderAssetTreeNode(root, 0);

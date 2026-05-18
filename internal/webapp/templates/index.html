@@ -21,6 +21,7 @@
           <span class="badge bg-cyan-lt"><i class="ti ti-files me-1"></i><span id="assets-count">-</span> assets</span>
           <span class="badge bg-secondary-lt" id="git-status-badge"><i class="ti ti-git-branch me-1"></i>git -</span>
           <span class="badge bg-yellow-lt hidden" id="read-only-badge"><i class="ti ti-lock me-1"></i>read-only</span>
+          <span class="badge bg-green-lt hidden" id="write-mode-badge"><i class="ti ti-pencil me-1"></i>write enabled</span>
           <div class="nav-item d-none d-md-flex position-relative ms-1">
             <a href="#" class="nav-link px-0" id="theme-toggle" aria-label="Toggle theme"><i class="ti ti-sun"></i></a>
             <div id="theme-menu" class="dropdown-menu dropdown-menu-end dropdown-menu-arrow">
@@ -64,7 +65,7 @@
         </div>
       </div>
       <div class="container-xl"><div class="alert alert-danger hidden mb-0" id="ui-error" role="alert"></div></div>
-      <div class="container-xl"><div class="alert alert-warning hidden mb-0 mt-2" id="read-only-hint" role="alert"><i class="ti ti-lock me-2"></i>Editor is running in read-only mode. Start it with <code>--allow-write</code> to enable saving changes.</div></div>
+      <div class="container-xl"><div class="alert alert-warning hidden mb-0 mt-2" id="read-only-hint" role="alert"><i class="ti ti-lock me-2"></i>Editor is running in read-only mode. Structured inputs are visible for inspection, but saving is disabled. Start with <code>--allow-write</code> to enable writes.</div></div>
       <div class="page-body">
         <div class="container-xl">
           <section data-page="dashboard"><div class="row g-3" id="env-list"></div></section>

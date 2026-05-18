@@ -13,6 +13,31 @@ kube-edit-app  = web editor for environment repositories
 
 `kube-edit-app` is the Go rewrite target for the Rust `kube-environments-ui` web application. See `docs/KUBE_EDIT_APP_PLAN.md`.
 
+## kube-edit-app Workflow
+
+Start the web editor in safe read-only mode:
+
+```bash
+kube-edit-app serve --root ./environments
+```
+
+Enable structured writes explicitly:
+
+```bash
+kube-edit-app serve --root ./environments --allow-write
+```
+
+Recommended editing flow:
+
+1. Select an environment.
+2. Open `Apps`, `Assets` or `Changed files`.
+3. Make a structured edit.
+4. Review the colored `Git diff`.
+5. Run `Build` validation.
+6. Commit the environment repository change with Git.
+
+Read-only mode still renders structured inputs, previews and diffs, but save buttons are disabled. This is the preferred mode for review, L2 inspection and dashboards. Use `--allow-write` only for intentional repository edits.
+
 ## Metamodel Goal
 
 `kube-build-app` is not Helm. The app model intentionally follows an 80/20 rule:

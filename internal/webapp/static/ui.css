@@ -8,6 +8,8 @@
 .table-hover tbody tr.row-link { cursor: pointer; }
 .table-hover tbody tr:hover { background-color: rgba(var(--tblr-primary-rgb, 32, 107, 196), .06); }
 .table-hover tbody tr.selected-row, .table-hover tbody tr.selected-row:hover { background-color: color-mix(in srgb, var(--tblr-primary) 16%, transparent); }
+.empty-state-lite { display: flex; align-items: center; gap: .75rem; padding: .85rem; border: 1px dashed color-mix(in srgb, var(--tblr-border-color) 78%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 78%, transparent); color: var(--tblr-body-color); }
+.empty-state-lite > i { flex: 0 0 auto; color: var(--tblr-muted); font-size: 1.5rem !important; }
 .app-list-name, .asset-list-name { line-height: 1.25; }
 .apps-list-card, .assets-list-card { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: hidden; }
 .apps-list-table, .assets-list-table { max-height: calc(100vh - 9rem); overflow: auto; }
@@ -29,7 +31,7 @@
 .env-card { border: 1px solid color-mix(in srgb, var(--tblr-border-color) 72%, transparent); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
 .env-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--tblr-primary) 58%, var(--tblr-border-color)); box-shadow: 0 .5rem 1.1rem rgba(32, 107, 196, .18); }
 .code-block { max-height: 56vh; margin: 0; overflow: auto; padding: 1rem; border: 1px solid var(--tblr-border-color); border-radius: 8px; background: var(--tblr-bg-surface-secondary); color: var(--tblr-body-color); white-space: pre-wrap; word-break: break-word; font-size: .8125rem; }
-.diff-block { max-height: 42vh; border-left: 3px solid var(--tblr-warning); white-space: pre; word-break: normal; }
+.diff-block { max-height: 42vh; border-left: 3px solid var(--tblr-warning); background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 88%, #000 12%); white-space: pre; word-break: normal; }
 .diff-line { display: block; min-height: 1.25em; padding: 0 .35rem; margin: 0 -.35rem; }
 .diff-meta { color: var(--tblr-muted); font-weight: 600; }
 .diff-file { color: var(--tblr-purple); font-weight: 600; }

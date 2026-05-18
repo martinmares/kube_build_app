@@ -13,6 +13,31 @@ kube-edit-app  = webový editor environment repozitářů
 
 `kube-edit-app` je cílový Go přepis Rust aplikace `kube-environments-ui`. Viz `docs/KUBE_EDIT_APP_PLAN.md`.
 
+## kube-edit-app Workflow
+
+Spuštění webového editoru v bezpečném read-only režimu:
+
+```bash
+kube-edit-app serve --root ./environments
+```
+
+Explicitní povolení strukturovaných zápisů:
+
+```bash
+kube-edit-app serve --root ./environments --allow-write
+```
+
+Doporučený postup editace:
+
+1. Vybrat environment.
+2. Otevřít `Apps`, `Assets` nebo `Changed files`.
+3. Provést strukturovanou editaci.
+4. Zkontrolovat barevný `Git diff`.
+5. Spustit validaci v `Build`.
+6. Změnu v environment repozitáři commitnout přes Git.
+
+Read-only režim stále zobrazuje strukturované inputy, preview a diffy, ale save tlačítka jsou vypnutá. Je to preferovaný režim pro review, L2 kontrolu a dashboardy. `--allow-write` používejte jen pro záměrné editace repozitáře.
+
 ## Cíl Metamodelu
 
 `kube-build-app` není Helm. App model záměrně používá pravidlo 80/20:

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -59,6 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/info", s.handleInfo)
 	mux.HandleFunc("GET /api/v1/git/status", s.handleGitStatus)
 	mux.HandleFunc("GET /api/v1/git/diff/{file_path...}", s.handleGitDiff)
+	mux.HandleFunc("POST /api/v1/git/restore/{file_path...}", s.handleGitRestore)
 	mux.HandleFunc("GET /api/v1/envs", s.handleEnvironments)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps", s.handleApps)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}", s.handleAppDetail)
@@ -135,6 +137,32 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, diff)
+}
+
+func (s *Server) handleGitRestore(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	if s.options.ReadOnly {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "mutating API endpoints are disabled"})
+		return
+	}
+	var payload struct {
+		DeleteUntracked bool `json:"delete_untracked"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	result, err := s.repo.GitRestore(r.PathValue("file_path"), payload.DeleteUntracked)
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleEnvironments(w http.ResponseWriter, _ *http.Request) {

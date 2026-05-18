@@ -32,6 +32,12 @@ type GitDiff struct {
 	Error     string `json:"error,omitempty"`
 }
 
+type GitRestoreResult struct {
+	Restored bool      `json:"restored"`
+	Path     string    `json:"path"`
+	Status   GitStatus `json:"status"`
+}
+
 func (r *Repository) GitStatus() GitStatus {
 	topLevel, err := gitOutput(r.root, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -96,6 +102,41 @@ func (r *Repository) GitDiff(relativePath string) GitDiff {
 		diff.Content = untrackedFileDiff(rel, string(content))
 	}
 	return diff
+}
+
+func (r *Repository) GitRestore(relativePath string, deleteUntracked bool) (GitRestoreResult, error) {
+	rel, err := validateRelativePath(relativePath)
+	if err != nil {
+		return GitRestoreResult{}, err
+	}
+	if _, err := gitOutput(r.root, "rev-parse", "--show-toplevel"); err != nil {
+		return GitRestoreResult{}, errors.New("repository root is not inside a Git work tree")
+	}
+	code := r.gitStatusCode(rel)
+	if code == "" {
+		return GitRestoreResult{Path: rel, Status: r.GitStatus()}, nil
+	}
+	if code == "??" {
+		if !deleteUntracked {
+			return GitRestoreResult{}, errors.New("untracked file restore requires delete_untracked=true")
+		}
+		path := filepath.Join(r.root, filepath.FromSlash(rel))
+		info, err := os.Stat(path)
+		if err != nil {
+			return GitRestoreResult{}, err
+		}
+		if info.IsDir() {
+			return GitRestoreResult{}, errors.New("refusing to delete untracked directory")
+		}
+		if err := os.Remove(path); err != nil {
+			return GitRestoreResult{}, err
+		}
+		return GitRestoreResult{Restored: true, Path: rel, Status: r.GitStatus()}, nil
+	}
+	if _, err := gitOutputRaw(r.root, "restore", "--staged", "--worktree", "--", rel); err != nil {
+		return GitRestoreResult{}, err
+	}
+	return GitRestoreResult{Restored: true, Path: rel, Status: r.GitStatus()}, nil
 }
 
 func (r *Repository) dirtyPathSet() map[string]bool {

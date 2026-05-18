@@ -132,6 +132,45 @@ func TestGitDiffEndpoint(t *testing.T) {
 	}
 }
 
+func TestGitRestoreEndpointRequiresWriteMode(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	root := t.TempDir()
+	runGit(t, root, "init")
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\n")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: changed\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readOnlyServer := NewServer(appinfo.For(appinfo.EditAppName), repo)
+	readOnlyReq := httptest.NewRequest(http.MethodPost, "/api/v1/git/restore/test/apps/api.yml", strings.NewReader(`{}`))
+	readOnlyRes := httptest.NewRecorder()
+	readOnlyServer.Handler().ServeHTTP(readOnlyRes, readOnlyReq)
+	if readOnlyRes.Code != http.StatusForbidden {
+		t.Fatalf("read-only status = %d, want 403: %s", readOnlyRes.Code, readOnlyRes.Body.String())
+	}
+
+	writeServer := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	writeReq := httptest.NewRequest(http.MethodPost, "/api/v1/git/restore/test/apps/api.yml", strings.NewReader(`{}`))
+	writeRes := httptest.NewRecorder()
+	writeServer.Handler().ServeHTTP(writeRes, writeReq)
+	if writeRes.Code != http.StatusOK {
+		t.Fatalf("write status = %d, want 200: %s", writeRes.Code, writeRes.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(root, "test", "apps", "api.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "name: api\n" {
+		t.Fatalf("content = %q, want restored original", content)
+	}
+}
+
 func TestAppsEndpoint(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")

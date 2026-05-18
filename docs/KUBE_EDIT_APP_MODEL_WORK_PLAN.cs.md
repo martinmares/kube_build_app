@@ -66,24 +66,28 @@ Nepoužívat na běžný UI polish.
 
 Model: `gpt-5.5 low`
 
+Stav: první low-pass hotový.
+
 Úkoly:
 
-- doladit barevný diff vizuálně
-- lepší empty states
-- jasnější read-only/write mode indikace
-- menší UX opravy v `Changed files`, `Apps`, `Assets`
+- doladit barevný diff vizuálně - hotovo v prvním low-passu
+- lepší empty states - hotovo v prvním low-passu
+- jasnější read-only/write mode indikace - hotovo v prvním low-passu
+- menší UX opravy v `Changed files`, `Apps`, `Assets` - průběžně
 
 ### 2. Git restore
 
 Model: `gpt-5.5 medium`
 
+Stav: první verze hotová.
+
 Úkoly:
 
-- endpoint typu `POST /api/v1/git/restore/{path}`
-- tlačítko `Discard changes`
-- potvrzovací dialog
-- ochrana proti nechtěnému smazání untracked souborů
-- testy
+- endpoint typu `POST /api/v1/git/restore/{path}` - hotovo
+- tlačítko `Discard changes` - hotovo
+- potvrzovací dialog - hotovo
+- ochrana proti nechtěnému smazání untracked souborů - hotovo
+- testy - hotovo
 
 Poznámka: s mazáním untracked souborů zacházet opatrně. Ideálně oddělit restore tracked změn a delete untracked file.
 
@@ -237,16 +241,18 @@ Použitelné pro L2 i CI kontrolu.
 
 Model: `gpt-5.5 low`
 
+Stav: základní README sekce hotová.
+
 Úkoly:
 
-- README sekce pro `kube-edit-app`
-- popsat read-only vs `--allow-write`
-- popsat bezpečný workflow:
+- README sekce pro `kube-edit-app` - hotovo
+- popsat read-only vs `--allow-write` - hotovo
+- popsat bezpečný workflow - hotovo:
   - editace
   - diff
   - validate
   - commit
-- doplnit screenshot-friendly texty v UI
+- doplnit screenshot-friendly texty v UI - průběžně
 
 ## Praktické pravidlo
 
@@ -269,4 +275,3 @@ Model: `gpt-5.5 low`
 - validaci/build preview přes `kube-build-app` internals
 
 Secured env/assets flow může následovat potom, ale pro plnou náhradu Rust UI bude nutný.
-
