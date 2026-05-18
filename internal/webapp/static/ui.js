@@ -216,6 +216,7 @@ function resetSelectedDetails() {
 function resetBuildView() {
   state.inventory = null;
   setBuildStatus('info', 'Select an environment and run a build check.');
+  setBuildDataEnv(null);
   setHTML('#build-totals', '');
   const summaryBody = qs('#build-summary-table tbody');
   if (summaryBody) summaryBody.innerHTML = '<tr><td colspan="9" class="text-muted">No summary loaded.</td></tr>';
@@ -501,9 +502,11 @@ async function loadBuildSummary() {
   clearError();
   const env = state.env;
   try {
+    setBuildDataEnv(env, 'loading');
     const summary = await apiPost(`/api/v1/envs/${encodeURIComponent(env)}/summary`);
     if (state.env !== env) return;
     renderBuildSummary(summary);
+    setBuildDataEnv(env, 'loaded');
   } catch (e) {
     if (state.env !== env) return;
     showError(e);
@@ -537,6 +540,17 @@ function setBuildStatus(kind, text) {
   if (!el) return;
   el.className = `alert alert-${kind} mb-0`;
   el.textContent = text;
+}
+function setBuildDataEnv(env, stateName) {
+  const el = qs('#build-data-env');
+  if (!el) return;
+  if (!env) {
+    el.className = 'badge bg-secondary-lt';
+    el.innerHTML = '<i class="ti ti-stack-2 me-1"></i>not loaded';
+    return;
+  }
+  el.className = `badge ${stateName === 'loading' ? 'bg-blue-lt' : 'bg-green-lt'}`;
+  el.innerHTML = `<i class="ti ti-stack-2 me-1"></i>${esc(stateName || 'loaded')} for ${esc(env)}`;
 }
 function renderBuildSummary(summary) {
   const totals = summary.totals || {};
