@@ -188,7 +188,21 @@ function resetSelectedDetails() {
   setText('#asset-raw', '');
   qs('#asset-diff-section')?.classList.add('hidden');
   setText('#asset-diff', '');
+  resetBuildView();
 }
+
+function resetBuildView() {
+  state.inventory = null;
+  setBuildStatus('info', 'Select an environment and run a build check.');
+  setHTML('#build-totals', '');
+  const summaryBody = qs('#build-summary-table tbody');
+  if (summaryBody) summaryBody.innerHTML = '<tr><td colspan="9" class="text-muted">No summary loaded.</td></tr>';
+  const summaryFoot = qs('#build-summary-table tfoot');
+  if (summaryFoot) summaryFoot.innerHTML = '';
+  const inventoryBody = qs('#build-inventory-table tbody');
+  if (inventoryBody) inventoryBody.innerHTML = '<tr><td colspan="5" class="text-muted">No inventory loaded.</td></tr>';
+}
+
 async function loadApps() {
   if (!state.env) return;
   const data = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps`);
@@ -378,28 +392,46 @@ async function loadGitDiff(relativePath, isDirty, sectionSelector, targetSelecto
 async function runBuildValidate() {
   if (!state.env) return showError('Select environment first.');
   clearError();
+  const env = state.env;
   try {
     setBuildStatus('info', 'Validation is running...');
-    const result = await apiPost(`/api/v1/envs/${encodeURIComponent(state.env)}/validate`);
+    const result = await apiPost(`/api/v1/envs/${encodeURIComponent(env)}/validate`);
+    if (state.env !== env) return;
     setBuildStatus(result.ok ? 'success' : 'danger', result.message || (result.ok ? 'Validation OK' : 'Validation failed'));
-  } catch (e) { setBuildStatus('danger', String(e)); showError(e); }
+  } catch (e) {
+    if (state.env !== env) return;
+    setBuildStatus('danger', String(e));
+    showError(e);
+  }
 }
 async function loadBuildSummary() {
   if (!state.env) return;
   clearError();
+  const env = state.env;
   try {
-    const summary = await apiPost(`/api/v1/envs/${encodeURIComponent(state.env)}/summary`);
+    const summary = await apiPost(`/api/v1/envs/${encodeURIComponent(env)}/summary`);
+    if (state.env !== env) return;
     renderBuildSummary(summary);
-  } catch (e) { showError(e); }
+  } catch (e) {
+    if (state.env !== env) return;
+    showError(e);
+  }
 }
 async function loadBuildInventory() {
   if (!state.env) return showError('Select environment first.');
   clearError();
+  const env = state.env;
   try {
-    const inventory = await apiPost(`/api/v1/envs/${encodeURIComponent(state.env)}/inventory`);
+    const inventory = await apiPost(`/api/v1/envs/${encodeURIComponent(env)}/inventory`);
+    if (state.env !== env) return;
     state.inventory = inventory;
     renderInventory();
-  } catch (e) { state.inventory = null; renderInventory(); showError(e); }
+  } catch (e) {
+    if (state.env !== env) return;
+    state.inventory = null;
+    renderInventory();
+    showError(e);
+  }
 }
 async function loadBuildData() {
   if (!state.env) return;
