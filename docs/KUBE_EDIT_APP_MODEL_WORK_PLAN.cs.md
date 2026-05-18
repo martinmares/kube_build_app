@@ -148,7 +148,7 @@ Model: `gpt-5.5 medium`
 
 Úkoly:
 
-- editovat `containers[].env_vars`
+- editovat `containers[].vars`
 - add/update/delete
 - per-container zobrazení
 - po uložení refresh detailu a diffu

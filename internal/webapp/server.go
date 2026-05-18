@@ -76,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVarsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/replicas", s.handleAppReplicasUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/resources", s.handleAppContainerResourcesUpdate)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/vars", s.handleAppContainerVarsUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/model", s.handleAppModel)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets", s.handleAssets)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/content/{asset_path...}", s.handleAssetContent)
@@ -342,6 +343,36 @@ func (s *Server) handleAppContainerResourcesUpdate(w http.ResponseWriter, r *htt
 		return
 	}
 	writeJSON(w, http.StatusOK, resources)
+}
+
+func (s *Server) handleAppContainerVarsUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	containerIndex, err := strconv.Atoi(r.PathValue("container_index"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "container index must be an integer")
+		return
+	}
+	var payload struct {
+		ExpectedHash string               `json:"expected_hash"`
+		Items        []repository.VarItem `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	vars, err := s.repo.UpdateAppContainerVars(r.PathValue("env"), r.PathValue("app_file"), containerIndex, payload.Items, payload.ExpectedHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, vars)
 }
 
 func (s *Server) handleAppModel(w http.ResponseWriter, r *http.Request) {

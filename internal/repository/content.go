@@ -59,6 +59,14 @@ type AppContainerResources struct {
 	Resources      ResourceModel `json:"resources"`
 }
 
+type AppContainerVars struct {
+	Env            string        `json:"env"`
+	FileName       string        `json:"file_name"`
+	ContentHash    string        `json:"content_hash"`
+	ContainerIndex int           `json:"container_index"`
+	Vars           []EnvVarModel `json:"vars"`
+}
+
 type ResourceUpdate struct {
 	CPURequest    string `json:"cpu_request"`
 	CPULimit      string `json:"cpu_limit"`
@@ -102,7 +110,7 @@ type ContainerModel struct {
 	Name             *string       `json:"name"`
 	StartupCommand   []string      `json:"startup_command"`
 	StartupArguments []string      `json:"startup_arguments"`
-	EnvVars          []EnvVarModel `json:"env_vars"`
+	Vars             []EnvVarModel `json:"vars"`
 	Resources        ResourceModel `json:"resources"`
 	Ports            []PortModel   `json:"ports"`
 	Runtime          RuntimeModel  `json:"runtime"`
@@ -311,6 +319,42 @@ func (r *Repository) UpdateAppContainerResources(envName string, appFile string,
 	return AppContainerResources{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Resources: model.Containers[containerIndex].Resources}, nil
 }
 
+func (r *Repository) UpdateAppContainerVars(envName string, appFile string, containerIndex int, items []VarItem, expectedHash string) (AppContainerVars, error) {
+	if containerIndex < 0 {
+		return AppContainerVars{}, errors.New("container index must be greater than or equal to 0")
+	}
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return AppContainerVars{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return AppContainerVars{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return AppContainerVars{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	updated, err := replaceContainerVarsBlock(string(contentBytes), containerIndex, items)
+	if err != nil {
+		return AppContainerVars{}, err
+	}
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return AppContainerVars{}, err
+	}
+	model, err := r.AppModel(envName, filepath.Base(path))
+	if err != nil {
+		return AppContainerVars{}, err
+	}
+	if containerIndex >= len(model.Containers) {
+		return AppContainerVars{}, errors.New("container index not found after update")
+	}
+	detail, err := r.AppDetail(envName, filepath.Base(path))
+	if err != nil {
+		return AppContainerVars{}, err
+	}
+	return AppContainerVars{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Vars: model.Containers[containerIndex].Vars}, nil
+}
+
 func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) {
 	detail, err := r.AppDetail(envName, appFile)
 	if err != nil {
@@ -350,9 +394,9 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 			EnvFromCount: len(anySlice(containerMap["env_from"])),
 			MountsCount:  len(anySlice(containerMap["mounts"])),
 		}
-		for idx, rawEnv := range anySlice(containerMap["env_vars"]) {
-			envMap, _ := rawEnv.(map[string]any)
-			container.EnvVars = append(container.EnvVars, envVarModel(idx, envMap))
+		for idx, rawEnv := range anySlice(containerMap["vars"]) {
+			varMap, _ := rawEnv.(map[string]any)
+			container.Vars = append(container.Vars, envVarModel(idx, varMap))
 		}
 		for pIdx, rawPort := range anySlice(containerMap["ports"]) {
 			portMap, _ := rawPort.(map[string]any)
@@ -650,41 +694,9 @@ func replaceTopLevelScalar(content string, key string, value string) string {
 }
 
 func replaceContainerResourcesBlock(content string, containerIndex int, resources ResourceUpdate) (string, error) {
-	lines := strings.Split(content, "\n")
-	containersLine := -1
-	for idx, line := range lines {
-		if line == "containers:" {
-			containersLine = idx
-			break
-		}
-	}
-	if containersLine < 0 {
-		return "", errors.New("containers block not found")
-	}
-	starts := []int{}
-	for idx := containersLine + 1; idx < len(lines); idx++ {
-		line := lines[idx]
-		if isTopLevelLine(line) {
-			break
-		}
-		if strings.HasPrefix(line, "  - ") {
-			starts = append(starts, idx)
-		}
-	}
-	if containerIndex >= len(starts) {
-		return "", errors.New("container index not found")
-	}
-	start := starts[containerIndex]
-	end := len(lines)
-	if containerIndex+1 < len(starts) {
-		end = starts[containerIndex+1]
-	} else {
-		for idx := start + 1; idx < len(lines); idx++ {
-			if isTopLevelLine(lines[idx]) {
-				end = idx
-				break
-			}
-		}
+	lines, start, end, err := containerBlockRange(content, containerIndex)
+	if err != nil {
+		return "", err
 	}
 
 	resStart := -1
@@ -721,6 +733,105 @@ func replaceContainerResourcesBlock(content string, containerIndex int, resource
 		out += "\n"
 	}
 	return out, nil
+}
+
+func replaceContainerVarsBlock(content string, containerIndex int, items []VarItem) (string, error) {
+	lines, start, end, err := containerBlockRange(content, containerIndex)
+	if err != nil {
+		return "", err
+	}
+
+	varsStart := -1
+	varsEnd := -1
+	for idx := start + 1; idx < end; idx++ {
+		if strings.HasPrefix(lines[idx], "    vars:") {
+			varsStart = idx
+			varsEnd = end
+			for j := idx + 1; j < end; j++ {
+				if strings.TrimSpace(lines[j]) != "" && leadingSpaces(lines[j]) <= 4 {
+					varsEnd = j
+					break
+				}
+			}
+			break
+		}
+	}
+
+	preserved := [][]string{}
+	preservedNames := map[string]bool{}
+	if varsStart >= 0 {
+		for _, block := range splitVarItemBlocks(lines[varsStart+1 : varsEnd]) {
+			name := varBlockName(block)
+			if !isEditableVarBlock(block) {
+				preserved = append(preserved, block)
+				if name != "" {
+					preservedNames[name] = true
+				}
+			}
+		}
+	}
+	if err := validateContainerVarItems(items, preservedNames); err != nil {
+		return "", err
+	}
+
+	replacement := renderContainerVarsBlock(items, preserved)
+	insertAt := start + 1
+	if varsStart >= 0 {
+		insertAt = varsStart
+		lines = append(lines[:varsStart], lines[varsEnd:]...)
+	}
+	if len(replacement) > 0 {
+		updated := make([]string, 0, len(lines)+len(replacement))
+		updated = append(updated, lines[:insertAt]...)
+		updated = append(updated, replacement...)
+		updated = append(updated, lines[insertAt:]...)
+		lines = updated
+	}
+	out := strings.Join(lines, "\n")
+	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return out, nil
+}
+
+func containerBlockRange(content string, containerIndex int) ([]string, int, int, error) {
+	lines := strings.Split(content, "\n")
+	containersLine := -1
+	for idx, line := range lines {
+		if line == "containers:" {
+			containersLine = idx
+			break
+		}
+	}
+	if containersLine < 0 {
+		return nil, 0, 0, errors.New("containers block not found")
+	}
+	starts := []int{}
+	for idx := containersLine + 1; idx < len(lines); idx++ {
+		line := lines[idx]
+		if isTopLevelLine(line) {
+			break
+		}
+		if strings.HasPrefix(line, "  - ") {
+			starts = append(starts, idx)
+		}
+	}
+	if containerIndex >= len(starts) {
+		return nil, 0, 0, errors.New("container index not found")
+	}
+	start := starts[containerIndex]
+	end := len(lines)
+	if containerIndex+1 < len(starts) {
+		end = starts[containerIndex+1]
+	} else {
+		for idx := start + 1; idx < len(lines); idx++ {
+			if isTopLevelLine(lines[idx]) {
+				end = idx
+				break
+			}
+		}
+	}
+	return lines, start, end, nil
 }
 
 func renderResourcesBlock(resources ResourceUpdate) []string {
@@ -762,6 +873,79 @@ func validateResourceUpdate(resources ResourceUpdate) error {
 	} {
 		if strings.ContainsAny(value, "\r\n") {
 			return fmt.Errorf("%s contains unsupported newline", label)
+		}
+	}
+	return nil
+}
+
+func splitVarItemBlocks(lines []string) [][]string {
+	blocks := [][]string{}
+	start := -1
+	for idx, line := range lines {
+		if strings.HasPrefix(line, "      - ") {
+			if start >= 0 {
+				blocks = append(blocks, lines[start:idx])
+			}
+			start = idx
+		}
+	}
+	if start >= 0 {
+		blocks = append(blocks, lines[start:])
+	}
+	return blocks
+}
+
+func isEditableVarBlock(lines []string) bool {
+	hasName := false
+	hasValue := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- name:") || strings.HasPrefix(trimmed, "name:") {
+			hasName = true
+		}
+		if strings.HasPrefix(trimmed, "valueFrom:") {
+			return false
+		}
+		if strings.HasPrefix(trimmed, "value:") {
+			hasValue = true
+		}
+	}
+	return hasName && hasValue
+}
+
+func varBlockName(lines []string) string {
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- name:") || strings.HasPrefix(trimmed, "name:") {
+			v := strings.TrimSpace(strings.SplitN(trimmed, ":", 2)[1])
+			return unquote(v)
+		}
+	}
+	return ""
+}
+
+func renderContainerVarsBlock(items []VarItem, preserved [][]string) []string {
+	if len(items) == 0 && len(preserved) == 0 {
+		return nil
+	}
+	lines := []string{"    vars:"}
+	for _, item := range items {
+		lines = append(lines, "      - name: "+strings.TrimSpace(item.Name), "        value: "+strconv.Quote(item.Value))
+	}
+	for _, block := range preserved {
+		lines = append(lines, block...)
+	}
+	return lines
+}
+
+func validateContainerVarItems(items []VarItem, preservedNames map[string]bool) error {
+	if err := validateVarItems(items); err != nil {
+		return err
+	}
+	for _, item := range items {
+		name := strings.TrimSpace(item.Name)
+		if preservedNames[name] {
+			return fmt.Errorf("variable name %q is already used by a read-only variable", name)
 		}
 	}
 	return nil
@@ -866,13 +1050,13 @@ func parseVarsLines(lines []string) []VarItem {
 	return items
 }
 
-func envVarModel(index int, envMap map[string]any) EnvVarModel {
-	model := EnvVarModel{Index: index, Name: stringPtr(stringValue(envMap["name"])), Kind: "value", IsValueEditable: true}
-	if value := stringValue(envMap["value"]); value != "" {
+func envVarModel(index int, varMap map[string]any) EnvVarModel {
+	model := EnvVarModel{Index: index, Name: stringPtr(stringValue(varMap["name"])), Kind: "value", IsValueEditable: true}
+	if value := stringValue(varMap["value"]); value != "" {
 		model.Value = &value
 		return model
 	}
-	valueFrom, _ := envMap["valueFrom"].(map[string]any)
+	valueFrom, _ := varMap["valueFrom"].(map[string]any)
 	if secret, ok := valueFrom["secretKeyRef"].(map[string]any); ok {
 		model.Kind = "secret"
 		model.SecretName = stringPtr(stringValue(secret["name"]))

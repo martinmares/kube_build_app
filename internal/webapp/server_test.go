@@ -264,7 +264,7 @@ name: "{{var:APP_NAME}}"
 replicas: 1
 containers:
   - name: api
-    env_vars:
+    vars:
       - name: MODE
         value: test
 `)
@@ -395,6 +395,32 @@ func TestAppContainerResourcesUpdateEndpoint(t *testing.T) {
 		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `"cpu_request":"100m"`) || !strings.Contains(response.Body.String(), `"memory_limit":"512Mi"`) {
+		t.Fatalf("unexpected response:\n%s", response.Body.String())
+	}
+}
+
+func TestAppContainerVarsUpdateEndpoint(t *testing.T) {
+	root := t.TempDir()
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, "name: api\ncontainers:\n  - name: api\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	body := `{"expected_hash":"` + detail.ContentHash + `","items":[{"name":"MODE","value":"api"},{"name":"PORT","value":"8080"}]}`
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/vars", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"name":"MODE"`) || !strings.Contains(response.Body.String(), `"value":"8080"`) {
 		t.Fatalf("unexpected response:\n%s", response.Body.String())
 	}
 }

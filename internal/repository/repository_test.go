@@ -76,7 +76,7 @@ name: "{{var:APP_NAME}}"
 replicas: 2
 containers:
   - name: api
-    env_vars:
+    vars:
       - name: ONE
         value: "1"
     ports:
@@ -243,7 +243,7 @@ containers:
         mount_path: /work
     env_from:
       - config_map: api-env
-    env_vars:
+    vars:
       - name: PLAIN
         value: hello
       - name: SECRET
@@ -315,8 +315,8 @@ containers:
 	if container.EnvFromCount != 1 || container.MountsCount != 1 {
 		t.Fatalf("unexpected env_from/mounts count: env_from=%d mounts=%d", container.EnvFromCount, container.MountsCount)
 	}
-	if len(container.EnvVars) != 2 || container.EnvVars[1].Kind != "secret" || container.EnvVars[1].SecretName == nil || *container.EnvVars[1].SecretName != "app-secret" {
-		t.Fatalf("unexpected env model: %#v", container.EnvVars)
+	if len(container.Vars) != 2 || container.Vars[1].Kind != "secret" || container.Vars[1].SecretName == nil || *container.Vars[1].SecretName != "app-secret" {
+		t.Fatalf("unexpected vars model: %#v", container.Vars)
 	}
 	if len(container.Ports) != 1 || len(container.Ports[0].ExposeAs) != 1 || !container.Ports[0].ExposeAs[0].IngressEnabled {
 		t.Fatalf("unexpected ports model: %#v", container.Ports)
@@ -501,6 +501,79 @@ func TestUpdateAppContainerResourcesInsertsMissingBlock(t *testing.T) {
 	}
 	if !contains(detail.Content, "  - name: api\n    resources:\n      cpu:\n        requests: \"100m\"\n    image: api:1") {
 		t.Fatalf("resources not inserted after container name:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppContainerVarsUpdatesSelectedContainer(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    vars:
+      - name: API_ONLY
+        value: "1"
+  - name: worker
+    vars:
+      - name: MODE
+        value: "old"
+    image: worker:1
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repo.UpdateAppContainerVars("test", "api.yml", 1, []VarItem{{Name: "MODE", Value: "new"}, {Name: "QUEUE", Value: "critical"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Vars) != 2 || result.Vars[0].Value == nil || *result.Vars[0].Value != "new" {
+		t.Fatalf("variables = %#v, want updated MODE", result.Vars)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, "API_ONLY") {
+		t.Fatalf("first container variable was changed unexpectedly:\n%s", detail.Content)
+	}
+	if !contains(detail.Content, "  - name: worker\n    vars:\n      - name: MODE\n        value: \"new\"\n      - name: QUEUE\n        value: \"critical\"\n    image: worker:1") {
+		t.Fatalf("worker vars not updated in place:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppContainerVarsPreservesValueFromItems(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    vars:
+      - name: PLAIN
+        value: "old"
+      - name: SECRET_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: api-secret
+            key: token
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repo.UpdateAppContainerVars("test", "api.yml", 0, []VarItem{{Name: "PLAIN", Value: "new"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Vars) != 2 || result.Vars[1].Kind != "secret" {
+		t.Fatalf("variables = %#v, want preserved secret", result.Vars)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, `value: "new"`) || !contains(detail.Content, "valueFrom:") || !contains(detail.Content, "name: api-secret") {
+		t.Fatalf("valueFrom variable was not preserved:\n%s", detail.Content)
 	}
 }
 

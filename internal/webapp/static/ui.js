@@ -70,9 +70,18 @@ async function init() {
     syncAppVarsEmptyState();
   });
   qs('#app-overview')?.addEventListener('click', (e) => {
-    const button = e.target.closest('[data-save-resources]');
-    if (!button || state.readOnly) return;
-    saveContainerResources(Number(button.dataset.saveResources));
+    const saveResources = e.target.closest('[data-save-resources]');
+    if (saveResources && !state.readOnly) return saveContainerResources(Number(saveResources.dataset.saveResources));
+    const saveVars = e.target.closest('[data-save-container-vars]');
+    if (saveVars && !state.readOnly) return saveContainerVars(Number(saveVars.dataset.saveContainerVars));
+    const addVar = e.target.closest('[data-add-container-var]');
+    if (addVar && !state.readOnly) return addContainerVarRow(Number(addVar.dataset.addContainerVar));
+    const removeVar = e.target.closest('[data-remove-container-var]');
+    if (removeVar && !state.readOnly) {
+      const index = Number(removeVar.dataset.removeContainerVar);
+      removeVar.closest('tr')?.remove();
+      syncContainerVarsEmptyState(index);
+    }
   });
   await loadAll();
 }
@@ -490,7 +499,7 @@ function renderContainerOverview(container) {
   const java = container.runtime?.java || {};
   const probes = container.probes || {};
   const ports = container.ports || [];
-  const envVars = container.env_vars || [];
+  const vars = container.vars || [];
   const javaBlock = java.enabled ? `
     <div class="chip-row">
       ${chip('JVM Xms', java.xms || '-')}
@@ -504,7 +513,7 @@ function renderContainerOverview(container) {
       <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
         <div>
           <div class="fw-semibold font-monospace">${esc(container.name || `container-${container.index}`)}</div>
-          <div class="text-muted small">${envVars.length} env var(s), ${container.env_from_count || 0} env_from, ${container.mounts_count || 0} mount(s), ${ports.length} port(s)</div>
+          <div class="text-muted small">${vars.length} variable(s), ${container.env_from_count || 0} env_from, ${container.mounts_count || 0} mount(s), ${ports.length} port(s)</div>
         </div>
         <span class="badge bg-blue-lt">#${container.index + 1}</span>
       </div>
@@ -518,6 +527,7 @@ function renderContainerOverview(container) {
         <div class="col-12 col-xl-4"><div class="overview-subtitle">Java runtime</div>${javaBlock}</div>
         <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div><div class="text-muted small">${esc(probeText)}</div></div>
       </div>
+      ${renderContainerVarsEditor(container.index, vars)}
     </div>`;
 }
 function renderResourcesEditor(index, resources) {
@@ -552,6 +562,81 @@ async function saveContainerResources(index) {
   clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/resources`, {resources, expected_hash: state.appContentHash});
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
+}
+function renderContainerVarsEditor(index, vars) {
+  const disabled = state.readOnly ? 'disabled' : '';
+  const rows = (vars || []).map((item) => renderContainerVarRow(index, item)).join('');
+  return `
+    <div class="container-var-editor mt-3" data-container-var-editor="${index}">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Container variables</div>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-add-container-var="${index}" ${disabled}><i class="ti ti-plus me-1"></i>Add variable</button>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0 container-var-table">
+          <tbody data-container-var-body="${index}">
+            ${rows || renderContainerVarsEmpty(index)}
+          </tbody>
+        </table>
+      </div>
+      <div class="d-flex align-items-center justify-content-between gap-2 mt-2">
+        <div class="text-muted small">Edits name/value vars. valueFrom entries are preserved read-only.</div>
+        <button class="btn btn-sm btn-primary" type="button" data-save-container-vars="${index}" ${disabled}><i class="ti ti-device-floppy me-1"></i>Save variables</button>
+      </div>
+    </div>`;
+}
+function renderContainerVarRow(index, item = {}) {
+  const editable = item.is_value_editable !== false;
+  const disabled = state.readOnly || !editable ? 'disabled' : '';
+  const valueText = editable ? (item.value || '') : envVarReadOnlyValue(item);
+  const kind = item.kind || 'value';
+  const remove = editable
+    ? `<button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-container-var="${index}" title="Remove variable" ${state.readOnly ? 'disabled' : ''}><i class="ti ti-trash"></i></button>`
+    : `<span class="badge bg-secondary-lt">read-only</span>`;
+  return `
+    <tr data-container-var-row="${index}" data-var-editable="${editable ? 'true' : 'false'}">
+      <td><input class="form-control form-control-sm font-monospace" data-container-var-field="${index}:name" placeholder="NAME" value="${esc(item.name || '')}" ${disabled}></td>
+      <td><input class="form-control form-control-sm font-monospace" data-container-var-field="${index}:value" placeholder="value" value="${esc(valueText)}" ${disabled}></td>
+      <td class="text-nowrap"><span class="badge ${editable ? 'bg-blue-lt' : 'bg-secondary-lt'}">${esc(kind)}</span></td>
+      <td class="table-action-col">${remove}</td>
+    </tr>`;
+}
+function envVarReadOnlyValue(item) {
+  if (item.kind === 'secret') return `${item.secret_name || '?'}:${item.key || '?'}`;
+  if (item.kind === 'resource') return [item.resource_name, item.divisor].filter(Boolean).join(' / ') || 'resourceFieldRef';
+  if (item.kind === 'field') return item.field_path || 'fieldRef';
+  return item.value || '';
+}
+function renderContainerVarsEmpty(index) {
+  return `<tr data-container-var-empty="${index}"><td colspan="4">${emptyState('ti-variable', 'No container variables', state.readOnly ? 'Start with --allow-write to add variables.' : 'Use Add variable to create the first one.')}</td></tr>`;
+}
+function syncContainerVarsEmptyState(index) {
+  const body = qs(`[data-container-var-body="${index}"]`);
+  if (!body) return;
+  const hasRows = qsa(`[data-container-var-row="${index}"]`).length > 0;
+  if (!hasRows) body.innerHTML = renderContainerVarsEmpty(index);
+}
+function addContainerVarRow(index) {
+  if (state.readOnly || !state.appFile || !Number.isInteger(index)) return;
+  const body = qs(`[data-container-var-body="${index}"]`);
+  if (!body) return;
+  body.querySelector(`[data-container-var-empty="${index}"]`)?.remove();
+  body.insertAdjacentHTML('beforeend', renderContainerVarRow(index));
+  qsa(`[data-container-var-row="${index}"]`).at(-1)?.querySelector(`[data-container-var-field="${index}:name"]`)?.focus();
+}
+async function saveContainerVars(index) {
+  if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
+  const items = qsa(`[data-container-var-row="${index}"][data-var-editable="true"]`).map((row) => ({
+    name: row.querySelector(`[data-container-var-field="${index}:name"]`)?.value?.trim() || '',
+    value: row.querySelector(`[data-container-var-field="${index}:value"]`)?.value || '',
+  })).filter((item) => item.name !== '');
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/vars`, {items, expected_hash: state.appContentHash});
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);
