@@ -130,7 +130,7 @@ func parseGitStatusFiles(raw string, prefix string) []GitFileStatus {
 			continue
 		}
 		code := strings.TrimSpace(line[:2])
-		path := strings.TrimSpace(line[3:])
+		path := strings.TrimSpace(strings.TrimLeft(line[2:], " \t"))
 		if strings.Contains(path, " -> ") {
 			parts := strings.Split(path, " -> ")
 			path = strings.TrimSpace(parts[len(parts)-1])
