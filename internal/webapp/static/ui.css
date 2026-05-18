@@ -12,7 +12,7 @@
 .apps-list-card, .assets-list-card { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: hidden; }
 .apps-list-table, .assets-list-table { max-height: calc(100vh - 9rem); overflow: auto; }
 .asset-file-list { display: grid; }
-.asset-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .75rem; min-height: 3.1rem; padding: .45rem .75rem .45rem var(--asset-indent); border-top: 1px solid var(--tblr-border-color); }
+.asset-row { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; column-gap: 1rem; min-height: 3.1rem; padding: .45rem .75rem .45rem var(--asset-indent); border-top: 1px solid var(--tblr-border-color); }
 .asset-row:first-child { border-top: 0; }
 .asset-file { cursor: pointer; }
 .asset-file:hover { background-color: rgba(var(--tblr-primary-rgb, 32, 107, 196), .06); }
@@ -20,9 +20,10 @@
 .asset-main { display: flex; align-items: center; gap: .6rem; min-width: 0; }
 .asset-icon { flex: 0 0 auto; color: var(--tblr-muted); font-size: 1.35rem !important; }
 .asset-icon.folder { color: var(--tblr-warning); }
-.asset-name { color: var(--tblr-body-color); line-height: 1.25; }
+.asset-main > .min-w-0 { min-width: 0; width: 100%; }
+.asset-name { display: block; max-width: 100%; color: var(--tblr-body-color); line-height: 1.25; }
 .asset-subtitle { max-width: 100%; }
-.asset-meta { display: flex; align-items: center; gap: .7rem; font-family: var(--tblr-font-monospace); font-size: .8125rem; white-space: nowrap; }
+.asset-meta { display: grid; grid-template-columns: minmax(4.2rem, max-content) minmax(4.8rem, max-content); justify-content: end; align-items: center; gap: .8rem; min-width: 9.8rem; font-family: var(--tblr-font-monospace); font-size: .8125rem; white-space: nowrap; text-align: right; }
 .asset-dir .asset-meta { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
 .asset-empty { padding: 1rem; }
 .env-card { border: 1px solid color-mix(in srgb, var(--tblr-border-color) 72%, transparent); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
