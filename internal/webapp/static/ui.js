@@ -17,7 +17,7 @@ function setActive(page) {
   }
   for (const pageEl of qsa('[data-page]')) pageEl.classList.toggle('hidden', pageEl.dataset.page !== page);
   setText('#page-pretitle', state.env ? `Environment ${state.env}` : 'Environment repository');
-  setText('#page-title', page === 'dashboard' ? 'Select environment' : page === 'apps' ? 'Inspect applications' : page === 'assets' ? 'Inspect assets' : 'Build preview');
+  setText('#page-title', page === 'dashboard' ? 'Select environment' : page === 'changes' ? 'Changed files' : page === 'apps' ? 'Inspect applications' : page === 'assets' ? 'Inspect assets' : 'Build preview');
   if (page === 'build') loadBuildData();
 }
 function applyTheme(theme) {
@@ -101,11 +101,14 @@ function dirtyBadge(file) {
 async function selectEnv(env) {
   if (!state.envs.some((x) => x.name === env)) env = state.envs[0]?.name;
   if (!env) return;
+  const changedEnv = state.env !== env;
   state.env = env; localStorage.setItem('activeEnv', env);
+  if (changedEnv) resetSelectedDetails();
   renderEnvs();
   renderEnvChanges();
   await Promise.all([loadApps(), loadAssets()]);
-  setActive(state.active === 'dashboard' ? 'apps' : state.active);
+  const hasChanges = gitFilesForEnv(env).length > 0;
+  setActive(state.active === 'dashboard' ? (hasChanges ? 'changes' : 'apps') : state.active);
 }
 function renderEnvs() {
   const host = qs('#env-list');
@@ -131,19 +134,21 @@ function renderEnvs() {
   renderEnvChanges();
 }
 function renderEnvChanges() {
-  const row = qs('#env-changes-row');
   const list = qs('#env-changes-list');
-  if (!row || !list || !state.env) return;
+  const navItem = qs('#changes-nav-item');
+  const count = qs('#changes-count');
+  if (!list || !state.env) return;
   const files = gitFilesForEnv(state.env);
-  row.classList.toggle('hidden', files.length === 0);
-  list.innerHTML = files.map((file) => {
+  if (navItem) navItem.classList.toggle('hidden', files.length === 0);
+  if (count) count.textContent = String(files.length);
+  list.innerHTML = files.length ? files.map((file) => {
     const target = dirtyNavigationTarget(file.path);
     return `
       <a href="#" class="list-group-item list-group-item-action d-flex align-items-center justify-content-between gap-3 ${target ? '' : 'disabled'}" data-dirty-path="${esc(file.path)}">
         <span class="font-monospace text-break">${esc(file.path)}</span>
         <span class="badge bg-yellow-lt">${esc(gitCodeLabel(file.code))}</span>
       </a>`;
-  }).join('');
+  }).join('') : '<div class="list-group-item text-muted">No changed files in selected environment.</div>';
   qsa('[data-dirty-path]').forEach((item) => item.addEventListener('click', (event) => {
     event.preventDefault();
     openDirtyPath(item.dataset.dirtyPath);
@@ -163,6 +168,26 @@ function openDirtyPath(path) {
   setActive(target.page);
   if (target.page === 'apps') selectApp(target.value);
   if (target.page === 'assets') selectAsset(target.value);
+}
+function resetSelectedDetails() {
+  state.appFile = null;
+  state.assetPath = null;
+  state.inventory = null;
+  setText('#app-detail-title', 'Select app');
+  setText('#app-detail-path', '');
+  setText('#app-detail-meta', '');
+  setHTML('#app-overview', '<div class="text-muted">Select an application to show structured model overview.</div>');
+  setText('#app-raw', '');
+  setText('#app-rendered', '');
+  const appVarsBody = qs('#app-vars tbody');
+  if (appVarsBody) appVarsBody.innerHTML = '';
+  qs('#app-diff-section')?.classList.add('hidden');
+  setText('#app-diff', '');
+  setText('#asset-detail-title', 'Select asset');
+  setText('#asset-detail-path', '');
+  setText('#asset-raw', '');
+  qs('#asset-diff-section')?.classList.add('hidden');
+  setText('#asset-diff', '');
 }
 async function loadApps() {
   if (!state.env) return;
@@ -302,7 +327,17 @@ function renderAssets() {
     dirtyBadgeEl.classList.toggle('hidden', dirtyAssets.length === 0);
     dirtyBadgeEl.textContent = dirtyAssets.length ? `${dirtyAssets.length} changed` : '';
   }
-  body.innerHTML = state.assets.map((a) => `<tr class="row-link ${state.assetPath === a.relative_path ? 'selected-row' : ''}" data-asset="${esc(a.relative_path)}"><td class="font-monospace">${esc(a.relative_path)}${dirtyBadge(gitFile(assetGitPath(a.relative_path)))}</td><td>${esc(a.driver)}</td><td class="text-end">${a.size_bytes ?? 0}</td></tr>`).join('') || '<tr><td colspan="3" class="text-muted">No assets.</td></tr>';
+  body.innerHTML = state.assets.map((a) => `
+    <tr class="row-link ${state.assetPath === a.relative_path ? 'selected-row' : ''}" data-asset="${esc(a.relative_path)}">
+      <td>
+        <div class="fw-semibold asset-list-name font-monospace">${esc(a.relative_path)}${dirtyBadge(gitFile(assetGitPath(a.relative_path)))}</div>
+        <div class="text-muted small">${esc(a.driver)} · ${a.size_bytes ?? 0} bytes</div>
+      </td>
+      <td class="text-end">
+        <div class="badge bg-cyan-lt">${esc(a.driver)}</div>
+        <div class="text-muted small mt-1">${a.size_bytes ?? 0} B</div>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="2" class="text-muted">No assets.</td></tr>';
   qsa('[data-asset]').forEach((x) => x.addEventListener('click', () => selectAsset(x.dataset.asset)));
 }
 function assetGitPath(relativePath) {
