@@ -189,11 +189,13 @@ Model: `gpt-5.5 medium`
 Úkoly:
 
 - zobrazit `Defaults` - read-only view hotovo přes Assets
-- zobrazit a editovat `Local variables`
-- zobrazit a editovat `Container envs`
-- podporovat `containers: name: "*"`
-- podporovat konkrétní container override
-- respektovat `remove: true`
+- zobrazit a editovat top-level `vars` - hotovo
+- zobrazit a editovat `container_envs` - hotovo
+- podporovat `name: "*"` wildcard group - hotovo
+- podporovat konkrétní container override group - hotovo
+- safe write přes `expected_hash` - hotovo
+- diff preview po změně - hotovo
+- `remove: true` zůstává read/merge kontrakt app-level override, ne editor field v `_defaults.yml`
 
 Toto je důležité pro praktickou použitelnost v reálných environment repozitářích.
 
@@ -203,11 +205,12 @@ Model: `gpt-5.5 medium`
 
 Úkoly:
 
-- tabulkový editor klíč/hodnota
-- add/update/delete
-- validace JSON hodnot
-- diff preview
-- bezpečný zápis JSON
+- tabulkový editor klíč/hodnota - hotovo pro `env.unsecured.json`
+- explicitní typ hodnoty `string` / `number` / `bool` / `null` / `json` - hotovo
+- add/update/delete - hotovo
+- validace JSON hodnot - hotovo
+- diff preview - hotovo
+- bezpečný zápis JSON přes `expected_hash` - hotovo
 
 ### 10. Editor `env.secured.json`
 

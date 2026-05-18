@@ -95,6 +95,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/rendered", s.handleAppRendered)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVars)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVarsUpdate)
+	mux.HandleFunc("GET /api/v1/envs/{env}/defaults", s.handleDefaults)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/vars", s.handleDefaultsVarsUpdate)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/container-envs", s.handleDefaultsContainerEnvsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/replicas", s.handleAppReplicasUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/autoscaling", s.handleAppAutoscalingUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/resources", s.handleAppContainerResourcesUpdate)
@@ -107,6 +110,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets", s.handleAssets)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/content/{asset_path...}", s.handleAssetContent)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/special/{special_file}/entries", s.handleSpecialEntries)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/assets/special/{special_file}/entries", s.handleSpecialEntriesUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/special/{special_file}/preflight", s.handleSpecialPreflight)
 	mux.HandleFunc("POST /api/v1/envs/{env}/validate", s.handleBuildValidate)
 	mux.HandleFunc("POST /api/v1/envs/{env}/summary", s.handleBuildSummary)
@@ -315,6 +319,69 @@ func (s *Server) handleAppVarsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, vars)
+}
+
+func (s *Server) handleDefaults(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	defaults, err := s.repo.Defaults(r.PathValue("env"))
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, defaults)
+}
+
+func (s *Server) handleDefaultsVarsUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	var payload struct {
+		ExpectedHash string               `json:"expected_hash"`
+		Items        []repository.VarItem `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defaults, err := s.repo.UpdateDefaultsVars(r.PathValue("env"), payload.Items, payload.ExpectedHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, defaults)
+}
+
+func (s *Server) handleDefaultsContainerEnvsUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	var payload struct {
+		ExpectedHash string                               `json:"expected_hash"`
+		Groups       []repository.ContainerEnvGroupUpdate `json:"groups"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defaults, err := s.repo.UpdateDefaultsContainerEnvs(r.PathValue("env"), payload.Groups, payload.ExpectedHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, defaults)
 }
 
 func (s *Server) handleAppReplicasUpdate(w http.ResponseWriter, r *http.Request) {
@@ -580,6 +647,31 @@ func (s *Server) handleSpecialEntries(w http.ResponseWriter, r *http.Request) {
 	entries, err := s.repo.SpecialEntries(r.PathValue("env"), r.PathValue("special_file"))
 	if err != nil {
 		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, entries)
+}
+
+func (s *Server) handleSpecialEntriesUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	var payload struct {
+		ExpectedHash string                    `json:"expected_hash"`
+		Entries      []repository.SpecialEntry `json:"entries"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	entries, err := s.repo.UpdateSpecialEntries(r.PathValue("env"), r.PathValue("special_file"), payload.Entries, payload.ExpectedHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, entries)

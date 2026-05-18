@@ -166,6 +166,7 @@ async function init() {
       syncContainerEnvsEmptyState(index);
     }
   });
+  qs('#asset-structured')?.addEventListener('click', (e) => handleAssetStructuredClick(e));
   qs('#ports-edit-modal')?.addEventListener('click', (e) => handlePortsModalClick(e));
   qs('#edit-modal')?.addEventListener('click', (e) => handleEditModalClick(e));
   await loadAll();
@@ -1037,6 +1038,25 @@ function handleEditModalClick(e) {
   }
   const saveAppVar = e.target.closest('[data-save-app-vars-modal]');
   if (saveAppVar && !state.readOnly) return saveAppVars();
+  if (e.target.closest('[data-save-defaults-vars]') && !state.readOnly) return saveDefaultsVars();
+  if (e.target.closest('[data-add-defaults-var]') && !state.readOnly) return addDefaultsVarRow();
+  const removeDefaultsVar = e.target.closest('[data-remove-defaults-var]');
+  if (removeDefaultsVar && !state.readOnly) {
+    removeDefaultsVar.closest('tr')?.remove();
+    syncDefaultsVarsEmptyState();
+  }
+  if (e.target.closest('[data-save-defaults-container-envs]') && !state.readOnly) return saveDefaultsContainerEnvs();
+  if (e.target.closest('[data-add-defaults-env-group]') && !state.readOnly) return addDefaultsEnvGroup();
+  const removeGroup = e.target.closest('[data-remove-defaults-env-group]');
+  if (removeGroup && !state.readOnly) return removeGroup.closest('[data-defaults-env-group]')?.remove();
+  const addEnv = e.target.closest('[data-add-defaults-env]');
+  if (addEnv && !state.readOnly) return addDefaultsEnvRow(addEnv.closest('[data-defaults-env-group]'));
+  const removeEnv = e.target.closest('[data-remove-defaults-env]');
+  if (removeEnv && !state.readOnly) return removeEnv.closest('tr')?.remove();
+  if (e.target.closest('[data-save-special-entries]') && !state.readOnly) return saveSpecialEntries();
+  if (e.target.closest('[data-add-special-entry]') && !state.readOnly) return addSpecialEntryRow();
+  const removeSpecialEntry = e.target.closest('[data-remove-special-entry]');
+  if (removeSpecialEntry && !state.readOnly) return removeSpecialEntry.closest('tr')?.remove();
 }
 function handlePortsModalClick(e) {
   const savePorts = e.target.closest('[data-save-ports]');
@@ -1065,6 +1085,192 @@ function handlePortsModalClick(e) {
     removeExternalItem.closest('[data-external-row]')?.remove();
     syncExternalEmptyState(index);
   }
+}
+function openEditorModal(title, subtitle, body) {
+  const modal = qs('#edit-modal');
+  if (!modal || !body) return;
+  setText('#edit-modal-title', title);
+  setText('#edit-modal-subtitle', subtitle);
+  setHTML('#edit-modal-body', body);
+  state.editModalClose = openModalElement(modal);
+}
+function openDefaultsVarsEditor() {
+  openEditorModal('Edit defaults vars', 'Top-level vars in apps/_defaults.yml used by {{var:NAME}} placeholders.', renderDefaultsVarsEditor(state.defaults?.vars || []));
+}
+function renderDefaultsVarsEditor(items) {
+  const rows = (items || []).map((item) => renderDefaultsVarRow(item)).join('');
+  return `
+    <div class="detail-panel">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Defaults vars</div>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-add-defaults-var><i class="ti ti-plus me-1"></i>Add variable</button>
+      </div>
+      <div class="table-responsive"><table class="table table-sm" data-defaults-vars><tbody>${rows || renderDefaultsVarsEmpty()}</tbody></table></div>
+      <div class="text-end mt-3"><button class="btn btn-primary" type="button" data-save-defaults-vars><i class="ti ti-device-floppy me-1"></i>Save vars</button></div>
+    </div>`;
+}
+function renderDefaultsVarRow(item = {}) {
+  return `
+    <tr>
+      <td><input class="form-control form-control-sm font-monospace defaults-var-name" placeholder="NAME" value="${esc(item.name || '')}"></td>
+      <td><input class="form-control form-control-sm font-monospace defaults-var-value" placeholder="value" value="${esc(item.value || '')}"></td>
+      <td class="table-action-col"><button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-defaults-var title="Remove variable"><i class="ti ti-trash"></i></button></td>
+    </tr>`;
+}
+function renderDefaultsVarsEmpty() {
+  return `<tr><td colspan="3">${emptyState('ti-variable', 'No defaults vars', 'Use Add variable to create the first one.')}</td></tr>`;
+}
+function syncDefaultsVarsEmptyState() {
+  const body = qs('[data-defaults-vars] tbody');
+  if (!body) return;
+  if (!body.querySelector('.defaults-var-name')) body.innerHTML = renderDefaultsVarsEmpty();
+}
+function addDefaultsVarRow() {
+  const body = qs('[data-defaults-vars] tbody');
+  if (!body) return;
+  if (!body.querySelector('.defaults-var-name')) body.innerHTML = '';
+  body.insertAdjacentHTML('beforeend', renderDefaultsVarRow());
+  body.querySelector('tr:last-child .defaults-var-name')?.focus();
+}
+async function saveDefaultsVars() {
+  if (!state.env || state.readOnly) return;
+  const body = qs('[data-defaults-vars] tbody');
+  const items = Array.from(body?.querySelectorAll('tr') || []).map((row) => ({
+    name: row.querySelector('.defaults-var-name')?.value?.trim() || '',
+    value: row.querySelector('.defaults-var-value')?.value || '',
+  })).filter((item) => item.name !== '');
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults/vars`, {items, expected_hash: state.assetContentHash});
+    state.editModalClose?.();
+    state.editModalClose = null;
+    await refreshRepositorySnapshot();
+    await loadAssets();
+    await selectAsset(state.assetPath);
+  } catch (e) { showError(e); }
+}
+function openDefaultsContainerEnvsEditor() {
+  openEditorModal('Edit defaults container envs', 'Default container envs in apps/_defaults.yml grouped by container name or "*".', renderDefaultsContainerEnvsEditor(state.defaults?.container_envs || []));
+}
+function renderDefaultsContainerEnvsEditor(groups) {
+  const rows = (groups || []).map((group) => renderDefaultsEnvGroup(group)).join('');
+  return `
+    <div class="detail-panel">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Defaults container envs</div>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-add-defaults-env-group><i class="ti ti-plus me-1"></i>Add group</button>
+      </div>
+      <div data-defaults-env-groups>${rows || emptyState('ti-variable', 'No container env groups', 'Use Add group to create the first one.')}</div>
+      <div class="text-end mt-3"><button class="btn btn-primary" type="button" data-save-defaults-container-envs><i class="ti ti-device-floppy me-1"></i>Save container envs</button></div>
+    </div>`;
+}
+function renderDefaultsEnvGroup(group = {}) {
+  const envs = (group.envs || []).filter((item) => item.is_value_editable !== false);
+  const rows = envs.map((item) => renderDefaultsEnvRow(item)).join('');
+  return `
+    <div class="resource-editor mb-3" data-defaults-env-group>
+      <div class="row g-2 align-items-end mb-2">
+        <div class="col-12 col-lg-8"><label class="form-label small mb-1">Container name</label><input class="form-control form-control-sm font-monospace defaults-env-group-name" placeholder="* or container name" value="${esc(group.name || '')}"></div>
+        <div class="col-6 col-lg-2"><button class="btn btn-sm btn-outline-primary w-100" type="button" data-add-defaults-env><i class="ti ti-plus me-1"></i>Add env</button></div>
+        <div class="col-6 col-lg-2"><button class="btn btn-sm btn-outline-danger w-100" type="button" data-remove-defaults-env-group><i class="ti ti-trash me-1"></i>Remove</button></div>
+      </div>
+      <div class="table-responsive"><table class="table table-sm mb-0"><tbody>${rows || renderDefaultsEnvEmpty()}</tbody></table></div>
+    </div>`;
+}
+function renderDefaultsEnvRow(item = {}) {
+  return `
+    <tr>
+      <td><input class="form-control form-control-sm font-monospace defaults-env-name" placeholder="NAME" value="${esc(item.name || '')}"></td>
+      <td><input class="form-control form-control-sm font-monospace defaults-env-value" placeholder="value" value="${esc(item.value || '')}"></td>
+      <td class="table-action-col"><button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-defaults-env title="Remove env"><i class="ti ti-trash"></i></button></td>
+    </tr>`;
+}
+function renderDefaultsEnvEmpty() {
+  return `<tr><td colspan="3">${emptyState('ti-variable', 'No envs in this group', 'Use Add env to create the first one.')}</td></tr>`;
+}
+function addDefaultsEnvGroup() {
+  const host = qs('[data-defaults-env-groups]');
+  if (!host) return;
+  if (!host.querySelector('[data-defaults-env-group]')) host.innerHTML = '';
+  host.insertAdjacentHTML('beforeend', renderDefaultsEnvGroup({name: '*'}));
+  host.querySelector('[data-defaults-env-group]:last-child .defaults-env-group-name')?.focus();
+}
+function addDefaultsEnvRow(groupEl) {
+  const body = groupEl?.querySelector('tbody');
+  if (!body) return;
+  if (!body.querySelector('.defaults-env-name')) body.innerHTML = '';
+  body.insertAdjacentHTML('beforeend', renderDefaultsEnvRow());
+  body.querySelector('tr:last-child .defaults-env-name')?.focus();
+}
+async function saveDefaultsContainerEnvs() {
+  if (!state.env || state.readOnly) return;
+  const groups = qsa('[data-defaults-env-group]').map((groupEl) => ({
+    name: groupEl.querySelector('.defaults-env-group-name')?.value?.trim() || '',
+    envs: Array.from(groupEl.querySelectorAll('tbody tr')).map((row) => ({
+      name: row.querySelector('.defaults-env-name')?.value?.trim() || '',
+      value: row.querySelector('.defaults-env-value')?.value || '',
+    })).filter((item) => item.name !== ''),
+  })).filter((group) => group.name !== '');
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults/container-envs`, {groups, expected_hash: state.assetContentHash});
+    state.editModalClose?.();
+    state.editModalClose = null;
+    await refreshRepositorySnapshot();
+    await loadAssets();
+    await selectAsset(state.assetPath);
+  } catch (e) { showError(e); }
+}
+function openSpecialEntriesEditor() {
+  openEditorModal('Edit env.unsecured.json', 'Environment values with explicit JSON value type.', renderSpecialEntriesEditor(state.specialEntries?.entries || []));
+}
+function renderSpecialEntriesEditor(entries) {
+  const rows = (entries || []).map((entry) => renderSpecialEntryRow(entry)).join('');
+  return `
+    <div class="detail-panel">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Entries</div>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-add-special-entry><i class="ti ti-plus me-1"></i>Add entry</button>
+      </div>
+      <div class="table-responsive"><table class="table table-sm" data-special-entries><tbody>${rows || renderSpecialEntriesEmpty()}</tbody></table></div>
+      <div class="text-end mt-3"><button class="btn btn-primary" type="button" data-save-special-entries><i class="ti ti-device-floppy me-1"></i>Save entries</button></div>
+    </div>`;
+}
+function renderSpecialEntryRow(entry = {}) {
+  return `
+    <tr>
+      <td><input class="form-control form-control-sm font-monospace special-entry-key" placeholder="KEY" value="${esc(entry.key || '')}"></td>
+      <td><select class="form-select form-select-sm special-entry-type">${['string','number','bool','null','json'].map((type) => `<option value="${type}" ${entry.value_type === type ? 'selected' : ''}>${type}</option>`).join('')}</select></td>
+      <td><input class="form-control form-control-sm font-monospace special-entry-value" placeholder="value" value="${esc(entry.value_text || '')}"></td>
+      <td class="table-action-col"><button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-special-entry title="Remove entry"><i class="ti ti-trash"></i></button></td>
+    </tr>`;
+}
+function renderSpecialEntriesEmpty() {
+  return `<tr><td colspan="4">${emptyState('ti-json', 'No entries', 'Use Add entry to create the first one.')}</td></tr>`;
+}
+function addSpecialEntryRow() {
+  const body = qs('[data-special-entries] tbody');
+  if (!body) return;
+  if (!body.querySelector('.special-entry-key')) body.innerHTML = '';
+  body.insertAdjacentHTML('beforeend', renderSpecialEntryRow({value_type: 'string'}));
+  body.querySelector('tr:last-child .special-entry-key')?.focus();
+}
+async function saveSpecialEntries() {
+  if (!state.env || !state.assetPath || state.readOnly) return;
+  const entries = qsa('[data-special-entries] tbody tr').map((row) => ({
+    key: row.querySelector('.special-entry-key')?.value?.trim() || '',
+    value_type: row.querySelector('.special-entry-type')?.value || 'string',
+    value_text: row.querySelector('.special-entry-value')?.value || '',
+  })).filter((entry) => entry.key !== '');
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/special/${encodeURIComponent(state.assetPath)}/entries`, {entries, expected_hash: state.assetContentHash});
+    state.editModalClose?.();
+    state.editModalClose = null;
+    await refreshRepositorySnapshot();
+    await loadAssets();
+    await selectAsset(state.assetPath);
+  } catch (e) { showError(e); }
 }
 function renderPortRow(index, port = {}) {
   const rowId = crypto.randomUUID?.() || String(Date.now() + Math.random());
@@ -1417,14 +1623,34 @@ async function selectAsset(path) {
   try {
     const selectedAsset = state.assets.find((asset) => asset.relative_path === path);
     setText('#asset-detail-title', path);
+    setHTML('#asset-structured', '');
     if (isSpecial(path)) {
-      const entries = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/special/${encodeURIComponent(path)}/entries`);
+      const [detail, entries] = await Promise.all([
+        api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/content/${path.split('/').map(encodeURIComponent).join('/')}`),
+        api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/special/${encodeURIComponent(path)}/entries`),
+      ]);
+      state.assetContentHash = entries.content_hash || detail.content_hash || null;
+      state.specialEntries = entries;
       setText('#asset-detail-path', `${entries.entries?.length || 0} entrie(s), editable=${entries.editable}`);
       setHTML('#asset-detail-badges', renderAssetDetailBadges(selectedAsset, entries));
-      setText('#asset-raw', (entries.entries || []).map((e) => `${e.key} [${e.value_type}] = ${e.value_text}`).join('\n'));
+      setHTML('#asset-structured', renderSpecialEntriesPreview(entries));
+      setText('#asset-raw', detail.content);
       await loadGitDiff(`${state.env}/${path}`, entries.is_dirty, '#asset-diff-section', '#asset-diff');
+    } else if (isDefaultsAsset(path)) {
+      const [detail, defaults] = await Promise.all([
+        api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/content/${path.split('/').map(encodeURIComponent).join('/')}`),
+        api(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults`),
+      ]);
+      state.assetContentHash = defaults.content_hash || detail.content_hash || null;
+      state.defaults = defaults;
+      setText('#asset-detail-path', detail.path);
+      setHTML('#asset-detail-badges', renderAssetDetailBadges(selectedAsset, defaults));
+      setHTML('#asset-structured', renderDefaultsPreview(defaults));
+      setText('#asset-raw', detail.content);
+      await loadGitDiff(assetGitPath(detail.relative_path), detail.is_dirty, '#asset-diff-section', '#asset-diff');
     } else {
       const detail = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/content/${path.split('/').map(encodeURIComponent).join('/')}`);
+      state.assetContentHash = detail.content_hash || null;
       setText('#asset-detail-path', detail.path);
       setHTML('#asset-detail-badges', renderAssetDetailBadges(selectedAsset, detail));
       setText('#asset-raw', detail.content);
@@ -1439,6 +1665,57 @@ function renderAssetDetailBadges(asset, detail) {
     detail?.is_dirty ? badge('dirty', 'bg-yellow-lt', 'ti-alert-triangle') : '',
     detail && 'editable' in detail ? badge(detail.editable ? 'editable' : 'read-only', detail.editable ? 'bg-green-lt' : 'bg-secondary-lt', detail.editable ? 'ti-pencil' : 'ti-lock') : '',
   ].filter(Boolean).join('');
+}
+function renderDefaultsPreview(defaults) {
+  const vars = defaults.vars || [];
+  const groups = defaults.container_envs || [];
+  const editVars = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-defaults-vars><i class="ti ti-pencil me-1"></i>Edit vars</button>`;
+  const editEnvs = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-defaults-container-envs><i class="ti ti-pencil me-1"></i>Edit container envs</button>`;
+  return `
+    <div class="overview-section mb-3">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Defaults local variables</div>
+        ${editVars}
+      </div>
+      ${vars.length ? `<div class="chip-row">${vars.map((item) => chip(item.name || '?', item.value || '')).join('')}</div>` : emptyState('ti-variable', 'No default vars', state.readOnly ? '' : 'Use Edit vars to add top-level defaults vars.')}
+    </div>
+    <div class="overview-section mb-3">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Defaults container envs</div>
+        ${editEnvs}
+      </div>
+      ${groups.length ? groups.map(renderDefaultsGroupPreview).join('') : emptyState('ti-variable', 'No container env defaults', state.readOnly ? '' : 'Use Edit container envs to add default envs.')}
+    </div>`;
+}
+function renderDefaultsGroupPreview(group) {
+  const envs = group.envs || [];
+  return `
+    <div class="metric-card mb-2">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="fw-semibold font-monospace">${esc(group.name || '?')}</div>
+        <span class="badge bg-secondary-lt">${envs.length} envs</span>
+      </div>
+      ${envs.length ? `<div class="chip-row">${envs.slice(0, 8).map((item) => chip(item.name || '?', item.kind === 'value' ? (item.value || '') : item.kind)).join('')}${envs.length > 8 ? `<span class="badge bg-secondary-lt">+${envs.length - 8} more</span>` : ''}</div>` : '<div class="text-muted small">No envs in this group.</div>'}
+    </div>`;
+}
+function renderSpecialEntriesPreview(entries) {
+  const items = entries.entries || [];
+  const edit = !state.readOnly && entries.editable && state.assetPath === 'env.unsecured.json' ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-special-entries><i class="ti ti-pencil me-1"></i>Edit entries</button>` : '';
+  return `
+    <div class="overview-section mb-3">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Special entries</div>
+        ${edit}
+      </div>
+      ${entries.warning ? `<div class="alert alert-warning py-2">${esc(entries.warning)}</div>` : ''}
+      ${items.length ? `<div class="table-responsive"><table class="table table-sm mb-0"><tbody>${items.map((item) => `<tr><td class="font-monospace">${esc(item.key)}</td><td><span class="badge bg-blue-lt">${esc(item.value_type)}</span></td><td class="font-monospace text-break">${esc(item.value_text)}</td></tr>`).join('')}</tbody></table></div>` : emptyState('ti-json', 'No entries', 'No entries in this special file.')}
+    </div>`;
+}
+function handleAssetStructuredClick(e) {
+  if (state.readOnly) return;
+  if (e.target.closest('[data-edit-defaults-vars]')) return openDefaultsVarsEditor();
+  if (e.target.closest('[data-edit-defaults-container-envs]')) return openDefaultsContainerEnvsEditor();
+  if (e.target.closest('[data-edit-special-entries]')) return openSpecialEntriesEditor();
 }
 function isSpecial(path) { return ['env.secured.json','env.unsecured.json','assets.secured.json','assets.unsecured.json'].includes(path); }
 function isDefaultsAsset(path) { return path === '_defaults.yml' || path === '_defaults.yaml'; }

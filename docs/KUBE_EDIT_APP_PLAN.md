@@ -375,8 +375,8 @@ Do not start with broad YAML reserialization. Prefer targeted patches that prese
 
 ### Phase 5: Structured Editors
 
-- `_defaults.yml` editor
-- `env.unsecured.json` editor
+- `_defaults.yml` editor - first version done for `vars` and `container_envs`
+- `env.unsecured.json` editor - first version done for typed environment entries
 - `env.secured.json` EncJson edit flow
 - `assets.unsecured.json` virtual asset filesystem
 - `assets.secured.json` EncJson virtual asset filesystem

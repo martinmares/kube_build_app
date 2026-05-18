@@ -28,6 +28,7 @@ type AssetDetail struct {
 	RelativePath string `json:"relative_path"`
 	Path         string `json:"path"`
 	Content      string `json:"content"`
+	ContentHash  string `json:"content_hash"`
 	IsDirty      bool   `json:"is_dirty"`
 }
 
@@ -160,6 +161,7 @@ type VarItem struct {
 type SpecialEntries struct {
 	Env         string         `json:"env"`
 	SpecialFile string         `json:"special_file"`
+	ContentHash string         `json:"content_hash"`
 	Editable    bool           `json:"editable"`
 	IsDirty     bool           `json:"is_dirty"`
 	Entries     []SpecialEntry `json:"entries"`
@@ -170,6 +172,26 @@ type SpecialEntry struct {
 	Key       string `json:"key"`
 	ValueType string `json:"value_type"`
 	ValueText string `json:"value_text"`
+}
+
+type DefaultsModel struct {
+	Env           string              `json:"env"`
+	FileName      string              `json:"file_name"`
+	Path          string              `json:"path"`
+	ContentHash   string              `json:"content_hash"`
+	IsDirty       bool                `json:"is_dirty"`
+	Vars          []VarItem           `json:"vars"`
+	ContainerEnvs []ContainerEnvGroup `json:"container_envs"`
+}
+
+type ContainerEnvGroup struct {
+	Name string        `json:"name"`
+	Envs []EnvVarModel `json:"envs"`
+}
+
+type ContainerEnvGroupUpdate struct {
+	Name string    `json:"name"`
+	Envs []VarItem `json:"envs"`
 }
 
 type AppModel struct {
@@ -471,6 +493,79 @@ func (r *Repository) UpdateAppContainerEnvs(envName string, appFile string, cont
 	return AppContainerEnvs{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Envs: model.Containers[containerIndex].Envs}, nil
 }
 
+func (r *Repository) Defaults(envName string) (DefaultsModel, error) {
+	defaultsFile, err := r.defaultsFile(envName)
+	if err != nil {
+		return DefaultsModel{}, err
+	}
+	detail, err := r.AssetDetail(envName, defaultsFile)
+	if err != nil {
+		return DefaultsModel{}, err
+	}
+	return defaultsModelFromDetail(detail)
+}
+
+func (r *Repository) UpdateDefaultsVars(envName string, items []VarItem, expectedHash string) (DefaultsModel, error) {
+	if err := validateVarItems(items); err != nil {
+		return DefaultsModel{}, err
+	}
+	defaultsFile, err := r.defaultsFile(envName)
+	if err != nil {
+		return DefaultsModel{}, err
+	}
+	path, _, err := r.AssetPath(envName, defaultsFile)
+	if err != nil {
+		return DefaultsModel{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return DefaultsModel{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return DefaultsModel{}, NewConflictError("defaults file changed before save; refresh and apply the edit again")
+	}
+	updated := replaceVarsBlock(string(contentBytes), items)
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return DefaultsModel{}, err
+	}
+	return r.Defaults(envName)
+}
+
+func (r *Repository) UpdateDefaultsContainerEnvs(envName string, groups []ContainerEnvGroupUpdate, expectedHash string) (DefaultsModel, error) {
+	if err := validateContainerEnvGroups(groups); err != nil {
+		return DefaultsModel{}, err
+	}
+	defaultsFile, err := r.defaultsFile(envName)
+	if err != nil {
+		return DefaultsModel{}, err
+	}
+	path, _, err := r.AssetPath(envName, defaultsFile)
+	if err != nil {
+		return DefaultsModel{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return DefaultsModel{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return DefaultsModel{}, NewConflictError("defaults file changed before save; refresh and apply the edit again")
+	}
+	updated := replaceDefaultsContainerEnvsBlock(string(contentBytes), groups)
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return DefaultsModel{}, err
+	}
+	return r.Defaults(envName)
+}
+
+func (r *Repository) defaultsFile(envName string) (string, error) {
+	for _, candidate := range []string{"_defaults.yml", "_defaults.yaml"} {
+		if _, _, err := r.AssetPath(envName, candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", os.ErrNotExist
+}
+
 func (r *Repository) UpdateAppContainerProbes(envName string, appFile string, containerIndex int, probes ProbeUpdate, expectedHash string) (AppContainerProbes, error) {
 	if containerIndex < 0 {
 		return AppContainerProbes{}, errors.New("container index must be greater than or equal to 0")
@@ -729,7 +824,7 @@ func (r *Repository) AssetDetail(envName string, relativePath string) (AssetDeta
 	if isDefaultsAsset(rel) {
 		dirtyPath = filepath.ToSlash(filepath.Join(envName, "apps", rel))
 	}
-	return AssetDetail{Env: envName, RelativePath: rel, Path: path, Content: string(content), IsDirty: r.isDirtyPath(dirtyPath)}, nil
+	return AssetDetail{Env: envName, RelativePath: rel, Path: path, Content: string(content), ContentHash: contentHash(content), IsDirty: r.isDirtyPath(dirtyPath)}, nil
 }
 
 func (r *Repository) SpecialEntries(envName string, specialFile string) (SpecialEntries, error) {
@@ -749,7 +844,7 @@ func (r *Repository) SpecialEntries(envName string, specialFile string) (Special
 	if !ok {
 		return SpecialEntries{}, fmt.Errorf("missing object at .%s", kind.rootKey)
 	}
-	out := SpecialEntries{Env: envName, SpecialFile: specialFile, Editable: !kind.secured, IsDirty: detail.IsDirty}
+	out := SpecialEntries{Env: envName, SpecialFile: specialFile, ContentHash: detail.ContentHash, Editable: !kind.secured, IsDirty: detail.IsDirty}
 	if kind.secured {
 		warning := "secured file is shown without decrypt; edit flow requires EncJson preflight"
 		out.Warning = &warning
@@ -763,6 +858,35 @@ func (r *Repository) SpecialEntries(envName string, specialFile string) (Special
 		out.Entries = append(out.Entries, specialEntryFromValue(key, rawSection[key], kind.rootKey))
 	}
 	return out, nil
+}
+
+func (r *Repository) UpdateSpecialEntries(envName string, specialFile string, entries []SpecialEntry, expectedHash string) (SpecialEntries, error) {
+	kind, ok := specialFileKind(specialFile)
+	if !ok {
+		return SpecialEntries{}, errors.New("unsupported special file")
+	}
+	if kind.secured {
+		return SpecialEntries{}, errors.New("secured special files cannot be edited without EncJson flow")
+	}
+	path, _, err := r.AssetPath(envName, specialFile)
+	if err != nil {
+		return SpecialEntries{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return SpecialEntries{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return SpecialEntries{}, NewConflictError("special file changed before save; refresh and apply the edit again")
+	}
+	updated, err := replaceSpecialEntries(string(contentBytes), kind.rootKey, entries)
+	if err != nil {
+		return SpecialEntries{}, err
+	}
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return SpecialEntries{}, err
+	}
+	return r.SpecialEntries(envName, specialFile)
 }
 
 func (r *Repository) AppPath(envName string, appFile string) (string, error) {
@@ -912,6 +1036,102 @@ func specialEntryFromValue(key string, value any, rootKey string) SpecialEntry {
 	}
 }
 
+func specialEntryValue(entry SpecialEntry) (any, error) {
+	key := strings.TrimSpace(entry.Key)
+	if key == "" {
+		return nil, errors.New("entry key is required")
+	}
+	switch strings.TrimSpace(entry.ValueType) {
+	case "", "string":
+		return entry.ValueText, nil
+	case "number":
+		if strings.TrimSpace(entry.ValueText) == "" {
+			return nil, fmt.Errorf("entry %q number value is required", key)
+		}
+		value, err := strconv.ParseFloat(strings.TrimSpace(entry.ValueText), 64)
+		if err != nil {
+			return nil, fmt.Errorf("entry %q number value is invalid", key)
+		}
+		return value, nil
+	case "bool":
+		value, err := strconv.ParseBool(strings.TrimSpace(entry.ValueText))
+		if err != nil {
+			return nil, fmt.Errorf("entry %q bool value is invalid", key)
+		}
+		return value, nil
+	case "null":
+		return nil, nil
+	case "json":
+		var value any
+		if err := json.Unmarshal([]byte(entry.ValueText), &value); err != nil {
+			return nil, fmt.Errorf("entry %q json value is invalid: %w", key, err)
+		}
+		return value, nil
+	default:
+		return nil, fmt.Errorf("entry %q has unsupported value type %q", key, entry.ValueType)
+	}
+}
+
+func replaceSpecialEntries(content string, rootKey string, entries []SpecialEntry) (string, error) {
+	seen := map[string]bool{}
+	section := map[string]any{}
+	for _, entry := range entries {
+		key := strings.TrimSpace(entry.Key)
+		if key == "" {
+			return "", errors.New("entry key is required")
+		}
+		if strings.ContainsAny(key, "\r\n") {
+			return "", fmt.Errorf("invalid entry key %q", key)
+		}
+		if seen[key] {
+			return "", fmt.Errorf("duplicate entry key %q", key)
+		}
+		seen[key] = true
+		value, err := specialEntryValue(entry)
+		if err != nil {
+			return "", err
+		}
+		section[key] = value
+	}
+
+	root := map[string]any{}
+	if strings.TrimSpace(content) != "" {
+		if err := json.Unmarshal([]byte(content), &root); err != nil {
+			return "", err
+		}
+	}
+	root[rootKey] = section
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(out) + "\n", nil
+}
+
+func defaultsModelFromDetail(detail AssetDetail) (DefaultsModel, error) {
+	var root any
+	if strings.TrimSpace(detail.Content) != "" {
+		if err := yaml.Unmarshal([]byte(detail.Content), &root); err != nil {
+			return DefaultsModel{}, err
+		}
+	}
+	rootMap, _ := root.(map[string]any)
+	model := DefaultsModel{Env: detail.Env, FileName: detail.RelativePath, Path: detail.Path, ContentHash: detail.ContentHash, IsDirty: detail.IsDirty, Vars: extractVars(detail.Content)}
+	for gIdx, rawGroup := range anySlice(rootMap["container_envs"]) {
+		groupMap, _ := rawGroup.(map[string]any)
+		group := ContainerEnvGroup{Name: stringValue(groupMap["name"])}
+		for eIdx, rawEnv := range anySlice(groupMap["envs"]) {
+			envMap, _ := rawEnv.(map[string]any)
+			group.Envs = append(group.Envs, envVarModel(eIdx, envMap))
+		}
+		if group.Name == "" {
+			group.Name = fmt.Sprintf("#%d", gIdx+1)
+		}
+		model.ContainerEnvs = append(model.ContainerEnvs, group)
+	}
+	return model, nil
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value != "" {
@@ -965,6 +1185,50 @@ func replaceVarsBlock(content string, items []VarItem) string {
 		out += "\n"
 	}
 	return out
+}
+
+func replaceDefaultsContainerEnvsBlock(content string, groups []ContainerEnvGroupUpdate) string {
+	return replaceTopLevelBlock(content, "container_envs", renderDefaultsContainerEnvsBlock(groups))
+}
+
+func renderDefaultsContainerEnvsBlock(groups []ContainerEnvGroupUpdate) []string {
+	if len(groups) == 0 {
+		return nil
+	}
+	lines := []string{"container_envs:"}
+	for _, group := range groups {
+		lines = append(lines, "  - name: "+strconv.Quote(strings.TrimSpace(group.Name)))
+		if len(group.Envs) == 0 {
+			lines = append(lines, "    envs: []")
+			continue
+		}
+		lines = append(lines, "    envs:")
+		for _, item := range group.Envs {
+			lines = append(lines, "      - name: "+strings.TrimSpace(item.Name), "        value: "+strconv.Quote(item.Value))
+		}
+	}
+	return lines
+}
+
+func validateContainerEnvGroups(groups []ContainerEnvGroupUpdate) error {
+	seen := map[string]bool{}
+	for _, group := range groups {
+		name := strings.TrimSpace(group.Name)
+		if name == "" {
+			return errors.New("container env group name is required")
+		}
+		if strings.ContainsAny(name, "\r\n:") {
+			return fmt.Errorf("invalid container env group name %q", name)
+		}
+		if seen[name] {
+			return fmt.Errorf("duplicate container env group %q", name)
+		}
+		seen[name] = true
+		if err := validateVarItems(group.Envs); err != nil {
+			return fmt.Errorf("container env group %q: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func replaceTopLevelScalar(content string, key string, value string) string {

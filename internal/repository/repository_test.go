@@ -891,3 +891,80 @@ func TestSpecialEntriesForSecuredAreReadOnly(t *testing.T) {
 		t.Fatalf("unexpected secured entries: %#v", entries)
 	}
 }
+
+func TestDefaultsReadsAndUpdatesVarsAndContainerEnvs(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), `vars:
+  - name: APP_NAME
+    value: api
+arch: amd64
+container_envs:
+  - name: "*"
+    envs:
+      - name: LOG_LEVEL
+        value: INFO
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defaults, err := repo.Defaults("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defaults.Vars) != 1 || defaults.Vars[0].Name != "APP_NAME" || len(defaults.ContainerEnvs) != 1 || defaults.ContainerEnvs[0].Name != "*" {
+		t.Fatalf("unexpected defaults: %#v", defaults)
+	}
+
+	defaults, err = repo.UpdateDefaultsVars("test", []VarItem{{Name: "APP_NAME", Value: "worker"}, {Name: "PORT", Value: "8080"}}, defaults.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defaults.Vars) != 2 || defaults.Vars[1].Name != "PORT" {
+		t.Fatalf("unexpected vars after update: %#v", defaults.Vars)
+	}
+
+	defaults, err = repo.UpdateDefaultsContainerEnvs("test", []ContainerEnvGroupUpdate{{Name: "*", Envs: []VarItem{{Name: "LOG_LEVEL", Value: "DEBUG"}}}, {Name: "api", Envs: []VarItem{{Name: "API_ONLY", Value: "true"}}}}, defaults.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defaults.ContainerEnvs) != 2 || defaults.ContainerEnvs[1].Name != "api" {
+		t.Fatalf("unexpected container env defaults after update: %#v", defaults.ContainerEnvs)
+	}
+	detail, err := repo.AssetDetail("test", "_defaults.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, "container_envs:\n  - name: \"*\"\n    envs:\n      - name: LOG_LEVEL\n        value: \"DEBUG\"\n  - name: \"api\"") {
+		t.Fatalf("defaults content not updated as expected:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateSpecialEntriesUpdatesEnvUnsecuredJSON(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "env.unsecured.json"), `{"environment":{"A":"one","COUNT":1}}`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := repo.SpecialEntries("test", "env.unsecured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := repo.UpdateSpecialEntries("test", "env.unsecured.json", []SpecialEntry{{Key: "A", ValueType: "string", ValueText: "two"}, {Key: "COUNT", ValueType: "number", ValueText: "2"}, {Key: "FLAG", ValueType: "bool", ValueText: "true"}}, entries.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Entries) != 3 {
+		t.Fatalf("entries len = %d, want 3: %#v", len(updated.Entries), updated.Entries)
+	}
+	detail, err := repo.AssetDetail("test", "env.unsecured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, `"A": "two"`) || !contains(detail.Content, `"COUNT": 2`) || !contains(detail.Content, `"FLAG": true`) {
+		t.Fatalf("unexpected env.unsecured.json content:\n%s", detail.Content)
+	}
+}

@@ -679,3 +679,67 @@ containers:
         to: "256Mi"
 `)
 }
+
+func TestDefaultsUpdateEndpoints(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), "vars:\n  - name: APP_NAME\n    value: api\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults, err := repo.Defaults("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+
+	varsBody := `{"expected_hash":"` + defaults.ContentHash + `","items":[{"name":"APP_NAME","value":"worker"}]}`
+	varsReq := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/defaults/vars", strings.NewReader(varsBody))
+	varsRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(varsRes, varsReq)
+	if varsRes.Code != http.StatusOK {
+		t.Fatalf("vars status = %d, want 200: %s", varsRes.Code, varsRes.Body.String())
+	}
+	if !strings.Contains(varsRes.Body.String(), `"value":"worker"`) {
+		t.Fatalf("unexpected vars response:\n%s", varsRes.Body.String())
+	}
+
+	defaults, err = repo.Defaults("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	envsBody := `{"expected_hash":"` + defaults.ContentHash + `","groups":[{"name":"*","envs":[{"name":"LOG_LEVEL","value":"INFO"}]}]}`
+	envsReq := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/defaults/container-envs", strings.NewReader(envsBody))
+	envsRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(envsRes, envsReq)
+	if envsRes.Code != http.StatusOK {
+		t.Fatalf("container envs status = %d, want 200: %s", envsRes.Code, envsRes.Body.String())
+	}
+	if !strings.Contains(envsRes.Body.String(), `"container_envs"`) || !strings.Contains(envsRes.Body.String(), `"LOG_LEVEL"`) {
+		t.Fatalf("unexpected container envs response:\n%s", envsRes.Body.String())
+	}
+}
+
+func TestSpecialEntriesUpdateEndpoint(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "env.unsecured.json"), `{"environment":{"A":"one"}}`)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := repo.SpecialEntries("test", "env.unsecured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	body := `{"expected_hash":"` + entries.ContentHash + `","entries":[{"key":"A","value_type":"string","value_text":"two"},{"key":"FLAG","value_type":"bool","value_text":"true"}]}`
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/assets/special/env.unsecured.json/entries", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"key":"FLAG"`) || !strings.Contains(response.Body.String(), `"value_type":"bool"`) {
+		t.Fatalf("unexpected response:\n%s", response.Body.String())
+	}
+}
