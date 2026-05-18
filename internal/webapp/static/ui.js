@@ -18,6 +18,61 @@ function showError(e) { const el = qs('#ui-error'); el.textContent = String(e); 
 function clearError() { const el = qs('#ui-error'); el.textContent = ''; el.classList.add('hidden'); }
 function setText(id, value) { const el = qs(id); if (el) el.textContent = value ?? '-'; }
 function setHTML(id, value) { const el = qs(id); if (el) el.innerHTML = value ?? ''; }
+function confirmAction({title, body, subject = '', confirmLabel = 'Confirm', confirmClass = 'btn-warning', icon = 'ti-alert-triangle', statusClass = 'bg-warning'} = {}) {
+  const modalEl = qs('#confirm-modal');
+  if (!modalEl) return Promise.resolve(false);
+  setText('#confirm-modal-title', title || 'Confirm action');
+  setText('#confirm-modal-body', body || '');
+  setText('#confirm-modal-subject', subject);
+  qs('#confirm-modal-subject')?.classList.toggle('hidden', !subject);
+  const iconEl = qs('#confirm-modal-icon');
+  if (iconEl) iconEl.className = `ti ${icon} icon mb-2 text-warning icon-lg`;
+  const statusEl = modalEl.querySelector('.modal-status');
+  if (statusEl) statusEl.className = `modal-status ${statusClass}`;
+  const confirm = qs('#confirm-modal-confirm');
+  if (confirm) {
+    confirm.textContent = confirmLabel;
+    confirm.className = `btn ${confirmClass} w-100`;
+  }
+  return new Promise((resolve) => {
+    let confirmed = false;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop fade show';
+    const closeButtons = qsa('#confirm-modal [data-bs-dismiss="modal"], #confirm-modal .btn-close');
+    const close = () => {
+      modalEl.classList.remove('show');
+      modalEl.style.display = 'none';
+      modalEl.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('modal-open');
+      document.body.style.removeProperty('overflow');
+      backdrop.remove();
+      confirm?.removeEventListener('click', onConfirm);
+      backdrop.removeEventListener('click', onCancel);
+      document.removeEventListener('keydown', onKeydown);
+      closeButtons.forEach((button) => button.removeEventListener('click', onCancel));
+      resolve(confirmed);
+    };
+    const onConfirm = () => {
+      confirmed = true;
+      close();
+    };
+    const onCancel = () => close();
+    const onKeydown = (e) => {
+      if (e.key === 'Escape') close();
+    };
+    confirm?.addEventListener('click', onConfirm);
+    backdrop.addEventListener('click', onCancel);
+    document.addEventListener('keydown', onKeydown);
+    closeButtons.forEach((button) => button.addEventListener('click', onCancel));
+    document.body.appendChild(backdrop);
+    document.body.classList.add('modal-open');
+    document.body.style.overflow = 'hidden';
+    modalEl.style.display = 'block';
+    modalEl.removeAttribute('aria-hidden');
+    modalEl.classList.add('show');
+    confirm?.focus();
+  });
+}
 function emptyState(icon, title, text = '') {
   return `<div class="empty-state-lite"><i class="ti ${icon}"></i><div><div class="fw-semibold">${esc(title)}</div>${text ? `<div class="text-muted small">${esc(text)}</div>` : ''}</div></div>`;
 }
@@ -267,10 +322,15 @@ function openDirtyPath(path) {
 async function restoreGitPath(path, code) {
   if (state.readOnly || !path) return;
   const untracked = code === '??';
-  const message = untracked
-    ? `Delete untracked file?\n\n${path}\n\nThis removes the file from disk.`
-    : `Discard local Git changes?\n\n${path}\n\nThis restores the file from Git.`;
-  if (!window.confirm(message)) return;
+  const confirmed = await confirmAction({
+    title: untracked ? 'Delete untracked file?' : 'Discard local Git changes?',
+    body: untracked ? 'This removes the file from disk.' : 'This restores the file from Git.',
+    subject: path,
+    confirmLabel: untracked ? 'Delete file' : 'Discard changes',
+    confirmClass: 'btn-danger',
+    statusClass: 'bg-danger',
+  });
+  if (!confirmed) return;
   clearError();
   try {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
@@ -634,7 +694,13 @@ async function saveContainerProbes(index) {
 }
 async function fixContainerLegacyProbes(index) {
   if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
-  if (!window.confirm('Convert legacy health/probe block to modern probes for this container?')) return;
+  const confirmed = await confirmAction({
+    title: 'Fix legacy probes?',
+    body: 'Convert legacy health/probe configuration to the modern probes block for this container.',
+    subject: state.appFile,
+    confirmLabel: 'Fix probes',
+  });
+  if (!confirmed) return;
   clearError();
   try {
     await apiPostJSON(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/probes/fix-legacy`, {expected_hash: state.appContentHash});

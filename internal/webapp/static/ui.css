@@ -50,6 +50,8 @@
 .container-stack { display: grid; gap: .75rem; }
 .container-card { padding: .85rem; border: 1px solid var(--tblr-border-color); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface) 88%, var(--tblr-primary) 12%); }
 .resource-editor { padding: .65rem; border: 1px solid color-mix(in srgb, var(--tblr-border-color) 78%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 82%, transparent); }
+.modal-blur .modal-content { box-shadow: 0 2.2rem 4.8rem rgba(0, 0, 0, .62), 0 .8rem 1.8rem rgba(0, 0, 0, .42), 0 0 0 1px rgba(255, 255, 255, .04); }
+.modal-backdrop.show { opacity: .62; }
 .read-only-mode .write-only { display: none !important; }
 .chip-row { display: flex; flex-wrap: wrap; gap: .4rem; }
 .model-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .25rem .45rem; border: 1px solid var(--tblr-border-color); border-radius: 999px; background: var(--tblr-bg-surface-secondary); font-size: .75rem; }

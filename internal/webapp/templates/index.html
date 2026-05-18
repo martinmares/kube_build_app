@@ -151,6 +151,28 @@
       </div>
     </div>
   </div>
+  <div class="modal modal-blur fade" id="confirm-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-sm modal-dialog-centered" role="document">
+      <div class="modal-content">
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        <div class="modal-status bg-warning"></div>
+        <div class="modal-body text-center py-4">
+          <i class="ti ti-alert-triangle icon mb-2 text-warning icon-lg" id="confirm-modal-icon"></i>
+          <h3 id="confirm-modal-title">Confirm action</h3>
+          <div class="text-muted" id="confirm-modal-body"></div>
+          <div class="font-monospace text-break mt-3 hidden" id="confirm-modal-subject"></div>
+        </div>
+        <div class="modal-footer">
+          <div class="w-100">
+            <div class="row">
+              <div class="col"><button type="button" class="btn w-100" data-bs-dismiss="modal" id="confirm-modal-cancel">Cancel</button></div>
+              <div class="col"><button type="button" class="btn btn-warning w-100" id="confirm-modal-confirm">Confirm</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/js/tabler.min.js"></script>
   <script src="/static/ui.js"></script>
 </body>
