@@ -19,6 +19,20 @@ function showError(e) { const el = qs('#ui-error'); el.textContent = String(e); 
 function clearError() { const el = qs('#ui-error'); el.textContent = ''; el.classList.add('hidden'); }
 function setText(id, value) { const el = qs(id); if (el) el.textContent = value ?? '-'; }
 function setHTML(id, value) { const el = qs(id); if (el) el.innerHTML = value ?? ''; }
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(String(text ?? ''));
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = String(text ?? '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  textarea.remove();
+}
 function openModalElement(modalEl, focusEl, onClosed = null) {
   if (!modalEl) return () => {};
   const backdrop = document.createElement('div');
@@ -1866,7 +1880,11 @@ function renderSpecialEntryPreview(item) {
     <div class="special-entry-card" data-special-preview-card>
       <div class="special-entry-card-head">
         <div class="font-monospace fw-semibold text-break">${esc(item.key)}</div>
-        <span class="badge bg-blue-lt">${esc(item.value_type)}</span>
+        <div class="special-entry-card-actions">
+          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-copy-special-entry="name" data-copy-value="${esc(item.key)}" title="Copy name"><i class="ti ti-copy"></i></button>
+          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-copy-special-entry="value" data-copy-value="${esc(item.value_text)}" title="Copy value"><i class="ti ti-copy-check"></i></button>
+          <span class="badge bg-blue-lt">${esc(item.value_type)}</span>
+        </div>
       </div>
       <div class="special-entry-preview-value font-monospace">${esc(item.value_text)}</div>
     </div>`;
@@ -1881,10 +1899,29 @@ function filterSpecialPreviewRows(query) {
   setText('[data-special-preview-count]', cards.length ? `${visible}/${cards.length} visible` : '0 entries');
 }
 function handleAssetStructuredClick(e) {
+  const copyButton = e.target.closest('[data-copy-special-entry]');
+  if (copyButton) return copySpecialEntryValue(copyButton);
   if (state.readOnly) return;
   if (e.target.closest('[data-edit-defaults-vars]')) return openDefaultsVarsEditor();
   if (e.target.closest('[data-edit-defaults-container-envs]')) return openDefaultsContainerEnvsEditor();
   if (e.target.closest('[data-edit-special-entries]')) return openSpecialEntriesEditor();
+}
+async function copySpecialEntryValue(button) {
+  clearError();
+  try {
+    await copyTextToClipboard(button.dataset.copyValue || '');
+    const icon = button.querySelector('i');
+    const originalTitle = button.getAttribute('title') || '';
+    const originalIcon = icon?.className || '';
+    button.setAttribute('title', 'Copied');
+    if (icon) icon.className = 'ti ti-check';
+    window.setTimeout(() => {
+      button.setAttribute('title', originalTitle);
+      if (icon) icon.className = originalIcon;
+    }, 900);
+  } catch (e) {
+    showError(e);
+  }
 }
 function isSpecial(path) { return ['env.secured.json','env.unsecured.json','assets.secured.json','assets.unsecured.json'].includes(path); }
 function isDefaultsAsset(path) { return path === '_defaults.yml' || path === '_defaults.yaml'; }
