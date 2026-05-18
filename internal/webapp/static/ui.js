@@ -587,7 +587,18 @@ async function loadGitDiff(relativePath, isDirty, sectionSelector, targetSelecto
   const encoded = relativePath.split('/').map(encodeURIComponent).join('/');
   const diff = await api(`/api/v1/git/diff/${encoded}`);
   section.classList.remove('hidden');
-  target.textContent = diff.content || diff.error || 'No textual diff available.';
+  target.innerHTML = renderDiff(diff.content || diff.error || 'No textual diff available.');
+}
+function renderDiff(content) {
+  return String(content || '').split('\n').map((line) => {
+    let cls = 'diff-line';
+    if (line.startsWith('+++') || line.startsWith('---')) cls += ' diff-file';
+    else if (line.startsWith('@@')) cls += ' diff-hunk';
+    else if (line.startsWith('+')) cls += ' diff-add';
+    else if (line.startsWith('-')) cls += ' diff-del';
+    else if (line.startsWith('diff --git') || line.startsWith('index ')) cls += ' diff-meta';
+    return `<span class="${cls}">${esc(line) || ' '}</span>`;
+  }).join('');
 }
 async function runBuildValidate() {
   if (!state.env) return showError('Select environment first.');
