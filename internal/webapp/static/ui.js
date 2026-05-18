@@ -90,6 +90,7 @@ async function loadAll() {
   try {
     const info = await api('/api/v1/info');
     state.readOnly = !!info.read_only;
+    document.body.classList.toggle('read-only-mode', state.readOnly);
     setText('#app-version', `${info.version} / ${info.commit}`);
     qs('#read-only-badge').classList.toggle('hidden', !info.read_only);
     qs('#write-mode-badge')?.classList.toggle('hidden', !!info.read_only);
@@ -531,6 +532,7 @@ function renderContainerOverview(container) {
     </div>`;
 }
 function renderResourcesEditor(index, resources) {
+  if (state.readOnly) return '';
   const disabled = state.readOnly ? 'disabled' : '';
   return `
     <div class="resource-editor mt-2" data-resource-editor="${index}">
@@ -568,6 +570,7 @@ async function saveContainerResources(index) {
   } catch (e) { showError(e); }
 }
 function renderContainerVarsEditor(index, vars) {
+  if (state.readOnly) return '';
   const disabled = state.readOnly ? 'disabled' : '';
   const rows = (vars || []).map((item) => renderContainerVarRow(index, item)).join('');
   return `
