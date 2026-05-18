@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +40,25 @@ type apiError struct {
 	Error  string `json:"error"`
 	Status int    `json:"status"`
 	Code   string `json:"code,omitempty"`
+}
+
+type buildPreviewFile struct {
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+type buildPreview struct {
+	Env    string                `json:"env"`
+	Files  []buildPreviewFile    `json:"files"`
+	Events []buildapp.BuildEvent `json:"events"`
+	Totals buildPreviewTotals    `json:"totals"`
+}
+
+type buildPreviewTotals struct {
+	Files       int `json:"files"`
+	Deployments int `json:"deployments"`
+	Services    int `json:"services"`
+	Assets      int `json:"assets"`
 }
 
 type Options struct {
@@ -85,6 +106,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/envs/{env}/validate", s.handleBuildValidate)
 	mux.HandleFunc("POST /api/v1/envs/{env}/summary", s.handleBuildSummary)
 	mux.HandleFunc("POST /api/v1/envs/{env}/inventory", s.handleBuildInventory)
+	mux.HandleFunc("POST /api/v1/envs/{env}/preview", s.handleBuildPreview)
 	return mux
 }
 
@@ -490,6 +512,72 @@ func (s *Server) handleBuildInventory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, inventory)
+}
+
+func (s *Server) handleBuildPreview(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	env := r.PathValue("env")
+	tmpDir, err := os.MkdirTemp("", "kube-edit-build-preview-*")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	opts := s.buildOptions(env)
+	opts.Target = tmpDir
+	result, err := buildapp.Build(opts)
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	files, err := previewFiles(tmpDir)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, buildPreview{
+		Env:    env,
+		Files:  files,
+		Events: result.Events,
+		Totals: buildPreviewTotals{
+			Files:       len(files),
+			Deployments: len(result.Deployments) + len(result.Budgets) + len(result.Autoscaling),
+			Services:    len(result.Services) + len(result.Externals),
+			Assets:      len(result.Assets),
+		},
+	})
+}
+
+func previewFiles(root string) ([]buildPreviewFile, error) {
+	files := []buildPreviewFile{}
+	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, buildPreviewFile{Path: filepath.ToSlash(rel), SizeBytes: info.Size()})
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
+	return files, nil
 }
 
 func (s *Server) buildOptions(env string) buildapp.Options {

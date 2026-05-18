@@ -156,11 +156,12 @@ type JavaRuntimeModel struct {
 }
 
 type ProbesModel struct {
-	Preset  *string `json:"preset"`
-	Port    *string `json:"port"`
-	Path    *string `json:"path"`
-	Legacy  bool    `json:"legacy"`
-	Enabled bool    `json:"enabled"`
+	Preset      *string  `json:"preset"`
+	Port        *string  `json:"port"`
+	Path        *string  `json:"path"`
+	Legacy      bool     `json:"legacy"`
+	LegacyKinds []string `json:"legacy_kinds"`
+	Enabled     bool     `json:"enabled"`
 }
 
 type AutoscalingModel struct {
@@ -438,6 +439,9 @@ func (r *Repository) AssetDetail(envName string, relativePath string) (AssetDeta
 	if isSpecialRootAsset(rel) {
 		dirtyPath = filepath.ToSlash(filepath.Join(envName, rel))
 	}
+	if isDefaultsAsset(rel) {
+		dirtyPath = filepath.ToSlash(filepath.Join(envName, "apps", rel))
+	}
 	return AssetDetail{Env: envName, RelativePath: rel, Path: path, Content: string(content), IsDirty: r.isDirtyPath(dirtyPath)}, nil
 }
 
@@ -517,6 +521,17 @@ func (r *Repository) AssetPath(envName string, relativePath string) (string, str
 		}
 		return path, rel, nil
 	}
+	if isDefaultsAsset(rel) {
+		path := filepath.Join(envDir, "apps", rel)
+		appsDir := filepath.Join(envDir, "apps")
+		if !isChildPath(appsDir, path) {
+			return "", "", errors.New("invalid defaults path")
+		}
+		if !isFile(path) {
+			return "", "", os.ErrNotExist
+		}
+		return path, rel, nil
+	}
 	assetsDir := filepath.Join(envDir, "assets")
 	path := filepath.Join(assetsDir, filepath.FromSlash(rel))
 	if !isChildPath(assetsDir, path) {
@@ -558,6 +573,10 @@ func isSpecialRootAsset(value string) bool {
 	default:
 		return false
 	}
+}
+
+func isDefaultsAsset(value string) bool {
+	return value == "_defaults.yml" || value == "_defaults.yaml"
 }
 
 type specialFileInfo struct {
@@ -1116,7 +1135,13 @@ func probesModel(containerMap map[string]any) ProbesModel {
 		Port:   stringPtr(stringValue(probes["port"])),
 		Path:   stringPtr(stringValue(probes["path"])),
 	}
-	out.Legacy = nestedValue(containerMap, "health") != nil || nestedValue(containerMap, "probe") != nil
+	if nestedValue(containerMap, "health") != nil {
+		out.LegacyKinds = append(out.LegacyKinds, "health")
+	}
+	if nestedValue(containerMap, "probe") != nil {
+		out.LegacyKinds = append(out.LegacyKinds, "probe")
+	}
+	out.Legacy = len(out.LegacyKinds) > 0
 	out.Enabled = out.Preset != nil || out.Port != nil || out.Path != nil || out.Legacy
 	return out
 }

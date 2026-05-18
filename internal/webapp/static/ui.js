@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], inventory: null, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard' };
+const state = { envs: [], env: null, apps: [], assets: [], inventory: null, buildPreview: null, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard' };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -51,6 +51,7 @@ async function init() {
   qs('#assets-filter')?.addEventListener('input', () => renderAssets());
   qs('#build-validate-btn')?.addEventListener('click', () => runBuildValidate());
   qs('#build-refresh-btn')?.addEventListener('click', () => loadBuildData());
+  qs('#build-preview-btn')?.addEventListener('click', () => loadBuildPreview());
   qs('#inventory-filter')?.addEventListener('input', () => renderInventory());
   qs('#inventory-path')?.addEventListener('input', () => renderInventory());
   qs('#inventory-clear-btn')?.addEventListener('click', () => {
@@ -244,10 +245,11 @@ function renderChangedFileRow(file) {
     </div>`;
 }
 function dirtyNavigationTarget(path) {
-  if (!state.env || !path.startsWith(`${state.env}/`)) return null;
-  const rest = path.slice(state.env.length + 1);
-  if (rest.startsWith('apps/')) return { page: 'apps', value: rest.slice('apps/'.length) };
-  if (rest.startsWith('assets/')) return { page: 'assets', value: rest.slice('assets/'.length) };
+	if (!state.env || !path.startsWith(`${state.env}/`)) return null;
+	const rest = path.slice(state.env.length + 1);
+	if (rest === 'apps/_defaults.yml' || rest === 'apps/_defaults.yaml') return { page: 'assets', value: rest.slice('apps/'.length) };
+	if (rest.startsWith('apps/')) return { page: 'apps', value: rest.slice('apps/'.length) };
+	if (rest.startsWith('assets/')) return { page: 'assets', value: rest.slice('assets/'.length) };
   if (isSpecial(rest)) return { page: 'assets', value: rest };
   return null;
 }
@@ -300,16 +302,20 @@ function resetSelectedDetails() {
 }
 
 function resetBuildView() {
-  state.inventory = null;
-  setBuildStatus('info', 'Select an environment and run a build check.');
-  setBuildDataEnv(null);
-  setHTML('#build-totals', '');
+	state.inventory = null;
+	state.buildPreview = null;
+	setBuildStatus('info', 'Select an environment and run a build check.');
+	setBuildDataEnv(null);
+	setHTML('#build-totals', '');
   const summaryBody = qs('#build-summary-table tbody');
   if (summaryBody) summaryBody.innerHTML = '<tr><td colspan="9" class="text-muted">No summary loaded.</td></tr>';
   const summaryFoot = qs('#build-summary-table tfoot');
-  if (summaryFoot) summaryFoot.innerHTML = '';
-  const inventoryBody = qs('#build-inventory-table tbody');
-  if (inventoryBody) inventoryBody.innerHTML = '<tr><td colspan="5" class="text-muted">No inventory loaded.</td></tr>';
+	if (summaryFoot) summaryFoot.innerHTML = '';
+	const inventoryBody = qs('#build-inventory-table tbody');
+	if (inventoryBody) inventoryBody.innerHTML = '<tr><td colspan="5" class="text-muted">No inventory loaded.</td></tr>';
+	setHTML('#build-preview-totals', '');
+	const previewBody = qs('#build-preview-table tbody');
+	if (previewBody) previewBody.innerHTML = '<tr><td colspan="2" class="text-muted">No preview loaded.</td></tr>';
 }
 
 async function loadApps() {
@@ -508,7 +514,6 @@ function renderContainerOverview(container) {
       ${chip('export', java.export_env_name || 'JAVA_OPTS')}
       ${java.opts?.length ? chip('opts', java.opts.length) : ''}
     </div>` : '<div class="text-muted small">Java runtime not configured.</div>';
-  const probeText = probes.enabled ? [probes.preset && `preset ${probes.preset}`, probes.port && `port ${probes.port}`, probes.path && `path ${probes.path}`, probes.legacy && 'legacy'].filter(Boolean).join(', ') : 'not configured';
   return `
     <div class="container-card">
       <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
@@ -526,10 +531,23 @@ function renderContainerOverview(container) {
           ${chip('Mem lim', resources.memory_limit || '-')}
         </div>${renderResourcesEditor(container.index, resources)}</div>
         <div class="col-12 col-xl-4"><div class="overview-subtitle">Java runtime</div>${javaBlock}</div>
-        <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div><div class="text-muted small">${esc(probeText)}</div></div>
+        <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div>${renderProbePreview(probes)}</div>
       </div>
       ${renderContainerVarsEditor(container.index, vars)}
     </div>`;
+}
+function renderProbePreview(probes) {
+  if (!probes?.enabled) return '<div class="text-muted small">Not configured.</div>';
+  const modern = [
+    probes.preset && chip('preset', probes.preset),
+    probes.port && chip('port', probes.port),
+    probes.path && chip('path', probes.path),
+  ].filter(Boolean).join('');
+  const legacy = probes.legacy ? `<div class="alert alert-warning py-2 px-2 mb-2 small"><i class="ti ti-alert-triangle me-1"></i>Legacy ${esc(legacyProbeKinds(probes))} detected.</div>` : '';
+  return `${legacy}${modern ? `<div class="chip-row">${modern}</div>` : '<div class="text-muted small">Legacy-only configuration.</div>'}`;
+}
+function legacyProbeKinds(probes) {
+  return (probes?.legacy_kinds || []).join(' + ') || 'health/probe';
 }
 function renderResourcesEditor(index, resources) {
   if (state.readOnly) return '';
@@ -737,6 +755,7 @@ function assetFileName(path) {
   return parts[parts.length - 1] || path;
 }
 function assetIcon(asset) {
+  if (asset.driver === 'defaults') return 'ti-settings';
   if (asset.driver === 'special') return 'ti-lock-square-rounded';
   const name = asset.relative_path.toLowerCase();
   if (name.endsWith('.yml') || name.endsWith('.yaml')) return 'ti-file-code';
@@ -751,6 +770,7 @@ function formatBytes(bytes) {
   return `${value} B`;
 }
 function assetGitPath(relativePath) {
+  if (isDefaultsAsset(relativePath)) return `${state.env}/apps/${relativePath}`;
   return isSpecial(relativePath) ? `${state.env}/${relativePath}` : `${state.env}/assets/${relativePath}`;
 }
 async function selectAsset(path) {
@@ -769,7 +789,7 @@ async function selectAsset(path) {
       setText('#asset-detail-path', detail.path);
       setHTML('#asset-detail-badges', renderAssetDetailBadges(selectedAsset, detail));
       setText('#asset-raw', detail.content);
-      await loadGitDiff(`${state.env}/assets/${detail.relative_path}`, detail.is_dirty, '#asset-diff-section', '#asset-diff');
+      await loadGitDiff(assetGitPath(detail.relative_path), detail.is_dirty, '#asset-diff-section', '#asset-diff');
     }
   } catch (e) { showError(e); }
 }
@@ -782,6 +802,7 @@ function renderAssetDetailBadges(asset, detail) {
   ].filter(Boolean).join('');
 }
 function isSpecial(path) { return ['env.secured.json','env.unsecured.json','assets.secured.json','assets.unsecured.json'].includes(path); }
+function isDefaultsAsset(path) { return path === '_defaults.yml' || path === '_defaults.yaml'; }
 async function loadGitDiff(relativePath, isDirty, sectionSelector, targetSelector) {
   const section = qs(sectionSelector);
   const target = qs(targetSelector);
@@ -851,7 +872,26 @@ async function loadBuildInventory() {
     state.inventory = null;
     renderInventory();
     showError(e);
-  }
+	}
+}
+async function loadBuildPreview() {
+	if (!state.env) return showError('Select environment first.');
+	clearError();
+	const env = state.env;
+	try {
+		setBuildStatus('info', 'Build preview is rendering into a temporary directory...');
+		const preview = await apiPost(`/api/v1/envs/${encodeURIComponent(env)}/preview`);
+		if (state.env !== env) return;
+		state.buildPreview = preview;
+		renderBuildPreview(preview);
+		setBuildStatus('success', `Build preview rendered ${preview.totals?.files ?? 0} file(s).`);
+	} catch (e) {
+		if (state.env !== env) return;
+		state.buildPreview = null;
+		renderBuildPreview(null);
+		setBuildStatus('danger', String(e));
+		showError(e);
+	}
 }
 async function loadBuildData() {
   if (!state.env) return;
@@ -910,7 +950,24 @@ function renderBuildSummary(summary) {
       <td class="text-end">${fmt(totals.memory_limit_mib)} MiB</td>
       <td class="text-end">-</td>
       <td class="text-end">-</td>
-    </tr>` : '';
+	</tr>` : '';
+}
+function renderBuildPreview(preview) {
+	const totals = preview?.totals || {};
+	setHTML('#build-preview-totals', preview ? [
+		metricCard('Files', totals.files ?? 0, 'ti-files'),
+		metricCard('Deployments', totals.deployments ?? 0, 'ti-rocket'),
+		metricCard('Services', totals.services ?? 0, 'ti-route'),
+		metricCard('Assets', totals.assets ?? 0, 'ti-folders'),
+	].join('') : '');
+	const body = qs('#build-preview-table tbody');
+	if (!body) return;
+	const files = preview?.files || [];
+	body.innerHTML = files.map((file) => `
+		<tr>
+			<td class="font-monospace text-break">${esc(file.path)}</td>
+			<td class="text-end">${formatBytes(file.size_bytes ?? 0)}</td>
+		</tr>`).join('') || '<tr><td colspan="2" class="text-muted">No preview loaded.</td></tr>';
 }
 function renderInventory() {
   const table = qs('#build-inventory-table tbody');

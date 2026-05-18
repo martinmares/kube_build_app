@@ -173,7 +173,7 @@ Model: `gpt-5.5 medium`
 
 - preset `spring-actuator`
 - ruční HTTP nastavení
-- zobrazit legacy `probe` / `health` jako legacy
+- zobrazit legacy `probe` / `health` jako legacy - preview hotovo
 - nové změny zapisovat do `probes:`
 - testy renderování a zápisu
 
@@ -188,7 +188,7 @@ Model: `gpt-5.5 medium`
 
 Úkoly:
 
-- zobrazit `Defaults`
+- zobrazit `Defaults` - read-only view hotovo přes Assets
 - zobrazit a editovat `Local variables`
 - zobrazit a editovat `Container variables`
 - podporovat `containers: name: "*"`
@@ -242,13 +242,15 @@ Tady nešetřit modelem. Chyby mohou znamenat poškození binárních assetů ne
 
 Model: `gpt-5.5 medium`
 
+Stav: první read-only verze hotová.
+
 Úkoly:
 
-- render do temp adresáře
-- vrátit seznam generovaných souborů
-- vrátit build events/log
+- render do temp adresáře - hotovo
+- vrátit seznam generovaných souborů - hotovo
+- vrátit build events/log - events hotovo
 - nepřepisovat deploy repo
-- UI zobrazí generated files a summary
+- UI zobrazí generated files a summary - hotovo
 
 Použitelné pro L2 i CI kontrolu.
 

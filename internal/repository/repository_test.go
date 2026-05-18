@@ -120,6 +120,7 @@ func TestAssetsListsRecursiveAssetsAndSpecialRootAssets(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "assets", "ui", "nginx.conf"), "server {}\n")
 	writeFile(t, filepath.Join(root, "test", "assets", "ssl", "cert.pem"), "cert\n")
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), "arch: amd64\n")
 	writeFile(t, filepath.Join(root, "test", "assets.secured.json"), "{\"assets\":{}}\n")
 	writeFile(t, filepath.Join(root, "test", "assets.unsecured.json"), "{\"assets\":{}}\n")
 
@@ -136,7 +137,7 @@ func TestAssetsListsRecursiveAssetsAndSpecialRootAssets(t *testing.T) {
 	for _, asset := range assets {
 		relativePaths = append(relativePaths, asset.RelativePath)
 	}
-	expected := []string{"assets.secured.json", "assets.unsecured.json", "ssl/cert.pem", "ui/nginx.conf"}
+	expected := []string{"_defaults.yml", "assets.secured.json", "assets.unsecured.json", "ssl/cert.pem", "ui/nginx.conf"}
 	if len(relativePaths) != len(expected) {
 		t.Fatalf("relative paths = %#v, want %#v", relativePaths, expected)
 	}
@@ -145,7 +146,7 @@ func TestAssetsListsRecursiveAssetsAndSpecialRootAssets(t *testing.T) {
 			t.Fatalf("relative paths = %#v, want %#v", relativePaths, expected)
 		}
 	}
-	if assets[0].Driver != "special" || assets[2].Driver != "configmap" {
+	if assets[0].Driver != "defaults" || assets[1].Driver != "special" || assets[3].Driver != "configmap" {
 		t.Fatalf("unexpected drivers: %#v", assets)
 	}
 }
@@ -600,6 +601,14 @@ func TestAssetDetailSupportsSpecialRootAndRejectsEscapes(t *testing.T) {
 	}
 	if special.RelativePath != "env.unsecured.json" || !contains(special.Content, "environment") {
 		t.Fatalf("unexpected special detail: %#v", special)
+	}
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), "arch: amd64\n")
+	defaults, err := repo.AssetDetail("test", "_defaults.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.RelativePath != "_defaults.yml" || !contains(defaults.Content, "arch: amd64") {
+		t.Fatalf("unexpected defaults detail: %#v", defaults)
 	}
 
 	if _, err := repo.AssetDetail("test", "../env.unsecured.json"); err == nil {

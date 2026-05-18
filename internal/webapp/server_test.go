@@ -516,6 +516,7 @@ func TestBuildReadOnlyEndpoints(t *testing.T) {
 		{"/api/v1/envs/test/validate", `"ok":true`},
 		{"/api/v1/envs/test/summary", `"environment":"test"`},
 		{"/api/v1/envs/test/inventory", `"env":"test"`},
+		{"/api/v1/envs/test/preview", `"files"`},
 	} {
 		request := httptest.NewRequest(http.MethodPost, item.path, nil)
 		response := httptest.NewRecorder()
