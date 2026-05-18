@@ -1,7 +1,9 @@
 package webapp
 
 import (
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -14,7 +16,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"kube-env/internal/appinfo"
 	"kube-env/internal/buildapp"
@@ -31,9 +35,11 @@ type indexPageData struct {
 }
 
 type Server struct {
-	info    appinfo.Info
-	repo    *repository.Repository
-	options Options
+	info             appinfo.Info
+	repo             *repository.Repository
+	options          Options
+	buildPreviewMu   sync.Mutex
+	buildPreviewDirs map[string]buildPreviewSnapshot
 }
 
 type apiError struct {
@@ -48,10 +54,12 @@ type buildPreviewFile struct {
 }
 
 type buildPreview struct {
-	Env    string                `json:"env"`
-	Files  []buildPreviewFile    `json:"files"`
-	Events []buildapp.BuildEvent `json:"events"`
-	Totals buildPreviewTotals    `json:"totals"`
+	ID        string                `json:"id"`
+	Env       string                `json:"env"`
+	Files     []buildPreviewFile    `json:"files"`
+	Events    []buildapp.BuildEvent `json:"events"`
+	Totals    buildPreviewTotals    `json:"totals"`
+	ExpiresAt time.Time             `json:"expires_at"`
 }
 
 type buildPreviewTotals struct {
@@ -59,6 +67,22 @@ type buildPreviewTotals struct {
 	Deployments int `json:"deployments"`
 	Services    int `json:"services"`
 	Assets      int `json:"assets"`
+}
+
+type buildPreviewSnapshot struct {
+	Env       string
+	Root      string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+type buildPreviewContent struct {
+	Path        string `json:"path"`
+	SizeBytes   int64  `json:"size_bytes"`
+	Content     string `json:"content"`
+	ContentType string `json:"content_type"`
+	Binary      bool   `json:"binary"`
+	Truncated   bool   `json:"truncated"`
 }
 
 type Options struct {
@@ -77,7 +101,7 @@ func NewServer(info appinfo.Info, repo *repository.Repository, options ...Option
 	if opts.BasePath == "" {
 		opts.BasePath = "/"
 	}
-	return &Server{info: info, repo: repo, options: opts}
+	return &Server{info: info, repo: repo, options: opts, buildPreviewDirs: map[string]buildPreviewSnapshot{}}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -116,6 +140,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/envs/{env}/summary", s.handleBuildSummary)
 	mux.HandleFunc("POST /api/v1/envs/{env}/inventory", s.handleBuildInventory)
 	mux.HandleFunc("POST /api/v1/envs/{env}/preview", s.handleBuildPreview)
+	mux.HandleFunc("GET /api/v1/envs/{env}/preview/{preview_id}/content/{file_path...}", s.handleBuildPreviewContent)
 	return mux
 }
 
@@ -766,30 +791,96 @@ func (s *Server) handleBuildPreview(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	defer os.RemoveAll(tmpDir)
 
 	opts := s.buildOptions(env)
 	opts.Target = tmpDir
 	result, err := buildapp.Build(opts)
 	if err != nil {
+		os.RemoveAll(tmpDir)
 		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
 		return
 	}
 	files, err := previewFiles(tmpDir)
 	if err != nil {
+		os.RemoveAll(tmpDir)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	id, err := randomID()
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	now := time.Now()
+	expiresAt := now.Add(30 * time.Minute)
+	s.rememberBuildPreview(id, buildPreviewSnapshot{Env: env, Root: tmpDir, CreatedAt: now, ExpiresAt: expiresAt})
 	writeJSON(w, http.StatusOK, buildPreview{
-		Env:    env,
-		Files:  files,
-		Events: result.Events,
+		ID:        id,
+		Env:       env,
+		Files:     files,
+		Events:    result.Events,
+		ExpiresAt: expiresAt,
 		Totals: buildPreviewTotals{
 			Files:       len(files),
 			Deployments: len(result.Deployments) + len(result.Budgets) + len(result.Autoscaling),
 			Services:    len(result.Services) + len(result.Externals),
 			Assets:      len(result.Assets),
 		},
+	})
+}
+
+func (s *Server) handleBuildPreviewContent(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	env := r.PathValue("env")
+	id := r.PathValue("preview_id")
+	filePath := r.PathValue("file_path")
+	snapshot, ok := s.buildPreviewSnapshot(id, env)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "build preview snapshot not found or expired"})
+		return
+	}
+	fullPath, err := safeJoin(snapshot.Root, filePath)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	if info.IsDir() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "preview path is a directory"})
+		return
+	}
+	const maxPreviewContentBytes = 1024 * 1024
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	truncated := false
+	if len(data) > maxPreviewContentBytes {
+		data = data[:maxPreviewContentBytes]
+		truncated = true
+	}
+	contentType := http.DetectContentType(data)
+	binary := !utf8.Valid(data)
+	content := ""
+	if !binary {
+		content = string(data)
+	}
+	writeJSON(w, http.StatusOK, buildPreviewContent{
+		Path:        filepath.ToSlash(filepath.Clean(filePath)),
+		SizeBytes:   info.Size(),
+		Content:     content,
+		ContentType: contentType,
+		Binary:      binary,
+		Truncated:   truncated,
 	})
 }
 
@@ -819,6 +910,60 @@ func previewFiles(root string) ([]buildPreviewFile, error) {
 		return files[i].Path < files[j].Path
 	})
 	return files, nil
+}
+
+func (s *Server) rememberBuildPreview(id string, snapshot buildPreviewSnapshot) {
+	s.buildPreviewMu.Lock()
+	defer s.buildPreviewMu.Unlock()
+	now := time.Now()
+	for existingID, existing := range s.buildPreviewDirs {
+		if now.After(existing.ExpiresAt) || existing.Env == snapshot.Env {
+			os.RemoveAll(existing.Root)
+			delete(s.buildPreviewDirs, existingID)
+		}
+	}
+	s.buildPreviewDirs[id] = snapshot
+}
+
+func (s *Server) buildPreviewSnapshot(id string, env string) (buildPreviewSnapshot, bool) {
+	s.buildPreviewMu.Lock()
+	defer s.buildPreviewMu.Unlock()
+	snapshot, ok := s.buildPreviewDirs[id]
+	if !ok || snapshot.Env != env || time.Now().After(snapshot.ExpiresAt) {
+		if ok {
+			os.RemoveAll(snapshot.Root)
+			delete(s.buildPreviewDirs, id)
+		}
+		return buildPreviewSnapshot{}, false
+	}
+	return snapshot, true
+}
+
+func safeJoin(root string, relPath string) (string, error) {
+	if relPath == "" {
+		return "", errors.New("preview path is empty")
+	}
+	clean := filepath.Clean(filepath.FromSlash(relPath))
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", errors.New("preview path escapes preview root")
+	}
+	fullPath := filepath.Join(root, clean)
+	rel, err := filepath.Rel(root, fullPath)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("preview path escapes preview root")
+	}
+	return fullPath, nil
+}
+
+func randomID() (string, error) {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes[:]), nil
 }
 
 func (s *Server) buildOptions(env string) buildapp.Options {

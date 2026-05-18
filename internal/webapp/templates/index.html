@@ -123,7 +123,20 @@
                   <div class="card-body">
                     <div class="row g-2 mb-3" id="build-preview-totals"></div>
                     <div class="mb-3" id="build-preview-events"></div>
-                    <div class="table-responsive"><table class="table table-vcenter table-sm" id="build-preview-table"><thead><tr><th>Path</th><th class="text-end">Size</th></tr></thead><tbody><tr><td colspan="2" class="text-muted">No preview loaded.</td></tr></tbody></table></div>
+                    <div class="row g-3">
+                      <div class="col-12 col-xl-5">
+                        <div class="build-preview-tree" id="build-preview-tree"><div class="text-muted p-3">No preview loaded.</div></div>
+                      </div>
+                      <div class="col-12 col-xl-7">
+                        <div class="build-preview-content">
+                          <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                            <div><div class="overview-subtitle mb-0">Preview content</div><div class="text-muted small font-monospace text-break" id="build-preview-content-path">Select a generated file.</div></div>
+                            <span class="badge bg-secondary-lt" id="build-preview-content-size">-</span>
+                          </div>
+                          <pre class="code-block build-preview-code" id="build-preview-content">No generated file selected.</pre>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div class="card">

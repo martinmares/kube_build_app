@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], inventory: null, buildPreview: null, buildChecks: {}, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -146,6 +146,7 @@ async function init() {
   qs('#build-validate-btn')?.addEventListener('click', () => runBuildValidate());
   qs('#build-refresh-btn')?.addEventListener('click', () => loadBuildData());
   qs('#build-preview-btn')?.addEventListener('click', () => loadBuildPreview());
+  qs('#build-preview-tree')?.addEventListener('click', (e) => handleBuildPreviewTreeClick(e));
   qs('#inventory-filter')?.addEventListener('input', () => renderInventory());
   qs('#inventory-path')?.addEventListener('input', () => renderInventory());
   qs('#inventory-clear-btn')?.addEventListener('click', () => {
@@ -408,6 +409,7 @@ function resetSelectedDetails() {
   state.model = null;
   state.appVars = [];
   state.assetPath = null;
+  state.assetOpenDirs = new Set();
   state.inventory = null;
   setText('#app-detail-title', 'Select app');
   setText('#app-detail-path', '');
@@ -434,6 +436,8 @@ function resetSelectedDetails() {
 function resetBuildView() {
 	state.inventory = null;
 	state.buildPreview = null;
+	state.buildPreviewPath = null;
+	state.buildPreviewOpenDirs = new Set();
 	state.buildChecks = {};
 	setBuildStatus('info', 'Select an environment and run a build check.');
 	setBuildDataEnv(null);
@@ -447,8 +451,8 @@ function resetBuildView() {
 	if (inventoryBody) inventoryBody.innerHTML = '<tr><td colspan="5" class="text-muted">No inventory loaded.</td></tr>';
 	setHTML('#build-preview-totals', '');
 	setHTML('#build-preview-events', '');
-	const previewBody = qs('#build-preview-table tbody');
-	if (previewBody) previewBody.innerHTML = '<tr><td colspan="2" class="text-muted">No preview loaded.</td></tr>';
+	setHTML('#build-preview-tree', '<div class="text-muted p-3">No preview loaded.</div>');
+	renderBuildPreviewContent(null);
 }
 
 async function loadApps() {
@@ -1706,12 +1710,19 @@ function renderAssets() {
   setText('#assets-filter-count', `${assets.length}/${state.assets.length}`);
   host.innerHTML = renderAssetTree(assets, query);
   qsa('[data-asset]').forEach((x) => x.addEventListener('click', () => selectAsset(x.dataset.asset)));
+  qsa('[data-asset-dir]').forEach((x) => x.addEventListener('click', () => {
+    const path = x.dataset.assetDir || '';
+    if (state.assetOpenDirs.has(path)) state.assetOpenDirs.delete(path);
+    else state.assetOpenDirs.add(path);
+    renderAssets();
+  }));
 }
 function renderAssetTree(assets, query = '') {
   if (!assets.length) return `<div class="asset-empty">${emptyState('ti-folders', query ? 'No matching assets' : 'No assets', query ? 'Try a different filter.' : 'No assets were found for this environment.')}</div>`;
-  const root = { dirs: new Map(), files: [] };
+  const root = { name: '', path: '', dirs: new Map(), files: [] };
   for (const asset of assets) addAssetTreeNode(root, asset);
-  return renderAssetTreeNode(root, 0);
+  if (!state.assetOpenDirs.size) state.assetOpenDirs = assetDefaultOpenDirs(assets);
+  return `<div class="py-1">${renderAssetTreeNode(root)}</div>`;
 }
 function addAssetTreeNode(root, asset) {
   const parts = asset.relative_path.split('/').filter(Boolean);
@@ -1721,45 +1732,58 @@ function addAssetTreeNode(root, asset) {
   }
   let node = root;
   for (const part of parts.slice(0, -1)) {
-    if (!node.dirs.has(part)) node.dirs.set(part, { name: part, dirs: new Map(), files: [] });
+    if (!node.dirs.has(part)) {
+      const path = node.path ? `${node.path}/${part}` : part;
+      node.dirs.set(part, { name: part, path, dirs: new Map(), files: [] });
+    }
     node = node.dirs.get(part);
   }
   node.files.push(asset);
 }
-function renderAssetTreeNode(node, depth) {
+function assetDefaultOpenDirs(assets) {
+  const dirs = new Set(['']);
+  for (const asset of assets || []) {
+    const parts = String(asset.relative_path || '').split('/').filter(Boolean);
+    for (let i = 1; i < parts.length; i += 1) dirs.add(parts.slice(0, i).join('/'));
+  }
+  return dirs;
+}
+function renderAssetTreeNode(node) {
   const dirs = Array.from(node.dirs.values()).sort((a, b) => a.name.localeCompare(b.name));
   const files = node.files.slice().sort((a, b) => a.relative_path.localeCompare(b.relative_path));
   return [
-    ...dirs.map((dir) => renderAssetDirectory(dir, depth) + renderAssetTreeNode(dir, depth + 1)),
-    ...files.map((asset) => renderAssetFile(asset, depth)),
+    ...dirs.map((dir) => renderAssetDirectory(dir)),
+    ...files.map((asset) => renderAssetFile(asset)),
   ].join('');
 }
-function renderAssetDirectory(dir, depth) {
-  const padding = 12 + depth * 18;
+function renderAssetDirectory(dir) {
+  const open = state.assetOpenDirs.has(dir.path);
   return `
-    <div class="asset-row asset-dir" style="--asset-indent:${padding}px">
-      <div class="asset-main">
-        <i class="ti ti-folder asset-icon folder"></i>
-        <span class="asset-name font-monospace">${esc(dir.name)}</span>
+    <div class="build-preview-tree-dir">
+      <div class="build-preview-tree-node" data-asset-dir="${esc(dir.path)}">
+        <div class="build-preview-tree-main">
+          <span class="build-preview-tree-icon text-muted"><i class="ti ${open ? 'ti-chevron-down' : 'ti-chevron-right'}"></i></span>
+          <i class="ti ${open ? 'ti-folder-open' : 'ti-folder'} text-warning"></i>
+          <span class="font-monospace small text-truncate" title="${esc(dir.path)}">${esc(dir.name)}</span>
+        </div>
+        <span class="build-preview-tree-size">${dir.files.length + dir.dirs.size}</span>
       </div>
-      <div class="asset-meta text-muted">dir</div>
+      ${open ? `<div class="build-preview-tree-children">${renderAssetTreeNode(dir)}</div>` : ''}
     </div>`;
 }
-function renderAssetFile(asset, depth) {
-  const padding = 12 + depth * 18;
+function renderAssetFile(asset) {
   const dirty = gitFile(assetGitPath(asset.relative_path));
   return `
-    <div class="asset-row asset-file ${state.assetPath === asset.relative_path ? 'selected-row' : ''}" style="--asset-indent:${padding}px" data-asset="${esc(asset.relative_path)}">
-      <div class="asset-main">
-        <i class="ti ${assetIcon(asset)} asset-icon"></i>
-        <div class="min-w-0">
-          <div class="asset-name font-monospace text-truncate">${esc(assetFileName(asset.relative_path))}${dirtyBadge(dirty)}</div>
-          <div class="asset-subtitle text-muted small font-monospace text-truncate">${esc(asset.relative_path)}</div>
-        </div>
+    <div class="build-preview-tree-node ${state.assetPath === asset.relative_path ? 'active' : ''}" data-asset="${esc(asset.relative_path)}">
+      <div class="build-preview-tree-main">
+        <span class="build-preview-tree-icon text-muted"><i class="ti ti-minus"></i></span>
+        <i class="ti ${assetIcon(asset)}"></i>
+        <span class="font-monospace small text-truncate" title="${esc(asset.relative_path)}">${esc(assetFileName(asset.relative_path))}</span>
+        ${dirtyBadge(dirty)}
       </div>
-      <div class="asset-meta text-muted">
+      <div class="build-preview-tree-size d-flex align-items-center gap-2">
         <span>${esc(formatBytes(asset.size_bytes ?? 0))}</span>
-        <span>${esc(asset.driver)}</span>
+        <span class="badge bg-secondary-lt">${esc(asset.driver)}</span>
       </div>
     </div>`;
 }
@@ -2031,6 +2055,8 @@ async function loadBuildPreview() {
 		const preview = await apiPost(`/api/v1/envs/${encodeURIComponent(env)}/preview`);
 		if (state.env !== env) return;
 		state.buildPreview = preview;
+		state.buildPreviewPath = null;
+		state.buildPreviewOpenDirs = buildPreviewDefaultOpenDirs(preview.files || []);
 		renderBuildPreview(preview);
 		state.buildChecks.preview = {state: 'ok', at: new Date(), message: `${preview.totals?.files ?? 0} file(s)`};
 		renderBuildWorkflow();
@@ -2038,6 +2064,7 @@ async function loadBuildPreview() {
 	} catch (e) {
 		if (state.env !== env) return;
 		state.buildPreview = null;
+		state.buildPreviewPath = null;
 		renderBuildPreview(null);
 		state.buildChecks.preview = {state: 'fail', at: new Date(), message: String(e)};
 		renderBuildWorkflow();
@@ -2155,14 +2182,90 @@ function renderBuildPreview(preview) {
 		metricCard('Assets', totals.assets ?? 0, 'ti-folders'),
 	].join('') : '');
 	setHTML('#build-preview-events', preview ? renderBuildEvents(preview.events || []) : '');
-	const body = qs('#build-preview-table tbody');
-	if (!body) return;
 	const files = preview?.files || [];
-	body.innerHTML = files.map((file) => `
-		<tr>
-			<td class="font-monospace text-break">${esc(file.path)}</td>
-			<td class="text-end">${formatBytes(file.size_bytes ?? 0)}</td>
-		</tr>`).join('') || '<tr><td colspan="2" class="text-muted">No preview loaded.</td></tr>';
+	setHTML('#build-preview-tree', files.length ? renderBuildPreviewTree(files) : '<div class="text-muted p-3">No preview loaded.</div>');
+	if (!preview || !state.buildPreviewPath) renderBuildPreviewContent(null);
+}
+function buildPreviewDefaultOpenDirs(files) {
+  const dirs = new Set(['']);
+  for (const file of files || []) {
+    const parts = String(file.path || '').split('/').filter(Boolean);
+    for (let i = 1; i < parts.length; i += 1) dirs.add(parts.slice(0, i).join('/'));
+  }
+  return dirs;
+}
+function renderBuildPreviewTree(files) {
+  const root = {name: '', path: '', dirs: new Map(), files: []};
+  for (const file of files) addBuildPreviewTreeFile(root, file);
+  return `<div class="py-1">${renderBuildPreviewTreeChildren(root)}</div>`;
+}
+function addBuildPreviewTreeFile(root, file) {
+  const parts = String(file.path || '').split('/').filter(Boolean);
+  if (!parts.length) return;
+  let node = root;
+  for (const part of parts.slice(0, -1)) {
+    if (!node.dirs.has(part)) {
+      const path = node.path ? `${node.path}/${part}` : part;
+      node.dirs.set(part, {name: part, path, dirs: new Map(), files: []});
+    }
+    node = node.dirs.get(part);
+  }
+  node.files.push({...file, name: parts[parts.length - 1]});
+}
+function renderBuildPreviewTreeChildren(node) {
+  const dirs = Array.from(node.dirs.values()).sort((a, b) => a.name.localeCompare(b.name));
+  const files = node.files.sort((a, b) => a.name.localeCompare(b.name));
+  return [
+    ...dirs.map((dir) => renderBuildPreviewDir(dir)),
+    ...files.map((file) => renderBuildPreviewFile(file)),
+  ].join('');
+}
+function renderBuildPreviewDir(dir) {
+  const open = state.buildPreviewOpenDirs?.has(dir.path);
+  return `
+    <div class="build-preview-tree-dir">
+      <div class="build-preview-tree-node" data-build-preview-dir="${esc(dir.path)}">
+        <div class="build-preview-tree-main">
+          <span class="build-preview-tree-icon text-muted"><i class="ti ${open ? 'ti-chevron-down' : 'ti-chevron-right'}"></i></span>
+          <i class="ti ${open ? 'ti-folder-open' : 'ti-folder'} text-warning"></i>
+          <span class="font-monospace small text-truncate" title="${esc(dir.path)}">${esc(dir.name)}</span>
+        </div>
+        <span class="build-preview-tree-size">${dir.files.length + dir.dirs.size}</span>
+      </div>
+      ${open ? `<div class="build-preview-tree-children">${renderBuildPreviewTreeChildren(dir)}</div>` : ''}
+    </div>`;
+}
+function renderBuildPreviewFile(file) {
+  const active = state.buildPreviewPath === file.path;
+  return `
+    <div class="build-preview-tree-node ${active ? 'active' : ''}" data-build-preview-path="${esc(file.path)}">
+      <div class="build-preview-tree-main">
+        <span class="build-preview-tree-icon text-muted"><i class="ti ti-minus"></i></span>
+        <i class="ti ${fileIcon(file.name || file.path)}"></i>
+        <span class="font-monospace small text-truncate" title="${esc(file.path)}">${esc(file.name || file.path)}</span>
+      </div>
+      <span class="build-preview-tree-size">${formatBytes(file.size_bytes ?? 0)}</span>
+    </div>`;
+}
+function fileIcon(name) {
+  const lower = String(name || '').toLowerCase();
+  const ext = lower.split('.').pop() || '';
+  if (lower === 'dockerfile') return 'ti-brand-docker text-blue';
+  if (lower === 'makefile' || lower === 'gnumakefile') return 'ti-file-code text-muted';
+  if (lower.startsWith('.env')) return 'ti-key text-green';
+  const icons = {
+    yaml: 'ti-settings text-blue',
+    yml: 'ti-settings text-blue',
+    json: 'ti-braces text-yellow',
+    conf: 'ti-settings-2 text-muted',
+    cfg: 'ti-settings-2 text-muted',
+    ini: 'ti-settings-2 text-muted',
+    env: 'ti-key text-green',
+    sh: 'ti-terminal text-green',
+    txt: 'ti-file-text text-muted',
+    md: 'ti-markdown text-muted',
+  };
+  return icons[ext] || 'ti-file text-muted';
 }
 function renderBuildEvents(events) {
   if (!events.length) return '<div class="text-muted small">No render events reported.</div>';
@@ -2172,6 +2275,51 @@ function renderBuildEvents(events) {
     return acc;
   }, {});
   return `<div class="overview-subtitle">Render events</div><div class="build-event-list">${Object.entries(counts).sort().map(([type, count]) => `<span class="badge bg-secondary-lt"><i class="ti ti-activity me-1"></i>${esc(type)} ${count}</span>`).join('')}</div>`;
+}
+function handleBuildPreviewTreeClick(e) {
+  const dir = e.target.closest('[data-build-preview-dir]');
+  if (dir) {
+    const path = dir.dataset.buildPreviewDir || '';
+    if (state.buildPreviewOpenDirs.has(path)) state.buildPreviewOpenDirs.delete(path);
+    else state.buildPreviewOpenDirs.add(path);
+    renderBuildPreview(state.buildPreview);
+    return;
+  }
+  const file = e.target.closest('[data-build-preview-path]');
+  if (file) loadBuildPreviewContent(file.dataset.buildPreviewPath);
+}
+async function loadBuildPreviewContent(path) {
+  if (!state.env || !state.buildPreview?.id || !path) return;
+  clearError();
+  state.buildPreviewPath = path;
+  renderBuildPreview(state.buildPreview);
+  renderBuildPreviewContent({path, content: 'Loading generated file...', size_bytes: 0});
+  try {
+    const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+    const content = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/preview/${encodeURIComponent(state.buildPreview.id)}/content/${encodedPath}`);
+    if (state.buildPreviewPath !== path) return;
+    renderBuildPreviewContent(content);
+  } catch (e) {
+    if (state.buildPreviewPath !== path) return;
+    renderBuildPreviewContent({path, content: String(e), size_bytes: 0});
+    showError(e);
+  }
+}
+function renderBuildPreviewContent(content) {
+  if (!content) {
+    setText('#build-preview-content-path', 'Select a generated file.');
+    setText('#build-preview-content-size', '-');
+    setText('#build-preview-content', 'No generated file selected.');
+    return;
+  }
+  setText('#build-preview-content-path', content.path || '-');
+  setText('#build-preview-content-size', content.size_bytes ? formatBytes(content.size_bytes) : '-');
+  if (content.binary) {
+    setText('#build-preview-content', `Binary file preview is not available.\nContent-Type: ${content.content_type || 'unknown'}`);
+    return;
+  }
+  const suffix = content.truncated ? '\n\n--- truncated after 1 MiB ---' : '';
+  setText('#build-preview-content', `${content.content || ''}${suffix}`);
 }
 function renderInventory() {
   const table = qs('#build-inventory-table tbody');

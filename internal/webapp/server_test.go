@@ -660,6 +660,45 @@ func TestBuildReadOnlyEndpoints(t *testing.T) {
 	}
 }
 
+func TestBuildPreviewContentEndpoint(t *testing.T) {
+	root := t.TempDir()
+	writeBuildFixture(t, root)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo)
+
+	previewReq := httptest.NewRequest(http.MethodPost, "/api/v1/envs/test/preview", nil)
+	previewRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(previewRes, previewReq)
+	if previewRes.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, want 200: %s", previewRes.Code, previewRes.Body.String())
+	}
+	var preview buildPreview
+	if err := json.Unmarshal(previewRes.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.ID == "" || len(preview.Files) == 0 {
+		t.Fatalf("preview missing id/files: %#v", preview)
+	}
+
+	contentPath := "/api/v1/envs/test/preview/" + preview.ID + "/content/" + preview.Files[0].Path
+	contentReq := httptest.NewRequest(http.MethodGet, contentPath, nil)
+	contentRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(contentRes, contentReq)
+	if contentRes.Code != http.StatusOK {
+		t.Fatalf("content status = %d, want 200: %s", contentRes.Code, contentRes.Body.String())
+	}
+	var content buildPreviewContent
+	if err := json.Unmarshal(contentRes.Body.Bytes(), &content); err != nil {
+		t.Fatal(err)
+	}
+	if content.Path == "" || content.Content == "" || content.Binary {
+		t.Fatalf("unexpected preview content: %#v", content)
+	}
+}
+
 func writeBuildFixture(t *testing.T, root string) {
 	t.Helper()
 	envDir := filepath.Join(root, "test")
