@@ -35,6 +35,7 @@ async function init() {
   qsa('[data-nav]').forEach((x) => x.addEventListener('click', (e) => { e.preventDefault(); if (x.dataset.nav !== 'dashboard' && !state.env) return showError('Select environment first.'); setActive(x.dataset.nav); }));
   qs('#refresh-btn')?.addEventListener('click', () => loadAll());
   qs('#apps-filter')?.addEventListener('input', () => renderApps());
+  qs('#assets-filter')?.addEventListener('input', () => renderAssets());
   qs('#build-validate-btn')?.addEventListener('click', () => runBuildValidate());
   qs('#build-refresh-btn')?.addEventListener('click', () => loadBuildData());
   qs('#inventory-filter')?.addEventListener('input', () => renderInventory());
@@ -342,7 +343,12 @@ function renderAssets() {
     dirtyBadgeEl.textContent = dirtyAssets.length ? `${dirtyAssets.length} changed` : '';
   }
   if (!host) return;
-  host.innerHTML = renderAssetTree(state.assets);
+  const query = (qs('#assets-filter')?.value || '').trim().toLowerCase();
+  const assets = state.assets.filter((asset) => {
+    if (!query) return true;
+    return [asset.relative_path, asset.file_name, asset.driver, asset.size_bytes].some((value) => String(value ?? '').toLowerCase().includes(query));
+  });
+  host.innerHTML = renderAssetTree(assets);
   qsa('[data-asset]').forEach((x) => x.addEventListener('click', () => selectAsset(x.dataset.asset)));
 }
 function renderAssetTree(assets) {
