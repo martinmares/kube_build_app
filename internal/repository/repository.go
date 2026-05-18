@@ -165,7 +165,7 @@ func (r *Repository) Assets(envName string) ([]Asset, error) {
 		}
 	}
 
-	for _, fileName := range []string{"assets.secured.json", "assets.unsecured.json"} {
+	for _, fileName := range []string{"env.secured.json", "env.unsecured.json", "assets.secured.json", "assets.unsecured.json"} {
 		path := filepath.Join(envDir, fileName)
 		if !isFile(path) {
 			continue

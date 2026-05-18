@@ -123,6 +123,8 @@ func TestAssetsListsRecursiveAssetsAndSpecialRootAssets(t *testing.T) {
 	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), "arch: amd64\n")
 	writeFile(t, filepath.Join(root, "test", "assets.secured.json"), "{\"assets\":{}}\n")
 	writeFile(t, filepath.Join(root, "test", "assets.unsecured.json"), "{\"assets\":{}}\n")
+	writeFile(t, filepath.Join(root, "test", "env.secured.json"), "{\"environment\":{}}\n")
+	writeFile(t, filepath.Join(root, "test", "env.unsecured.json"), "{\"environment\":{}}\n")
 
 	repo, err := New(root)
 	if err != nil {
@@ -137,7 +139,7 @@ func TestAssetsListsRecursiveAssetsAndSpecialRootAssets(t *testing.T) {
 	for _, asset := range assets {
 		relativePaths = append(relativePaths, asset.RelativePath)
 	}
-	expected := []string{"_defaults.yml", "assets.secured.json", "assets.unsecured.json", "ssl/cert.pem", "ui/nginx.conf"}
+	expected := []string{"_defaults.yml", "assets.secured.json", "assets.unsecured.json", "env.secured.json", "env.unsecured.json", "ssl/cert.pem", "ui/nginx.conf"}
 	if len(relativePaths) != len(expected) {
 		t.Fatalf("relative paths = %#v, want %#v", relativePaths, expected)
 	}
@@ -146,7 +148,7 @@ func TestAssetsListsRecursiveAssetsAndSpecialRootAssets(t *testing.T) {
 			t.Fatalf("relative paths = %#v, want %#v", relativePaths, expected)
 		}
 	}
-	if assets[0].Driver != "defaults" || assets[1].Driver != "special" || assets[3].Driver != "configmap" {
+	if assets[0].Driver != "defaults" || assets[1].Driver != "special" || assets[5].Driver != "configmap" {
 		t.Fatalf("unexpected drivers: %#v", assets)
 	}
 }

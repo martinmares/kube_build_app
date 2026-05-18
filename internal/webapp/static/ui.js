@@ -182,6 +182,7 @@ async function init() {
   qs('#asset-structured')?.addEventListener('click', (e) => handleAssetStructuredClick(e));
   qs('#ports-edit-modal')?.addEventListener('click', (e) => handlePortsModalClick(e));
   qs('#edit-modal')?.addEventListener('click', (e) => handleEditModalClick(e));
+  qs('#edit-modal')?.addEventListener('input', (e) => handleEditModalInput(e));
   await loadAll();
 }
 async function loadAll() {
@@ -1069,7 +1070,14 @@ function handleEditModalClick(e) {
   if (e.target.closest('[data-save-special-entries]') && !state.readOnly) return saveSpecialEntries();
   if (e.target.closest('[data-add-special-entry]') && !state.readOnly) return addSpecialEntryRow();
   const removeSpecialEntry = e.target.closest('[data-remove-special-entry]');
-  if (removeSpecialEntry && !state.readOnly) return removeSpecialEntry.closest('tr')?.remove();
+  if (removeSpecialEntry && !state.readOnly) {
+    removeSpecialEntry.closest('[data-special-entry-row]')?.remove();
+    syncSpecialEntriesFilterCount();
+  }
+}
+function handleEditModalInput(e) {
+  const filter = e.target.closest('[data-special-entry-filter]');
+  if (filter) filterSpecialEntryRows(filter.value || '');
 }
 function handlePortsModalClick(e) {
   const savePorts = e.target.closest('[data-save-ports]');
@@ -1245,32 +1253,40 @@ function renderSpecialEntriesEditor(entries) {
         <div class="overview-subtitle mb-0">Entries</div>
         <button class="btn btn-sm btn-outline-primary" type="button" data-add-special-entry><i class="ti ti-plus me-1"></i>Add entry</button>
       </div>
-      <div class="table-responsive"><table class="table table-sm" data-special-entries><tbody>${rows || renderSpecialEntriesEmpty()}</tbody></table></div>
+      <div class="input-icon mb-3">
+        <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+        <input class="form-control" data-special-entry-filter placeholder="Filter key, value or type...">
+      </div>
+      <div class="text-muted small mb-2" data-special-entry-count>${entries?.length || 0} entries</div>
+      <div class="special-entry-editor-list" data-special-entries>${rows || renderSpecialEntriesEmpty()}</div>
       <div class="text-end mt-3"><button class="btn btn-primary" type="button" data-save-special-entries><i class="ti ti-device-floppy me-1"></i>Save entries</button></div>
     </div>`;
 }
 function renderSpecialEntryRow(entry = {}) {
   return `
-    <tr>
-      <td><input class="form-control form-control-sm font-monospace special-entry-key" placeholder="KEY" value="${esc(entry.key || '')}"></td>
-      <td><select class="form-select form-select-sm special-entry-type">${['string','number','bool','null','json'].map((type) => `<option value="${type}" ${entry.value_type === type ? 'selected' : ''}>${type}</option>`).join('')}</select></td>
-      <td><input class="form-control form-control-sm font-monospace special-entry-value" placeholder="value" value="${esc(entry.value_text || '')}"></td>
-      <td class="table-action-col"><button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-special-entry title="Remove entry"><i class="ti ti-trash"></i></button></td>
-    </tr>`;
+    <div class="special-entry-editor-row" data-special-entry-row>
+      <div class="special-entry-editor-head">
+        <input class="form-control form-control-sm font-monospace special-entry-key" placeholder="KEY" value="${esc(entry.key || '')}">
+        <select class="form-select form-select-sm special-entry-type">${['string','number','bool','null','json'].map((type) => `<option value="${type}" ${entry.value_type === type ? 'selected' : ''}>${type}</option>`).join('')}</select>
+        <button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-special-entry title="Remove entry"><i class="ti ti-trash"></i></button>
+      </div>
+      <textarea class="form-control form-control-sm font-monospace special-entry-value" rows="2" placeholder="value">${esc(entry.value_text || '')}</textarea>
+    </div>`;
 }
 function renderSpecialEntriesEmpty() {
-  return `<tr><td colspan="4">${emptyState('ti-json', 'No entries', 'Use Add entry to create the first one.')}</td></tr>`;
+  return `<div data-special-entries-empty>${emptyState('ti-json', 'No entries', 'Use Add entry to create the first one.')}</div>`;
 }
 function addSpecialEntryRow() {
-  const body = qs('[data-special-entries] tbody');
+  const body = qs('[data-special-entries]');
   if (!body) return;
-  if (!body.querySelector('.special-entry-key')) body.innerHTML = '';
+  body.querySelector('[data-special-entries-empty]')?.remove();
   body.insertAdjacentHTML('beforeend', renderSpecialEntryRow({value_type: 'string'}));
-  body.querySelector('tr:last-child .special-entry-key')?.focus();
+  body.querySelector('[data-special-entry-row]:last-child .special-entry-key')?.focus();
+  filterSpecialEntryRows(qs('[data-special-entry-filter]')?.value || '');
 }
 async function saveSpecialEntries() {
   if (!state.env || !state.assetPath || state.readOnly) return;
-  const entries = qsa('[data-special-entries] tbody tr').map((row) => ({
+  const entries = qsa('[data-special-entry-row]').map((row) => ({
     key: row.querySelector('.special-entry-key')?.value?.trim() || '',
     value_type: row.querySelector('.special-entry-type')?.value || 'string',
     value_text: row.querySelector('.special-entry-value')?.value || '',
@@ -1284,6 +1300,23 @@ async function saveSpecialEntries() {
     await loadAssets();
     await selectAsset(state.assetPath);
   } catch (e) { showError(e); }
+}
+function filterSpecialEntryRows(query) {
+  const needle = String(query || '').trim().toLowerCase();
+  qsa('[data-special-entry-row]').forEach((row) => {
+    const haystack = [
+      row.querySelector('.special-entry-key')?.value,
+      row.querySelector('.special-entry-type')?.value,
+      row.querySelector('.special-entry-value')?.value,
+    ].join(' ').toLowerCase();
+    row.classList.toggle('hidden', !!needle && !haystack.includes(needle));
+  });
+  syncSpecialEntriesFilterCount();
+}
+function syncSpecialEntriesFilterCount() {
+  const rows = qsa('[data-special-entry-row]');
+  const visible = rows.filter((row) => !row.classList.contains('hidden')).length;
+  setText('[data-special-entry-count]', rows.length ? `${visible}/${rows.length} visible` : '0 entries');
 }
 function renderPortRow(index, port = {}) {
   const rowId = crypto.randomUUID?.() || String(Date.now() + Math.random());
@@ -1721,7 +1754,17 @@ function renderSpecialEntriesPreview(entries) {
         ${edit}
       </div>
       ${entries.warning ? `<div class="alert alert-warning py-2">${esc(entries.warning)}</div>` : ''}
-      ${items.length ? `<div class="table-responsive"><table class="table table-sm mb-0"><tbody>${items.map((item) => `<tr><td class="font-monospace">${esc(item.key)}</td><td><span class="badge bg-blue-lt">${esc(item.value_type)}</span></td><td class="font-monospace text-break">${esc(item.value_text)}</td></tr>`).join('')}</tbody></table></div>` : emptyState('ti-json', 'No entries', 'No entries in this special file.')}
+      ${items.length ? `<div class="special-entry-preview-list">${items.map(renderSpecialEntryPreview).join('')}</div>` : emptyState('ti-json', 'No entries', 'No entries in this special file.')}
+    </div>`;
+}
+function renderSpecialEntryPreview(item) {
+  return `
+    <div class="special-entry-card">
+      <div class="special-entry-card-head">
+        <div class="font-monospace fw-semibold text-break">${esc(item.key)}</div>
+        <span class="badge bg-blue-lt">${esc(item.value_type)}</span>
+      </div>
+      <div class="special-entry-preview-value font-monospace">${esc(item.value_text)}</div>
     </div>`;
 }
 function handleAssetStructuredClick(e) {
