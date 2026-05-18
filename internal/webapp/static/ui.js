@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], inventory: null, buildPreview: null, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null };
+const state = { envs: [], env: null, apps: [], assets: [], inventory: null, buildPreview: null, buildChecks: {}, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -208,7 +208,7 @@ async function loadAll() {
     const info = await api('/api/v1/info');
     state.readOnly = !!info.read_only;
     document.body.classList.toggle('read-only-mode', state.readOnly);
-    setText('#app-version', `${info.version} / ${info.commit}`);
+    setText('#app-version', formatAppVersion(info));
     qs('#read-only-badge').classList.toggle('hidden', !info.read_only);
     qs('#write-mode-badge')?.classList.toggle('hidden', !!info.read_only);
     qs('#read-only-hint')?.classList.toggle('hidden', !info.read_only);
@@ -253,6 +253,13 @@ function renderGitStatus() {
   badge.className = `badge ${git.dirty ? 'bg-yellow-lt' : 'bg-green-lt'}`;
   const branch = git.branch || git.commit || 'detached';
   badge.innerHTML = `<i class="ti ti-git-branch me-1"></i>${esc(branch)}${git.dirty ? ` · ${git.dirty_count}` : ''}`;
+  renderBuildWorkflow();
+}
+function formatAppVersion(info) {
+  const version = info?.version || 'dev';
+  const commit = info?.commit || '';
+  if (!commit || commit === 'unknown') return version === 'dev' ? 'dev build' : version;
+  return `${version} / ${commit}`;
 }
 function gitFilesForEnv(env) {
   const prefix = `${env}/`;
@@ -427,8 +434,10 @@ function resetSelectedDetails() {
 function resetBuildView() {
 	state.inventory = null;
 	state.buildPreview = null;
+	state.buildChecks = {};
 	setBuildStatus('info', 'Select an environment and run a build check.');
 	setBuildDataEnv(null);
+	renderBuildWorkflow();
 	setHTML('#build-totals', '');
   const summaryBody = qs('#build-summary-table tbody');
   if (summaryBody) summaryBody.innerHTML = '<tr><td colspan="9" class="text-muted">No summary loaded.</td></tr>';
@@ -437,6 +446,7 @@ function resetBuildView() {
 	const inventoryBody = qs('#build-inventory-table tbody');
 	if (inventoryBody) inventoryBody.innerHTML = '<tr><td colspan="5" class="text-muted">No inventory loaded.</td></tr>';
 	setHTML('#build-preview-totals', '');
+	setHTML('#build-preview-events', '');
 	const previewBody = qs('#build-preview-table tbody');
 	if (previewBody) previewBody.innerHTML = '<tr><td colspan="2" class="text-muted">No preview loaded.</td></tr>';
 }
@@ -1955,12 +1965,18 @@ async function runBuildValidate() {
   clearError();
   const env = state.env;
   try {
+    state.buildChecks.validation = {state: 'running', at: new Date()};
+    renderBuildWorkflow();
     setBuildStatus('info', 'Validation is running...');
     const result = await apiPost(`/api/v1/envs/${encodeURIComponent(env)}/validate`);
     if (state.env !== env) return;
+    state.buildChecks.validation = {state: result.ok ? 'ok' : 'fail', at: new Date(), message: result.message || ''};
+    renderBuildWorkflow();
     setBuildStatus(result.ok ? 'success' : 'danger', result.message || (result.ok ? 'Validation OK' : 'Validation failed'));
   } catch (e) {
     if (state.env !== env) return;
+    state.buildChecks.validation = {state: 'fail', at: new Date(), message: String(e)};
+    renderBuildWorkflow();
     setBuildStatus('danger', String(e));
     showError(e);
   }
@@ -1974,9 +1990,13 @@ async function loadBuildSummary() {
     const summary = await apiPost(`/api/v1/envs/${encodeURIComponent(env)}/summary`);
     if (state.env !== env) return;
     renderBuildSummary(summary);
+    state.buildChecks.summary = {state: 'ok', at: new Date(), message: `${summary.items?.length || 0} row(s)`};
+    renderBuildWorkflow();
     setBuildDataEnv(env, 'loaded');
   } catch (e) {
     if (state.env !== env) return;
+    state.buildChecks.summary = {state: 'fail', at: new Date(), message: String(e)};
+    renderBuildWorkflow();
     showError(e);
   }
 }
@@ -1989,10 +2009,14 @@ async function loadBuildInventory() {
     if (state.env !== env) return;
     state.inventory = inventory;
     renderInventory();
+    state.buildChecks.inventory = {state: 'ok', at: new Date(), message: `${inventory.items?.length || 0} item(s)`};
+    renderBuildWorkflow();
   } catch (e) {
     if (state.env !== env) return;
     state.inventory = null;
     renderInventory();
+    state.buildChecks.inventory = {state: 'fail', at: new Date(), message: String(e)};
+    renderBuildWorkflow();
     showError(e);
 	}
 }
@@ -2001,16 +2025,22 @@ async function loadBuildPreview() {
 	clearError();
 	const env = state.env;
 	try {
+		state.buildChecks.preview = {state: 'running', at: new Date()};
+		renderBuildWorkflow();
 		setBuildStatus('info', 'Build preview is rendering into a temporary directory...');
 		const preview = await apiPost(`/api/v1/envs/${encodeURIComponent(env)}/preview`);
 		if (state.env !== env) return;
 		state.buildPreview = preview;
 		renderBuildPreview(preview);
+		state.buildChecks.preview = {state: 'ok', at: new Date(), message: `${preview.totals?.files ?? 0} file(s)`};
+		renderBuildWorkflow();
 		setBuildStatus('success', `Build preview rendered ${preview.totals?.files ?? 0} file(s).`);
 	} catch (e) {
 		if (state.env !== env) return;
 		state.buildPreview = null;
 		renderBuildPreview(null);
+		state.buildChecks.preview = {state: 'fail', at: new Date(), message: String(e)};
+		renderBuildWorkflow();
 		setBuildStatus('danger', String(e));
 		showError(e);
 	}
@@ -2038,6 +2068,48 @@ function setBuildDataEnv(env, stateName) {
   }
   el.className = `badge ${stateName === 'loading' ? 'bg-blue-lt' : 'bg-green-lt'}`;
   el.innerHTML = `<i class="ti ti-stack-2 me-1"></i>${esc(stateName || 'loaded')} for ${esc(env)}`;
+}
+function renderBuildWorkflow() {
+  const host = qs('#build-workflow');
+  if (!host) return;
+  const env = state.env;
+  if (!env) {
+    host.innerHTML = buildStep('pending', 'Select environment', 'Build checks need an active environment.');
+    return;
+  }
+  const dirtyCount = gitFilesForEnv(env).length;
+  const checks = state.buildChecks || {};
+  host.innerHTML = [
+    buildStep(dirtyCount ? 'warn' : 'ok', dirtyCount ? 'Working tree has changes' : 'Working tree clean', dirtyCount ? `${dirtyCount} changed file(s) in ${env}. Validate before commit.` : 'No changed files detected for this environment.'),
+    buildStep(checkState(checks.summary, checks.inventory), 'Summary and inventory', buildCheckText([checks.summary, checks.inventory], 'Use Refresh data to reload resource summary and inventory.')),
+    buildStep(checkState(checks.validation), 'Validation', buildCheckText([checks.validation], 'Run Validate after edits.')),
+    buildStep(checkState(checks.preview), 'Build preview', buildCheckText([checks.preview], 'Run Preview files to render generated manifests into a temporary directory.')),
+  ].join('');
+}
+function buildStep(kind, title, text) {
+  const icon = kind === 'ok' ? 'ti-circle-check' : kind === 'warn' ? 'ti-alert-triangle' : kind === 'fail' ? 'ti-circle-x' : 'ti-circle-dashed';
+  return `<div class="build-step ${kind}"><i class="ti ${icon}"></i><div><div class="build-step-title">${esc(title)}</div><div class="build-step-text">${esc(text)}</div></div></div>`;
+}
+function checkState(...items) {
+  const checks = items.filter(Boolean);
+  if (!checks.length) return 'pending';
+  if (checks.some((item) => item.state === 'fail')) return 'fail';
+  if (checks.some((item) => item.state === 'running')) return 'warn';
+  if (checks.every((item) => item.state === 'ok')) return 'ok';
+  return 'pending';
+}
+function buildCheckText(items, fallback) {
+  const checks = items.filter(Boolean);
+  if (!checks.length) return fallback;
+  return checks.map((item) => {
+    const label = item.state === 'running' ? 'running' : item.state === 'ok' ? 'OK' : item.state === 'fail' ? 'failed' : item.state || 'pending';
+    const suffix = item.message ? `: ${item.message}` : '';
+    return `${label}${item.at ? ` at ${formatTime(item.at)}` : ''}${suffix}`;
+  }).join(' / ');
+}
+function formatTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
 }
 function renderBuildSummary(summary) {
   const totals = summary.totals || {};
@@ -2082,6 +2154,7 @@ function renderBuildPreview(preview) {
 		metricCard('Services', totals.services ?? 0, 'ti-route'),
 		metricCard('Assets', totals.assets ?? 0, 'ti-folders'),
 	].join('') : '');
+	setHTML('#build-preview-events', preview ? renderBuildEvents(preview.events || []) : '');
 	const body = qs('#build-preview-table tbody');
 	if (!body) return;
 	const files = preview?.files || [];
@@ -2090,6 +2163,15 @@ function renderBuildPreview(preview) {
 			<td class="font-monospace text-break">${esc(file.path)}</td>
 			<td class="text-end">${formatBytes(file.size_bytes ?? 0)}</td>
 		</tr>`).join('') || '<tr><td colspan="2" class="text-muted">No preview loaded.</td></tr>';
+}
+function renderBuildEvents(events) {
+  if (!events.length) return '<div class="text-muted small">No render events reported.</div>';
+  const counts = events.reduce((acc, event) => {
+    const key = event.type || 'event';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  return `<div class="overview-subtitle">Render events</div><div class="build-event-list">${Object.entries(counts).sort().map(([type, count]) => `<span class="badge bg-secondary-lt"><i class="ti ti-activity me-1"></i>${esc(type)} ${count}</span>`).join('')}</div>`;
 }
 function renderInventory() {
   const table = qs('#build-inventory-table tbody');

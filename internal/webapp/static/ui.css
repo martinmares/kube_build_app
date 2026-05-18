@@ -43,6 +43,16 @@
 .path-pill { padding: .35rem .55rem; border: 1px solid var(--tblr-border-color); border-radius: 6px; background: var(--tblr-bg-surface-secondary); }
 .table-action-col { width: 1%; white-space: nowrap; text-align: right; }
 .metric-card { height: 100%; padding: .75rem; border: 1px solid var(--tblr-border-color); border-radius: 8px; background: var(--tblr-bg-surface-secondary); }
+.build-workflow { display: grid; gap: .45rem; }
+.build-step { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .55rem; align-items: start; padding: .55rem .65rem; border: 1px solid color-mix(in srgb, var(--tblr-border-color) 76%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 78%, transparent); }
+.build-step i { margin-top: .1rem; }
+.build-step-title { font-weight: 600; line-height: 1.2; }
+.build-step-text { color: var(--tblr-muted); font-size: .78rem; line-height: 1.3; }
+.build-step.ok i { color: var(--tblr-success); }
+.build-step.warn i { color: var(--tblr-warning); }
+.build-step.fail i { color: var(--tblr-danger); }
+.build-step.pending i { color: var(--tblr-muted); }
+.build-event-list { display: flex; flex-wrap: wrap; gap: .35rem; }
 .overview-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .5rem; margin-bottom: 1rem; }
 .overview-fact { padding: .7rem .75rem; border: 1px solid var(--tblr-border-color); border-radius: 8px; background: var(--tblr-bg-surface-secondary); }
 .overview-section + .overview-section { margin-top: 1rem; }

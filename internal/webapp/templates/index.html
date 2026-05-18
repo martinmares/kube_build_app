@@ -95,9 +95,11 @@
                   <div class="card-body">
                     <div class="btn-list mb-3">
                       <button class="btn btn-primary" id="build-validate-btn" type="button"><i class="ti ti-shield-check me-2"></i>Validate</button>
-                      <button class="btn btn-outline-secondary" id="build-refresh-btn" type="button"><i class="ti ti-refresh me-2"></i>Refresh data</button><button class="btn btn-outline-secondary" id="build-preview-btn" type="button"><i class="ti ti-files me-2"></i>Preview files</button>
+                      <button class="btn btn-outline-secondary" id="build-preview-btn" type="button"><i class="ti ti-files me-2"></i>Preview files</button>
+                      <button class="btn btn-outline-secondary" id="build-refresh-btn" type="button"><i class="ti ti-refresh me-2"></i>Refresh data</button>
                     </div>
                     <div class="mb-3"><span class="badge bg-secondary-lt" id="build-data-env"><i class="ti ti-stack-2 me-1"></i>not loaded</span></div>
+                    <div id="build-workflow" class="build-workflow mb-3"></div>
                     <div id="build-status" class="alert alert-info mb-0">Select an environment and run a build check.</div>
                   </div>
                 </div>
@@ -120,6 +122,7 @@
                   <div class="card-header"><div><h3 class="card-title">Generated files</h3><div class="text-muted small">Build preview renders into a temporary directory and lists generated manifests without touching deploy output.</div></div></div>
                   <div class="card-body">
                     <div class="row g-2 mb-3" id="build-preview-totals"></div>
+                    <div class="mb-3" id="build-preview-events"></div>
                     <div class="table-responsive"><table class="table table-vcenter table-sm" id="build-preview-table"><thead><tr><th>Path</th><th class="text-end">Size</th></tr></thead><tbody><tr><td colspan="2" class="text-muted">No preview loaded.</td></tr></tbody></table></div>
                   </div>
                 </div>
