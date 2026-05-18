@@ -150,8 +150,8 @@ module KubeBuildApp
 
       merged_obj = deep_merge_hashes(defaults_obj, app_obj)
       merged_obj["vars"] = merge_named_entries(defaults_obj["vars"], app_obj["vars"], "vars")
-      apply_container_var_defaults!(merged_obj, defaults_obj["container_vars"])
-      merged_obj.delete("container_vars")
+      apply_container_var_defaults!(merged_obj, defaults_obj["container_envs"])
+      merged_obj.delete("container_envs")
       apply_vars_inplace(merged_obj)
 
       merged_obj
@@ -240,21 +240,21 @@ module KubeBuildApp
 
         effective_defaults = []
         wildcard_defaults.each do |item|
-          effective_defaults = merge_named_entries(effective_defaults, item["vars"], "container_vars[*].vars")
+          effective_defaults = merge_named_entries(effective_defaults, item["envs"], "container_envs[*].envs")
         end
 
         defaults.each do |item|
           next if item["name"] == "*"
           next unless item["name"].to_s == container["name"].to_s
 
-          effective_defaults = merge_named_entries(effective_defaults, item["vars"], "container_vars[#{item['name']}].vars")
+          effective_defaults = merge_named_entries(effective_defaults, item["envs"], "container_envs[#{item['name']}].envs")
         end
 
-        merged_vars = merge_named_entries(effective_defaults, container["vars"], "containers[#{container['name']}].vars")
-        if merged_vars.empty?
-          container.delete("vars")
+        merged_envs = merge_named_entries(effective_defaults, container["envs"], "containers[#{container['name']}].envs")
+        if merged_envs.empty?
+          container.delete("envs")
         else
-          container["vars"] = merged_vars
+          container["envs"] = merged_envs
         end
       end
     end
@@ -288,22 +288,22 @@ module KubeBuildApp
 
     def normalize_container_var_defaults(entries)
       return [] if entries.nil?
-      raise ArgumentError, "#{@file_name}: 'container_vars' must be an array" unless entries.is_a?(Array)
+      raise ArgumentError, "#{@file_name}: 'container_envs' must be an array" unless entries.is_a?(Array)
 
       entries.each_with_index.map do |item, index|
-        raise ArgumentError, "#{@file_name}: 'container_vars[#{index}]' must be a mapping" unless item.is_a?(Hash)
+        raise ArgumentError, "#{@file_name}: 'container_envs[#{index}]' must be a mapping" unless item.is_a?(Hash)
 
         name = item["name"]
         if name.nil? || name.to_s.strip.empty?
-          raise ArgumentError, "#{@file_name}: 'container_vars[#{index}]' requires non-empty 'name'"
+          raise ArgumentError, "#{@file_name}: 'container_envs[#{index}]' requires non-empty 'name'"
         end
 
-        vars = item["vars"]
-        raise ArgumentError, "#{@file_name}: 'container_vars[#{index}].vars' must be an array" unless vars.is_a?(Array)
+        envs = item["envs"]
+        raise ArgumentError, "#{@file_name}: 'container_envs[#{index}].envs' must be an array" unless envs.is_a?(Array)
 
         {
           "name" => name.to_s,
-          "vars" => normalize_named_entries(vars, "container_vars[#{name}].vars", allow_remove: false),
+          "envs" => normalize_named_entries(envs, "container_envs[#{name}].envs", allow_remove: false),
         }
       end
     end

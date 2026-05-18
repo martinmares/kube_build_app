@@ -120,21 +120,21 @@ class ComprehensiveFeaturesTest < Minitest::Test
     assert_equal ["-c", "echo ok"], container["args"]
   end
 
-  def test_defaults_container_vars_apply_override_and_remove
+  def test_defaults_container_envs_apply_override_and_remove
     write_minimal_env
     write_file(
       File.join(@env_dir, "apps", "_defaults.yml"),
       <<~YAML,
-        container_vars:
+        container_envs:
           - name: "*"
-            vars:
+            envs:
               - name: GLOBAL_FLAG
                 value: "true"
               - name: SHARED_SECRET
                 secret_name: shared-secret
                 key: shared-key
           - name: "svc-a"
-            vars:
+            envs:
               - name: SERVICE_ONLY
                 value: "service-default"
       YAML
@@ -147,7 +147,7 @@ class ComprehensiveFeaturesTest < Minitest::Test
         containers:
           - name: svc-a
             image: "{{TSM_REGISTRY_URL}}/svc-a:{{TSM_RELEASE_ID}}"
-            vars:
+            envs:
               - name: GLOBAL_FLAG
                 value: "false"
               - name: SHARED_SECRET
@@ -217,7 +217,7 @@ class ComprehensiveFeaturesTest < Minitest::Test
           - name: cgroup
             image: "{{TSM_REGISTRY_URL}}/cgroup:{{TSM_RELEASE_ID}}"
             enable_cgroup_exporter: true
-            vars:
+            envs:
               - name: CGROUP_EXPORTER_LISTEN
                 value: "127.0.0.1:9393"
             startup:

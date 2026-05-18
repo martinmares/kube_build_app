@@ -5,7 +5,7 @@ module KubeBuildApp
     require_relative "asset"
     require_relative "service"
 
-    attr_reader :content, :name, :startup, :simple_init, :mtls, :vars, :assets, :ports, :services, :resources, :shared_assets,
+    attr_reader :content, :name, :startup, :simple_init, :mtls, :envs, :assets, :ports, :services, :resources, :shared_assets,
                 :env, :health, :probe, :raw
     attr_accessor :image
     TOOLS_VOLUME_NAME = "app-tools"
@@ -32,7 +32,7 @@ module KubeBuildApp
       @startup = content["startup"]
       @simple_init = content["simple_init"]
       @mtls = content["mtls"]
-      @vars = content["vars"]
+      @envs = content["envs"]
       @assets = Asset::load_assets(@app_name, @name, @env, content["assets"])
       append_mtls_assets! if mtls_enabled?
       @ports = content["ports"]
@@ -342,15 +342,15 @@ module KubeBuildApp
         end
       end
 
-      if container.vars.is_a?(Array)
-        container.vars.each do |var|
+      if container.envs.is_a?(Array)
+        container.envs.each do |var|
           result << var
         end
       end
 
       return result if result.empty?
 
-      # keep last item for same env var name => explicit app vars override defaults
+      # keep last item for same env var name => explicit app envs override defaults
       dedup = {}
       result.each do |var|
         next unless var.is_a?(Hash)
@@ -539,7 +539,7 @@ end
           - /app/start-java.sh
           - /app/tsm-address-management.json.tpl
           - cz.datalite.tsm.am.TsmAddressManagementApplicationKt
-      vars:
+      envs:
         - name: JAVA_ARGS
           value: -XX:+UseContainerSupport -XX:InitialRAMPercentage=50.0 -XX:MinRAMPercentage=25.0
             -XX:MaxRAMPercentage=75.0 -Dmanagement.endpoints.web.exposure.include=prometheus,health,info,metrics
