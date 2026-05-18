@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -147,6 +147,11 @@ async function init() {
   qs('#build-refresh-btn')?.addEventListener('click', () => loadBuildData());
   qs('#build-preview-btn')?.addEventListener('click', () => loadBuildPreview());
   qs('#build-preview-tree')?.addEventListener('click', (e) => handleBuildPreviewTreeClick(e));
+  qs('#build-preview-filter')?.addEventListener('input', () => renderBuildPreview(state.buildPreview));
+  qs('#build-preview-expand-btn')?.addEventListener('click', () => expandBuildPreviewTree());
+  qs('#build-preview-collapse-btn')?.addEventListener('click', () => collapseBuildPreviewTree());
+  qs('#build-preview-copy-path')?.addEventListener('click', () => copyBuildPreviewPath());
+  qs('#build-preview-copy-content')?.addEventListener('click', () => copyBuildPreviewContent());
   qs('#inventory-filter')?.addEventListener('input', () => renderInventory());
   qs('#inventory-path')?.addEventListener('input', () => renderInventory());
   qs('#inventory-clear-btn')?.addEventListener('click', () => {
@@ -437,6 +442,7 @@ function resetBuildView() {
 	state.inventory = null;
 	state.buildPreview = null;
 	state.buildPreviewPath = null;
+	state.buildPreviewContent = null;
 	state.buildPreviewOpenDirs = new Set();
 	state.buildChecks = {};
 	setBuildStatus('info', 'Select an environment and run a build check.');
@@ -452,6 +458,8 @@ function resetBuildView() {
 	setHTML('#build-preview-totals', '');
 	setHTML('#build-preview-events', '');
 	setHTML('#build-preview-tree', '<div class="text-muted p-3">No preview loaded.</div>');
+	const previewFilter = qs('#build-preview-filter');
+	if (previewFilter) previewFilter.value = '';
 	renderBuildPreviewContent(null);
 }
 
@@ -1708,6 +1716,7 @@ function renderAssets() {
     return [asset.relative_path, asset.file_name, asset.driver, asset.size_bytes].some((value) => String(value ?? '').toLowerCase().includes(query));
   });
   setText('#assets-filter-count', `${assets.length}/${state.assets.length}`);
+  if (query) state.assetOpenDirs = assetDefaultOpenDirs(assets);
   host.innerHTML = renderAssetTree(assets, query);
   qsa('[data-asset]').forEach((x) => x.addEventListener('click', () => selectAsset(x.dataset.asset)));
   qsa('[data-asset-dir]').forEach((x) => x.addEventListener('click', () => {
@@ -1996,12 +2005,12 @@ async function runBuildValidate() {
     if (state.env !== env) return;
     state.buildChecks.validation = {state: result.ok ? 'ok' : 'fail', at: new Date(), message: result.message || ''};
     renderBuildWorkflow();
-    setBuildStatus(result.ok ? 'success' : 'danger', result.message || (result.ok ? 'Validation OK' : 'Validation failed'));
+    setBuildStatus(result.ok ? 'success' : 'danger', formatBuildError(result.message || (result.ok ? 'Validation OK' : 'Validation failed')), true);
   } catch (e) {
     if (state.env !== env) return;
     state.buildChecks.validation = {state: 'fail', at: new Date(), message: String(e)};
     renderBuildWorkflow();
-    setBuildStatus('danger', String(e));
+    setBuildStatus('danger', formatBuildError(String(e)), true);
     showError(e);
   }
 }
@@ -2056,6 +2065,7 @@ async function loadBuildPreview() {
 		if (state.env !== env) return;
 		state.buildPreview = preview;
 		state.buildPreviewPath = null;
+		state.buildPreviewContent = null;
 		state.buildPreviewOpenDirs = buildPreviewDefaultOpenDirs(preview.files || []);
 		renderBuildPreview(preview);
 		state.buildChecks.preview = {state: 'ok', at: new Date(), message: `${preview.totals?.files ?? 0} file(s)`};
@@ -2065,10 +2075,11 @@ async function loadBuildPreview() {
 		if (state.env !== env) return;
 		state.buildPreview = null;
 		state.buildPreviewPath = null;
+		state.buildPreviewContent = null;
 		renderBuildPreview(null);
 		state.buildChecks.preview = {state: 'fail', at: new Date(), message: String(e)};
 		renderBuildWorkflow();
-		setBuildStatus('danger', String(e));
+		setBuildStatus('danger', formatBuildError(String(e)), true);
 		showError(e);
 	}
 }
@@ -2079,11 +2090,12 @@ async function loadBuildData() {
     await Promise.all([loadBuildSummary(), loadBuildInventory()]);
   } catch (e) { showError(e); }
 }
-function setBuildStatus(kind, text) {
+function setBuildStatus(kind, text, html = false) {
   const el = qs('#build-status');
   if (!el) return;
   el.className = `alert alert-${kind} mb-0`;
-  el.textContent = text;
+  if (html) el.innerHTML = text;
+  else el.textContent = text;
 }
 function setBuildDataEnv(env, stateName) {
   const el = qs('#build-data-env');
@@ -2138,6 +2150,14 @@ function formatTime(value) {
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
 }
+function formatBuildError(message) {
+  const text = String(message || '');
+  if (!text.includes('\n') && text.length < 180) return esc(text);
+  const lines = text.split('\n').filter(Boolean);
+  const headline = lines[0] || text.slice(0, 180);
+  const details = lines.slice(1).join('\n') || text;
+  return `<div class="fw-semibold">${esc(headline)}</div><div class="build-error-details">${esc(details)}</div>`;
+}
 function renderBuildSummary(summary) {
   const totals = summary.totals || {};
   setHTML('#build-totals', [
@@ -2182,7 +2202,9 @@ function renderBuildPreview(preview) {
 		metricCard('Assets', totals.assets ?? 0, 'ti-folders'),
 	].join('') : '');
 	setHTML('#build-preview-events', preview ? renderBuildEvents(preview.events || []) : '');
-	const files = preview?.files || [];
+  const query = (qs('#build-preview-filter')?.value || '').trim().toLowerCase();
+	const files = (preview?.files || []).filter((file) => !query || String(file.path || '').toLowerCase().includes(query));
+  if (query) state.buildPreviewOpenDirs = buildPreviewDefaultOpenDirs(files);
 	setHTML('#build-preview-tree', files.length ? renderBuildPreviewTree(files) : '<div class="text-muted p-3">No preview loaded.</div>');
 	if (!preview || !state.buildPreviewPath) renderBuildPreviewContent(null);
 }
@@ -2276,6 +2298,14 @@ function renderBuildEvents(events) {
   }, {});
   return `<div class="overview-subtitle">Render events</div><div class="build-event-list">${Object.entries(counts).sort().map(([type, count]) => `<span class="badge bg-secondary-lt"><i class="ti ti-activity me-1"></i>${esc(type)} ${count}</span>`).join('')}</div>`;
 }
+function expandBuildPreviewTree() {
+  state.buildPreviewOpenDirs = buildPreviewDefaultOpenDirs(state.buildPreview?.files || []);
+  renderBuildPreview(state.buildPreview);
+}
+function collapseBuildPreviewTree() {
+  state.buildPreviewOpenDirs = new Set(['']);
+  renderBuildPreview(state.buildPreview);
+}
 function handleBuildPreviewTreeClick(e) {
   const dir = e.target.closest('[data-build-preview-dir]');
   if (dir) {
@@ -2298,9 +2328,11 @@ async function loadBuildPreviewContent(path) {
     const encodedPath = path.split('/').map(encodeURIComponent).join('/');
     const content = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/preview/${encodeURIComponent(state.buildPreview.id)}/content/${encodedPath}`);
     if (state.buildPreviewPath !== path) return;
+    state.buildPreviewContent = content;
     renderBuildPreviewContent(content);
   } catch (e) {
     if (state.buildPreviewPath !== path) return;
+    state.buildPreviewContent = null;
     renderBuildPreviewContent({path, content: String(e), size_bytes: 0});
     showError(e);
   }
@@ -2309,17 +2341,29 @@ function renderBuildPreviewContent(content) {
   if (!content) {
     setText('#build-preview-content-path', 'Select a generated file.');
     setText('#build-preview-content-size', '-');
-    setText('#build-preview-content', 'No generated file selected.');
+    setHTML('#build-preview-content', '<div class="build-preview-message">No generated file selected.</div>');
     return;
   }
   setText('#build-preview-content-path', content.path || '-');
   setText('#build-preview-content-size', content.size_bytes ? formatBytes(content.size_bytes) : '-');
   if (content.binary) {
-    setText('#build-preview-content', `Binary file preview is not available.\nContent-Type: ${content.content_type || 'unknown'}`);
+    setHTML('#build-preview-content', `<div class="build-preview-message">Binary file preview is not available.<br>Content-Type: ${esc(content.content_type || 'unknown')}</div>`);
     return;
   }
   const suffix = content.truncated ? '\n\n--- truncated after 1 MiB ---' : '';
-  setText('#build-preview-content', `${content.content || ''}${suffix}`);
+  setHTML('#build-preview-content', renderCodeLines(`${content.content || ''}${suffix}`));
+}
+function renderCodeLines(content) {
+  const lines = String(content || '').split('\n');
+  return `<table class="build-preview-code-table"><tbody>${lines.map((line, index) => `<tr><td class="build-preview-lineno">${index + 1}</td><td class="build-preview-line">${esc(line) || ' '}</td></tr>`).join('')}</tbody></table>`;
+}
+async function copyBuildPreviewPath() {
+  if (!state.buildPreviewPath) return;
+  await copyTextToClipboard(state.buildPreviewPath);
+}
+async function copyBuildPreviewContent() {
+  if (!state.buildPreviewContent || state.buildPreviewContent.binary) return;
+  await copyTextToClipboard(state.buildPreviewContent.content || '');
 }
 function renderInventory() {
   const table = qs('#build-inventory-table tbody');

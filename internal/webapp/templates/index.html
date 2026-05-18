@@ -123,6 +123,20 @@
                   <div class="card-body">
                     <div class="row g-2 mb-3" id="build-preview-totals"></div>
                     <div class="mb-3" id="build-preview-events"></div>
+                    <div class="row g-2 align-items-center mb-3">
+                      <div class="col-12 col-lg">
+                        <div class="input-icon">
+                          <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+                          <input class="form-control form-control-sm" id="build-preview-filter" placeholder="Filter generated files...">
+                        </div>
+                      </div>
+                      <div class="col-auto">
+                        <div class="btn-list">
+                          <button class="btn btn-sm btn-outline-secondary" type="button" id="build-preview-expand-btn"><i class="ti ti-folders me-1"></i>Expand all</button>
+                          <button class="btn btn-sm btn-outline-secondary" type="button" id="build-preview-collapse-btn"><i class="ti ti-folder-off me-1"></i>Collapse all</button>
+                        </div>
+                      </div>
+                    </div>
                     <div class="row g-3">
                       <div class="col-12 col-xl-5">
                         <div class="build-preview-tree" id="build-preview-tree"><div class="text-muted p-3">No preview loaded.</div></div>
@@ -131,9 +145,13 @@
                         <div class="build-preview-content">
                           <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
                             <div><div class="overview-subtitle mb-0">Preview content</div><div class="text-muted small font-monospace text-break" id="build-preview-content-path">Select a generated file.</div></div>
-                            <span class="badge bg-secondary-lt" id="build-preview-content-size">-</span>
+                            <div class="d-flex align-items-center gap-2">
+                              <button class="btn btn-sm btn-ghost-secondary btn-icon" type="button" id="build-preview-copy-path" title="Copy file path"><i class="ti ti-copy"></i></button>
+                              <button class="btn btn-sm btn-ghost-secondary btn-icon" type="button" id="build-preview-copy-content" title="Copy file content"><i class="ti ti-copy-check"></i></button>
+                              <span class="badge bg-secondary-lt" id="build-preview-content-size">-</span>
+                            </div>
                           </div>
-                          <pre class="code-block build-preview-code" id="build-preview-content">No generated file selected.</pre>
+                          <div class="code-block build-preview-code" id="build-preview-content">No generated file selected.</div>
                         </div>
                       </div>
                     </div>
