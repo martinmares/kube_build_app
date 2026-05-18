@@ -198,6 +198,7 @@ function resetSelectedDetails() {
   setText('#app-detail-title', 'Select app');
   setText('#app-detail-path', '');
   setText('#app-detail-meta', '');
+  setHTML('#app-detail-badges', '');
   setHTML('#app-overview', '<div class="text-muted">Select an application to show structured model overview.</div>');
   setText('#app-raw', '');
   setText('#app-rendered', '');
@@ -207,6 +208,7 @@ function resetSelectedDetails() {
   setText('#app-diff', '');
   setText('#asset-detail-title', 'Select asset');
   setText('#asset-detail-path', '');
+  setHTML('#asset-detail-badges', '');
   setText('#asset-raw', '');
   qs('#asset-diff-section')?.classList.add('hidden');
   setText('#asset-diff', '');
@@ -246,6 +248,7 @@ function renderApps() {
     if (!query) return true;
     return [a.app_name, a.file_name, a.replicas, a.containers_count].some((value) => String(value ?? '').toLowerCase().includes(query));
   });
+  setText('#apps-filter-count', `${apps.length}/${state.apps.length}`);
   body.innerHTML = apps.map((a) => `
     <tr class="row-link ${state.appFile === a.file_name ? 'selected-row' : ''}" data-app="${esc(a.file_name)}">
       <td>
@@ -271,12 +274,30 @@ async function selectApp(file) {
     setText('#app-detail-title', model.app_name || detail.summary?.app_name || detail.file_name);
     setText('#app-detail-path', detail.path);
     setText('#app-detail-meta', `${model.containers?.length || 0} container(s), ${vars.items?.length || 0} local variable(s)${detail.is_dirty ? ', dirty file' : ''}`);
+    setHTML('#app-detail-badges', renderAppDetailBadges(model, detail));
     renderAppOverview(model);
     setText('#app-raw', detail.content);
     setText('#app-rendered', rendered.content);
     qs('#app-vars').innerHTML = (vars.items || []).map((v) => `<tr><td class="font-monospace">${esc(v.name)}</td><td class="font-monospace text-break">${esc(v.value)}</td></tr>`).join('') || '<tr><td colspan="2" class="text-muted">No local variables.</td></tr>';
     await loadGitDiff(`${state.env}/apps/${detail.file_name}`, detail.is_dirty, '#app-diff-section', '#app-diff');
   } catch (e) { showError(e); }
+}
+function renderAppDetailBadges(model, detail) {
+  const containers = model.containers || [];
+  const hasJava = containers.some((container) => container.runtime?.java?.enabled);
+  const hasLegacyProbes = containers.some((container) => container.probes?.legacy);
+  const hasProbes = containers.some((container) => container.probes?.enabled);
+  const badges = [
+    detail.is_dirty ? badge('dirty', 'bg-yellow-lt', 'ti-alert-triangle') : '',
+    model.autoscaling?.enabled ? badge('autoscaling', 'bg-blue-lt', 'ti-arrows-maximize') : '',
+    model.init_containers_count ? badge(`init ${model.init_containers_count}`, 'bg-purple-lt', 'ti-player-skip-forward') : '',
+    hasJava ? badge('java runtime', 'bg-orange-lt', 'ti-coffee') : '',
+    hasLegacyProbes ? badge('legacy probes', 'bg-yellow-lt', 'ti-alert-triangle') : hasProbes ? badge('probes', 'bg-green-lt', 'ti-heartbeat') : '',
+  ].filter(Boolean);
+  return badges.join('') || '<span class="badge bg-secondary-lt">basic app</span>';
+}
+function badge(label, color, icon) {
+  return `<span class="badge ${color}"><i class="ti ${icon} me-1"></i>${esc(label)}</span>`;
 }
 function renderAppOverview(model) {
   const host = qs('#app-overview');
@@ -370,6 +391,7 @@ function renderAssets() {
     if (!query) return true;
     return [asset.relative_path, asset.file_name, asset.driver, asset.size_bytes].some((value) => String(value ?? '').toLowerCase().includes(query));
   });
+  setText('#assets-filter-count', `${assets.length}/${state.assets.length}`);
   host.innerHTML = renderAssetTree(assets);
   qsa('[data-asset]').forEach((x) => x.addEventListener('click', () => selectAsset(x.dataset.asset)));
 }
@@ -453,19 +475,30 @@ function assetGitPath(relativePath) {
 async function selectAsset(path) {
   state.assetPath = path; renderAssets(); clearError();
   try {
+    const selectedAsset = state.assets.find((asset) => asset.relative_path === path);
     setText('#asset-detail-title', path);
     if (isSpecial(path)) {
       const entries = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/special/${encodeURIComponent(path)}/entries`);
       setText('#asset-detail-path', `${entries.entries?.length || 0} entrie(s), editable=${entries.editable}`);
+      setHTML('#asset-detail-badges', renderAssetDetailBadges(selectedAsset, entries));
       setText('#asset-raw', (entries.entries || []).map((e) => `${e.key} [${e.value_type}] = ${e.value_text}`).join('\n'));
       await loadGitDiff(`${state.env}/${path}`, entries.is_dirty, '#asset-diff-section', '#asset-diff');
     } else {
       const detail = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/content/${path.split('/').map(encodeURIComponent).join('/')}`);
       setText('#asset-detail-path', detail.path);
+      setHTML('#asset-detail-badges', renderAssetDetailBadges(selectedAsset, detail));
       setText('#asset-raw', detail.content);
       await loadGitDiff(`${state.env}/assets/${detail.relative_path}`, detail.is_dirty, '#asset-diff-section', '#asset-diff');
     }
   } catch (e) { showError(e); }
+}
+function renderAssetDetailBadges(asset, detail) {
+  return [
+    asset ? badge(asset.driver, 'bg-cyan-lt', 'ti-tag') : '',
+    asset ? badge(formatBytes(asset.size_bytes ?? 0), 'bg-secondary-lt', 'ti-database') : '',
+    detail?.is_dirty ? badge('dirty', 'bg-yellow-lt', 'ti-alert-triangle') : '',
+    detail && 'editable' in detail ? badge(detail.editable ? 'editable' : 'read-only', detail.editable ? 'bg-green-lt' : 'bg-secondary-lt', detail.editable ? 'ti-pencil' : 'ti-lock') : '',
+  ].filter(Boolean).join('');
 }
 function isSpecial(path) { return ['env.secured.json','env.unsecured.json','assets.secured.json','assets.unsecured.json'].includes(path); }
 async function loadGitDiff(relativePath, isDirty, sectionSelector, targetSelector) {
