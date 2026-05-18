@@ -150,8 +150,8 @@ module KubeBuildApp
 
       merged_obj = deep_merge_hashes(defaults_obj, app_obj)
       merged_obj["vars"] = merge_named_entries(defaults_obj["vars"], app_obj["vars"], "vars")
-      apply_container_env_var_defaults!(merged_obj, defaults_obj["container_env_vars"])
-      merged_obj.delete("container_env_vars")
+      apply_container_var_defaults!(merged_obj, defaults_obj["container_vars"])
+      merged_obj.delete("container_vars")
       apply_vars_inplace(merged_obj)
 
       merged_obj
@@ -228,11 +228,11 @@ module KubeBuildApp
       result
     end
 
-    def apply_container_env_var_defaults!(merged_obj, container_env_var_defaults)
+    def apply_container_var_defaults!(merged_obj, container_var_defaults)
       return unless merged_obj.is_a?(Hash)
       return unless merged_obj["containers"].is_a?(Array)
 
-      defaults = normalize_container_env_var_defaults(container_env_var_defaults)
+      defaults = normalize_container_var_defaults(container_var_defaults)
       wildcard_defaults = defaults.select { |item| item["name"] == "*" }
 
       merged_obj["containers"].each do |container|
@@ -240,21 +240,21 @@ module KubeBuildApp
 
         effective_defaults = []
         wildcard_defaults.each do |item|
-          effective_defaults = merge_named_entries(effective_defaults, item["env_vars"], "container_env_vars[*].env_vars")
+          effective_defaults = merge_named_entries(effective_defaults, item["vars"], "container_vars[*].vars")
         end
 
         defaults.each do |item|
           next if item["name"] == "*"
           next unless item["name"].to_s == container["name"].to_s
 
-          effective_defaults = merge_named_entries(effective_defaults, item["env_vars"], "container_env_vars[#{item['name']}].env_vars")
+          effective_defaults = merge_named_entries(effective_defaults, item["vars"], "container_vars[#{item['name']}].vars")
         end
 
-        merged_env_vars = merge_named_entries(effective_defaults, container["env_vars"], "containers[#{container['name']}].env_vars")
-        if merged_env_vars.empty?
-          container.delete("env_vars")
+        merged_vars = merge_named_entries(effective_defaults, container["vars"], "containers[#{container['name']}].vars")
+        if merged_vars.empty?
+          container.delete("vars")
         else
-          container["env_vars"] = merged_env_vars
+          container["vars"] = merged_vars
         end
       end
     end
@@ -286,24 +286,24 @@ module KubeBuildApp
       end
     end
 
-    def normalize_container_env_var_defaults(entries)
+    def normalize_container_var_defaults(entries)
       return [] if entries.nil?
-      raise ArgumentError, "#{@file_name}: 'container_env_vars' must be an array" unless entries.is_a?(Array)
+      raise ArgumentError, "#{@file_name}: 'container_vars' must be an array" unless entries.is_a?(Array)
 
       entries.each_with_index.map do |item, index|
-        raise ArgumentError, "#{@file_name}: 'container_env_vars[#{index}]' must be a mapping" unless item.is_a?(Hash)
+        raise ArgumentError, "#{@file_name}: 'container_vars[#{index}]' must be a mapping" unless item.is_a?(Hash)
 
         name = item["name"]
         if name.nil? || name.to_s.strip.empty?
-          raise ArgumentError, "#{@file_name}: 'container_env_vars[#{index}]' requires non-empty 'name'"
+          raise ArgumentError, "#{@file_name}: 'container_vars[#{index}]' requires non-empty 'name'"
         end
 
-        env_vars = item["env_vars"]
-        raise ArgumentError, "#{@file_name}: 'container_env_vars[#{index}].env_vars' must be an array" unless env_vars.is_a?(Array)
+        vars = item["vars"]
+        raise ArgumentError, "#{@file_name}: 'container_vars[#{index}].vars' must be an array" unless vars.is_a?(Array)
 
         {
           "name" => name.to_s,
-          "env_vars" => normalize_named_entries(env_vars, "container_env_vars[#{name}].env_vars", allow_remove: false),
+          "vars" => normalize_named_entries(vars, "container_vars[#{name}].vars", allow_remove: false),
         }
       end
     end

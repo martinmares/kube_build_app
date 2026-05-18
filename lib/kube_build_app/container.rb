@@ -5,13 +5,13 @@ module KubeBuildApp
     require_relative "asset"
     require_relative "service"
 
-    attr_reader :content, :name, :startup, :simple_init, :mtls, :env_vars, :assets, :ports, :services, :resources, :shared_assets,
+    attr_reader :content, :name, :startup, :simple_init, :mtls, :vars, :assets, :ports, :services, :resources, :shared_assets,
                 :env, :health, :probe, :raw
     attr_accessor :image
     TOOLS_VOLUME_NAME = "app-tools"
     TOOLS_MOUNT_PATH = "/app/tools"
     MTLS_ENC_MOUNT_DIR = "/app/mtls.enc"
-    CGROUP_EXPORTER_DEFAULT_ENV_VARS = [
+    CGROUP_EXPORTER_DEFAULT_VARS = [
       { "name" => "CGROUP_EXPORTER_METRICS_PREFIX", "value" => "{{TSM_METRICS_PREFIX}}" },
       { "name" => "CGROUP_EXPORTER_METRICS_STATIC_LABELS", "value" => "cluster_name={{TSM_CLUSTER_NAME}}" },
       { "name" => "CGROUP_EXPORTER_LISTEN", "value" => "0.0.0.0:9393" },
@@ -32,7 +32,7 @@ module KubeBuildApp
       @startup = content["startup"]
       @simple_init = content["simple_init"]
       @mtls = content["mtls"]
-      @env_vars = content["env_vars"]
+      @vars = content["vars"]
       @assets = Asset::load_assets(@app_name, @name, @env, content["assets"])
       append_mtls_assets! if mtls_enabled?
       @ports = content["ports"]
@@ -189,8 +189,8 @@ module KubeBuildApp
       result["ports"] = Container::build_ports(container.ports) if container.ports
       result["command"] = container.startup["command"] if container.startup
       result["args"] = container.startup["arguments"] if container.startup
-      effective_env_vars = Container::build_effective_env_vars(container)
-      result["env"] = Container::build_env_vars(effective_env_vars) if effective_env_vars && effective_env_vars.size > 0
+      effective_vars = Container::build_effective_vars(container)
+      result["env"] = Container::build_vars(effective_vars) if effective_vars && effective_vars.size > 0
       result["imagePullPolicy"] = "Always"
       result["resources"] = Container::build_resources(container.resources)
       # result["securityContext"] = {
@@ -314,9 +314,9 @@ module KubeBuildApp
       result
     end
 
-    def self.build_env_vars(env_vars)
+    def self.build_vars(vars)
       result = Array.new
-      env_vars.each do |var|
+      vars.each do |var|
         if var.has_key? "secret_name"
           result << { "name" => var["name"],
                       "valueFrom" => { "secretKeyRef" => { "key" => var["key"], "name" => var["secret_name"] } } }
@@ -333,24 +333,24 @@ module KubeBuildApp
       result
     end
 
-    def self.build_effective_env_vars(container)
+    def self.build_effective_vars(container)
       result = []
 
       if container.enable_cgroup_exporter?
-        CGROUP_EXPORTER_DEFAULT_ENV_VARS.each do |var|
+        CGROUP_EXPORTER_DEFAULT_VARS.each do |var|
           result << var.dup
         end
       end
 
-      if container.env_vars.is_a?(Array)
-        container.env_vars.each do |var|
+      if container.vars.is_a?(Array)
+        container.vars.each do |var|
           result << var
         end
       end
 
       return result if result.empty?
 
-      # keep last item for same env var name => explicit app env_vars override defaults
+      # keep last item for same env var name => explicit app vars override defaults
       dedup = {}
       result.each do |var|
         next unless var.is_a?(Hash)
@@ -539,7 +539,7 @@ end
           - /app/start-java.sh
           - /app/tsm-address-management.json.tpl
           - cz.datalite.tsm.am.TsmAddressManagementApplicationKt
-      env_vars:
+      vars:
         - name: JAVA_ARGS
           value: -XX:+UseContainerSupport -XX:InitialRAMPercentage=50.0 -XX:MinRAMPercentage=25.0
             -XX:MaxRAMPercentage=75.0 -Dmanagement.endpoints.web.exposure.include=prometheus,health,info,metrics
