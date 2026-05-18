@@ -22,21 +22,29 @@ function openModalElement(modalEl, focusEl, onClosed = null) {
   if (!modalEl) return () => {};
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop fade show';
+  const openDepth = qsa('.modal.show').length;
+  const backdropZIndex = 1050 + openDepth * 20;
+  const modalZIndex = backdropZIndex + 5;
+  backdrop.style.zIndex = String(backdropZIndex);
+  modalEl.style.zIndex = String(modalZIndex);
   const closeButtons = Array.from(modalEl.querySelectorAll('[data-modal-close], [data-bs-dismiss="modal"], .btn-close'));
   const close = () => {
     modalEl.classList.remove('show');
     modalEl.style.display = 'none';
+    modalEl.style.removeProperty('z-index');
     modalEl.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('modal-open');
-    document.body.style.removeProperty('overflow');
     backdrop.remove();
+    if (!qs('.modal.show')) {
+      document.body.classList.remove('modal-open');
+      document.body.style.removeProperty('overflow');
+    }
     backdrop.removeEventListener('click', close);
     document.removeEventListener('keydown', onKeydown);
     closeButtons.forEach((button) => button.removeEventListener('click', close));
     onClosed?.();
   };
   const onKeydown = (e) => {
-    if (e.key === 'Escape') close();
+    if (e.key === 'Escape' && isTopModal(modalEl)) close();
   };
   backdrop.addEventListener('click', close);
   document.addEventListener('keydown', onKeydown);
@@ -49,6 +57,11 @@ function openModalElement(modalEl, focusEl, onClosed = null) {
   modalEl.classList.add('show');
   (focusEl || modalEl.querySelector('button, input, textarea, select'))?.focus();
   return close;
+}
+function isTopModal(modalEl) {
+  const shown = qsa('.modal.show');
+  if (!shown.length) return false;
+  return shown.reduce((top, item) => Number(item.style.zIndex || 0) > Number(top.style.zIndex || 0) ? item : top, shown[0]) === modalEl;
 }
 function confirmAction({title, body, subject = '', confirmLabel = 'Confirm', confirmClass = 'btn-warning', icon = 'ti-alert-triangle', statusClass = 'bg-warning'} = {}) {
   const modalEl = qs('#confirm-modal');
