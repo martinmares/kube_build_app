@@ -335,7 +335,7 @@ func runSkeletonEnv(cmd *cobra.Command, opts *cliOptions) error {
 	defaultsPath := filepath.Join(appsDir, "_defaults.yml")
 	defaults := []byte(`# Shared defaults for apps in this environment.
 vars: []
-container_env_vars: []
+container_vars: []
 `)
 	if err := writeFileNoClobber(defaultsPath, defaults, opts.force); err != nil {
 		return fmt.Errorf("skeleton env failed: %w", err)

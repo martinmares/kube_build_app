@@ -242,7 +242,7 @@ name: "{{var:APP_NAME}}"
 containers:
   - name: "{{var:APP_NAME}}"
     image: "{{env:TSM_REGISTRY_URL}}/{{var:APP_NAME}}:{{env:TSM_RELEASE_ID}}"
-    env_vars:
+    vars:
       - name: RUNTIME_VALUE
         value: "{{RUNTIME_VALUE}}"
 ```
@@ -492,7 +492,7 @@ Přidejte:
 containers:
   - name: api
     image: nginx:stable
-    env_vars:
+    vars:
       - name: JAVA_OPTS
         value: "-Xms256m -Xmx512m"
       - name: POD_NAME
@@ -544,7 +544,7 @@ env:
     value: "-Xms512m -Xmx2048m -XX:+UseG1GC"
 ```
 
-`export.env_name` má default `JAVA_OPTS`. Pokud je stejná proměnná zároveň ručně uvedená v `env_vars`, validace skončí chybou. Díky tomu je JVM heap sizing viditelný v `kube-build-app summary` a nevznikají skryté konflikty se startup skripty.
+`export.env_name` má default `JAVA_OPTS`. Pokud je stejná proměnná zároveň ručně uvedená v `vars`, validace skončí chybou. Díky tomu je JVM heap sizing viditelný v `kube-build-app summary` a nevznikají skryté konflikty se startup skripty.
 
 ### 5. Porty a Services
 
@@ -967,7 +967,7 @@ init_containers:
     image: registry.example.com/api-migrate:latest
     command: ["/bin/sh", "-c"]
     arguments: ["./migrate.sh"]
-    env_vars:
+    vars:
       - name: LOG_LEVEL
         value: INFO
     env_from:
@@ -993,7 +993,7 @@ Podporovaná pole init containeru záměrně kopírují běžnou podmnožinu sta
 - `image`
 - `command`
 - `arguments`
-- `env_vars`
+- `vars`
 - `env_from`
 - `mounts`
 - `security_context`
@@ -1039,7 +1039,7 @@ Dedikovaná modelová pole jsou lepší, protože se dají validovat a zobrazit 
 
 ### 18. Cgroup Exporter Defaults
 
-Na úrovni containeru lze zapnout automatické vkládání env var pro cgroup exporter:
+Na úrovni containeru lze zapnout automatické vkládání variable pro cgroup exporter:
 
 ```yaml
 containers:
@@ -1088,14 +1088,14 @@ vars:
   - name: LOG_LEVEL
     value: INFO
 
-container_env_vars:
+container_vars:
   - name: "*"
-    env_vars:
+    vars:
       - name: GLOBAL_FLAG
         value: "true"
 
   - name: api
-    env_vars:
+    vars:
       - name: JAVA_OPTS
         value: "-Xms256m"
 ```
@@ -1104,11 +1104,11 @@ Semantika:
 
 - obecné map klíče se rekurzivně mergují, app hodnoty vítězí
 - `vars` se párují podle `name`; app položka plně nahradí default položku
-- `container_env_vars` se aplikují podle `container.name`
+- `container_vars` se aplikují podle `container.name`
 - `name: "*"` se aplikuje na všechny containery jako první
 - concrete container defaults se aplikují potom
-- lokální `containers[].env_vars` se aplikují poslední
-- shodné env vars se plně nahrazují podle `name`
+- lokální `containers[].vars` se aplikují poslední
+- shodné variables se plně nahrazují podle `name`
 
 Mazání / tombstone:
 
@@ -1121,7 +1121,7 @@ vars:
 ```yaml
 containers:
   - name: api
-    env_vars:
+    vars:
       - name: GLOBAL_FLAG
         remove: true
 ```

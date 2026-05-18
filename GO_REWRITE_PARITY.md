@@ -52,7 +52,7 @@ kube-env-gui
 - structured defaults editor model
 - structured env editor model
 - structured virtual asset editor model
-- partial effective vars / container env vars preview logic
+- partial effective vars / container vars preview logic
 
 This is useful for the Go rewrite, but it must not become the primary rendering reference.
 
@@ -67,7 +67,7 @@ Practical implication:
 
 - When designing Go structs, compare them with both Ruby classes and Rust `kube-env-core` structs.
 - When behavior differs between Ruby and Rust UI preview logic, Ruby wins for rendering.
-- Rust UI preview logic can reveal useful intended semantics, especially for `_defaults.yml`, `vars`, `container_env_vars` and virtual assets.
+- Rust UI preview logic can reveal useful intended semantics, especially for `_defaults.yml`, `vars`, `container_vars` and virtual assets.
 
 ### CETIN TSM
 
@@ -248,7 +248,7 @@ At minimum:
 - labels and annotations
 - Deployment / StatefulSet pod template
 - containers, initContainers, images, commands and args
-- env vars and env value sources
+- variables and env value sources
 - resources
 - probes
 - ports
@@ -267,7 +267,7 @@ These areas are easy to accidentally change during rewrite:
 - env resolution order
 - `apps/_defaults.yml` merge semantics
 - `vars` replacement and `remove: true`
-- `container_env_vars` wildcard and container-specific overrides
+- `container_vars` wildcard and container-specific overrides
 - asset `transform: true` vs `transform: false`
 - asset ConfigMap CRC32 naming
 - rollout checksum SHA256 annotations
@@ -285,7 +285,7 @@ Implemented in the initial Go renderer skeleton:
 - basic Deployment and StatefulSet generation
 - PodDisruptionBudget generation
 - `apps/_defaults.yml` recursive merge
-- `vars` and `container_env_vars` override/remove semantics
+- `vars` and `container_vars` override/remove semantics
 - `ignore`, `disable_create_service` and `disable_shared_assets`
 - `replica-profiles.yml` via `-p`, `REPLICA_PROFILE` or `defaults.profile`
 - standard file assets, transformed assets, binary assets and MTLS assets
@@ -297,7 +297,7 @@ Implemented in the initial Go renderer skeleton:
 - external Route/Ingress generation for `expose_as[].external`
 - inventory JSON output via `-i`
 - tools initContainers and `/app/tools` mount
-- cgroup exporter default env var injection
+- cgroup exporter default variable injection
 - `validate` subcommand for current model validation rules
 - release manifest image overrides via `-r`
 - scale-down overrides via `-w`

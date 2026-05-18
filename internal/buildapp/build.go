@@ -191,7 +191,7 @@ type containerSpec struct {
 	Image                string                    `yaml:"image"`
 	Assets               []assetSpec               `yaml:"assets"`
 	Mounts               []mountSpec               `yaml:"mounts"`
-	EnvVars              []envVar                  `yaml:"env_vars"`
+	Vars                 []envVar                  `yaml:"vars"`
 	MTLS                 mtlsSpec                  `yaml:"mtls"`
 	Ports                []portSpec                `yaml:"ports"`
 	Health               healthSpec                `yaml:"health"`
@@ -229,7 +229,7 @@ type initContainerSpec struct {
 	Command         []string                  `yaml:"command"`
 	Arguments       []string                  `yaml:"arguments"`
 	Mounts          []mountSpec               `yaml:"mounts"`
-	EnvVars         []envVar                  `yaml:"env_vars"`
+	Vars            []envVar                  `yaml:"vars"`
 	EnvFrom         []envFromSpec             `yaml:"env_from"`
 	Resources       map[string]map[string]any `yaml:"resources"`
 	SecurityContext map[string]any            `yaml:"security_context"`
@@ -445,9 +445,9 @@ type envVar struct {
 	Remove       bool   `yaml:"remove,omitempty"`
 }
 
-type containerEnvVarDefault struct {
-	Name    string   `yaml:"name"`
-	EnvVars []envVar `yaml:"env_vars"`
+type containerVarDefault struct {
+	Name string   `yaml:"name"`
+	Vars []envVar `yaml:"vars"`
 }
 
 type startupSpec struct {
@@ -455,7 +455,7 @@ type startupSpec struct {
 	Arguments []string `yaml:"arguments"`
 }
 
-var cgroupExporterDefaultEnvVars = []envVar{
+var cgroupExporterDefaultVars = []envVar{
 	{Name: "CGROUP_EXPORTER_METRICS_PREFIX", Value: "{{TSM_METRICS_PREFIX}}"},
 	{Name: "CGROUP_EXPORTER_METRICS_STATIC_LABELS", Value: "cluster_name={{TSM_CLUSTER_NAME}}"},
 	{Name: "CGROUP_EXPORTER_LISTEN", Value: "0.0.0.0:9393"},
@@ -483,7 +483,7 @@ func Build(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("apps directory not found: %s", appsDir)
 	}
 
-	vars, err := loadEnvVars(envDir, opts)
+	vars, err := loadVars(envDir, opts)
 	if err != nil {
 		return Result{}, err
 	}
@@ -677,7 +677,7 @@ func Inventory(opts Options) (map[string]any, error) {
 	if !isDir(appsDir) {
 		return nil, fmt.Errorf("apps directory not found: %s", appsDir)
 	}
-	vars, err := loadEnvVars(envDir, opts)
+	vars, err := loadVars(envDir, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -765,7 +765,7 @@ func Validate(opts Options) error {
 	if !isDir(appsDir) {
 		return fmt.Errorf("apps directory not found: %s", appsDir)
 	}
-	vars, err := loadEnvVars(envDir, opts)
+	vars, err := loadVars(envDir, opts)
 	if err != nil {
 		return err
 	}
@@ -916,7 +916,7 @@ func loadPreparedApps(opts Options, applyProfileAndDown bool) ([]appModel, strin
 	if !isDir(appsDir) {
 		return nil, "", nil, fmt.Errorf("apps directory not found: %s", appsDir)
 	}
-	vars, err := loadEnvVars(envDir, opts)
+	vars, err := loadVars(envDir, opts)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -1086,7 +1086,7 @@ func parseMemoryMiB(value string) float64 {
 	return parsed * multiplier
 }
 
-func loadEnvVars(envDir string, opts Options) (map[string]string, error) {
+func loadVars(envDir string, opts Options) (map[string]string, error) {
 	vars := map[string]string{}
 	sources, envFile, decryptSecured, err := effectiveVarsSources(opts)
 	if err != nil {
@@ -1294,7 +1294,7 @@ func loadDotEnvFile(vars map[string]string, path string) error {
 	return nil
 }
 
-func loadEnvVarsLegacy(envDir string) (map[string]string, error) {
+func loadVarsLegacy(envDir string) (map[string]string, error) {
 	vars := map[string]string{}
 	unsecuredPath := filepath.Join(envDir, "env.unsecured.json")
 	if isFile(unsecuredPath) {
@@ -1356,8 +1356,8 @@ func validateApps(apps []appModel) error {
 		for _, container := range app.Containers {
 			if javaRuntimeEnabled(container.Runtime.Java) {
 				envName := javaRuntimeEnvName(container.Runtime.Java)
-				if containerHasEnvVar(container.EnvVars, envName) {
-					return fmt.Errorf("%s: container %q defines runtime.java export env %q and env_vars with the same name", app.Name, container.Name, envName)
+				if containerHasEnvVar(container.Vars, envName) {
+					return fmt.Errorf("%s: container %q defines runtime.java export env %q and vars with the same name", app.Name, container.Name, envName)
 				}
 			}
 			if !container.SimpleInit.Enabled {
@@ -1638,7 +1638,7 @@ func listAppFiles(appsDir string) ([]string, error) {
 	return files, nil
 }
 
-func loadApp(path string, defaultsPath string, envVars map[string]string) (appModel, error) {
+func loadApp(path string, defaultsPath string, vars map[string]string) (appModel, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return appModel{}, err
@@ -1648,8 +1648,8 @@ func loadApp(path string, defaultsPath string, envVars map[string]string) (appMo
 		return appModel{}, err
 	}
 
-	content := applyEnvPlaceholders(string(raw), envVars)
-	defaultsContent := applyEnvPlaceholders(defaultsRaw, envVars)
+	content := applyEnvPlaceholders(string(raw), vars)
+	defaultsContent := applyEnvPlaceholders(defaultsRaw, vars)
 	defaultVars, err := extractVariableList(defaultsContent)
 	if err != nil {
 		return appModel{}, fmt.Errorf("%s: %w", defaultsPath, err)
@@ -1739,7 +1739,7 @@ func mergeDefaults(defaultsContent, appContent string) (string, error) {
 		return "", err
 	}
 
-	containerEnvDefaults, err := parseContainerEnvVarDefaults(mappingValue(defaultsNode, "container_env_vars"))
+	containerVarDefaults, err := parseContainerVarDefaults(mappingValue(defaultsNode, "container_vars"))
 	if err != nil {
 		return "", err
 	}
@@ -1750,8 +1750,8 @@ func mergeDefaults(defaultsContent, appContent string) (string, error) {
 		return "", err
 	}
 	setMappingValue(merged, "vars", mergedVars)
-	removeMappingValue(merged, "container_env_vars")
-	if err := applyContainerEnvVarDefaults(merged, containerEnvDefaults); err != nil {
+	removeMappingValue(merged, "container_vars")
+	if err := applyContainerVarDefaults(merged, containerVarDefaults); err != nil {
 		return "", err
 	}
 
@@ -1762,18 +1762,18 @@ func mergeDefaults(defaultsContent, appContent string) (string, error) {
 	return string(out), nil
 }
 
-func parseContainerEnvVarDefaults(node *yaml.Node) ([]containerEnvVarDefault, error) {
+func parseContainerVarDefaults(node *yaml.Node) ([]containerVarDefault, error) {
 	if node == nil {
 		return nil, nil
 	}
-	var items []containerEnvVarDefault
+	var items []containerVarDefault
 	if err := node.Decode(&items); err != nil {
 		return nil, err
 	}
 	return items, nil
 }
 
-func applyContainerEnvVarDefaults(root *yaml.Node, defaults []containerEnvVarDefault) error {
+func applyContainerVarDefaults(root *yaml.Node, defaults []containerVarDefault) error {
 	if len(defaults) == 0 {
 		return nil
 	}
@@ -1790,30 +1790,30 @@ func applyContainerEnvVarDefaults(root *yaml.Node, defaults []containerEnvVarDef
 		effective := []envVar{}
 		for _, item := range defaults {
 			if item.Name == "*" {
-				effective = mergeEnvVars(effective, item.EnvVars)
+				effective = mergeVars(effective, item.Vars)
 			}
 		}
 		for _, item := range defaults {
 			if item.Name != "*" && item.Name == containerName {
-				effective = mergeEnvVars(effective, item.EnvVars)
+				effective = mergeVars(effective, item.Vars)
 			}
 		}
 
-		local, err := parseEnvVarsNode(mappingValue(containerNode, "env_vars"), true)
+		local, err := parseVarsNode(mappingValue(containerNode, "vars"), true)
 		if err != nil {
 			return err
 		}
-		effective = mergeEnvVars(effective, local)
+		effective = mergeVars(effective, local)
 		if len(effective) == 0 {
-			removeMappingValue(containerNode, "env_vars")
+			removeMappingValue(containerNode, "vars")
 		} else {
-			setMappingValue(containerNode, "env_vars", envVarsToNode(effective))
+			setMappingValue(containerNode, "vars", varsToNode(effective))
 		}
 	}
 	return nil
 }
 
-func parseEnvVarsNode(node *yaml.Node, allowRemove bool) ([]envVar, error) {
+func parseVarsNode(node *yaml.Node, allowRemove bool) ([]envVar, error) {
 	if node == nil {
 		return nil, nil
 	}
@@ -1823,7 +1823,7 @@ func parseEnvVarsNode(node *yaml.Node, allowRemove bool) ([]envVar, error) {
 	}
 	for _, item := range items {
 		if item.Name == "" {
-			return nil, errors.New("env_vars item is missing name")
+			return nil, errors.New("vars item is missing name")
 		}
 		if item.Remove && !allowRemove {
 			return nil, errors.New("remove: true is not allowed here")
@@ -1832,7 +1832,7 @@ func parseEnvVarsNode(node *yaml.Node, allowRemove bool) ([]envVar, error) {
 	return items, nil
 }
 
-func mergeEnvVars(defaults []envVar, overrides []envVar) []envVar {
+func mergeVars(defaults []envVar, overrides []envVar) []envVar {
 	result := make([]envVar, 0, len(defaults)+len(overrides))
 	positions := map[string]int{}
 	for _, item := range defaults {
@@ -1873,7 +1873,7 @@ func rebuildEnvVarPositions(items []envVar) map[string]int {
 	return positions
 }
 
-func envVarsToNode(items []envVar) *yaml.Node {
+func varsToNode(items []envVar) *yaml.Node {
 	node := &yaml.Node{Kind: yaml.SequenceNode}
 	for _, item := range items {
 		itemNode := &yaml.Node{Kind: yaml.MappingNode}
@@ -2476,9 +2476,9 @@ func renderContainer(container containerSpec, assets []resolvedAsset, sharedAsse
 	if len(container.SecurityContext) > 0 {
 		out["securityContext"] = cloneMap(container.SecurityContext)
 	}
-	envVars := effectiveContainerEnvVars(container)
-	if len(envVars) > 0 {
-		out["env"] = renderEnvVars(envVars)
+	vars := effectiveContainerVars(container)
+	if len(vars) > 0 {
+		out["env"] = renderVars(vars)
 	}
 	if envFrom := renderEnvFrom(container.EnvFrom); len(envFrom) > 0 {
 		out["envFrom"] = envFrom
@@ -2550,8 +2550,8 @@ func renderInitContainer(container initContainerSpec, assets []resolvedAsset, mo
 	if len(container.SecurityContext) > 0 {
 		out["securityContext"] = cloneMap(container.SecurityContext)
 	}
-	if len(container.EnvVars) > 0 {
-		out["env"] = renderEnvVars(container.EnvVars)
+	if len(container.Vars) > 0 {
+		out["env"] = renderVars(container.Vars)
 	}
 	if envFrom := renderEnvFrom(container.EnvFrom); len(envFrom) > 0 {
 		out["envFrom"] = envFrom
@@ -3454,7 +3454,7 @@ func renderRoute(serviceName string, namespace string, port serviceExternalPort,
 	}
 }
 
-func renderEnvVars(items []envVar) []map[string]any {
+func renderVars(items []envVar) []map[string]any {
 	out := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		env := map[string]any{"name": item.Name}
@@ -3487,15 +3487,15 @@ func renderEnvVars(items []envVar) []map[string]any {
 	return out
 }
 
-func effectiveContainerEnvVars(container containerSpec) []envVar {
+func effectiveContainerVars(container containerSpec) []envVar {
 	items := []envVar{}
 	if container.EnableCgroupExporter {
-		items = append(items, cgroupExporterDefaultEnvVars...)
+		items = append(items, cgroupExporterDefaultVars...)
 	}
 	if item, ok := renderJavaRuntimeEnvVar(container.Runtime.Java); ok {
 		items = append(items, item)
 	}
-	items = append(items, container.EnvVars...)
+	items = append(items, container.Vars...)
 	if len(items) == 0 {
 		return nil
 	}

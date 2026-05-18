@@ -345,7 +345,7 @@ init_containers:
     image: registry.example.com/api-migrate:latest
     command: ["/bin/sh", "-c"]
     arguments: ["./migrate.sh"]
-    env_vars:
+    vars:
       - name: LOG_LEVEL
         value: INFO
     env_from:
@@ -368,7 +368,7 @@ init_containers:
 Supported fields intentionally mirror the common subset of regular containers:
 
 ```text
-name, image, command, arguments, env_vars, env_from, mounts, security_context, resources, runtime.java, raw
+name, image, command, arguments, vars, env_from, mounts, security_context, resources, runtime.java, raw
 ```
 
 ## Resources Direction
@@ -421,8 +421,8 @@ Contract:
 - `runtime.java.xmx` renders as `-Xmx...`.
 - `runtime.java.opts` is appended after `xms` and `xmx`.
 - `runtime.java.export.env_name` defaults to `JAVA_OPTS`.
-- A manual `env_vars` item with the same name is a validation error.
-- Other runtimes are intentionally left to `env_vars` and `raw` until a repeated real pattern appears.
+- A manual `vars` item with the same name is a validation error.
+- Other runtimes are intentionally left to `vars` and `raw` until a repeated real pattern appears.
 
 ## Raw Escape Hatch Direction
 

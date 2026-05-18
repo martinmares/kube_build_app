@@ -160,7 +160,7 @@ containers:
 	}
 }
 
-func TestLoadEnvVarsDecryptSecuredUsesEncjsonAPISelection(t *testing.T) {
+func TestLoadVarsDecryptSecuredUsesEncjsonAPISelection(t *testing.T) {
 	root := t.TempDir()
 	envDir := filepath.Join(root, "test")
 	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
@@ -181,7 +181,7 @@ func TestLoadEnvVarsDecryptSecuredUsesEncjsonAPISelection(t *testing.T) {
 	t.Setenv("ENCJSON_LEGACY_PATH", legacyBin)
 	t.Setenv("ENCJSON_KEYDIR", keydir)
 
-	vars, err := loadEnvVars(envDir, Options{DecryptSecured: true})
+	vars, err := loadVars(envDir, Options{DecryptSecured: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestLoadEnvVarsDecryptSecuredUsesEncjsonAPISelection(t *testing.T) {
 	}
 }
 
-func TestLoadEnvVarsDecryptSecuredUsesLegacyEncjsonForAPI1(t *testing.T) {
+func TestLoadVarsDecryptSecuredUsesLegacyEncjsonForAPI1(t *testing.T) {
 	root := t.TempDir()
 	envDir := filepath.Join(root, "test")
 	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
@@ -223,7 +223,7 @@ func TestLoadEnvVarsDecryptSecuredUsesLegacyEncjsonForAPI1(t *testing.T) {
 	t.Setenv("ENCJSON_LEGACY_PATH", legacyBin)
 	t.Setenv("ENCJSON_KEYDIR", filepath.Join(t.TempDir(), "keys"))
 
-	vars, err := loadEnvVars(envDir, Options{DecryptSecured: true})
+	vars, err := loadVars(envDir, Options{DecryptSecured: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestLoadEnvVarsDecryptSecuredUsesLegacyEncjsonForAPI1(t *testing.T) {
 	}
 }
 
-func TestLoadEnvVarsDecryptSecuredOmitsKeydirWhenUnset(t *testing.T) {
+func TestLoadVarsDecryptSecuredOmitsKeydirWhenUnset(t *testing.T) {
 	root := t.TempDir()
 	envDir := filepath.Join(root, "test")
 	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
@@ -253,7 +253,7 @@ func TestLoadEnvVarsDecryptSecuredOmitsKeydirWhenUnset(t *testing.T) {
 	t.Setenv("ENCJSON_PATH", rustBin)
 	t.Setenv("ENCJSON_KEYDIR", "")
 
-	vars, err := loadEnvVars(envDir, Options{DecryptSecured: true})
+	vars, err := loadVars(envDir, Options{DecryptSecured: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -900,7 +900,7 @@ init_containers:
     image: "{{TSM_REGISTRY_URL}}/api-migrate:{{TSM_RELEASE_ID}}"
     command: ["/bin/sh", "-c"]
     arguments: ["./migrate.sh"]
-    env_vars:
+    vars:
       - name: LOG_LEVEL
         value: INFO
     env_from:
@@ -1292,7 +1292,7 @@ containers:
   - name: api
     image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
     enable_cgroup_exporter: true
-    env_vars:
+    vars:
       - name: CGROUP_EXPORTER_LISTEN
         value: "127.0.0.1:9393"
     startup:
@@ -1512,7 +1512,7 @@ containers:
       java:
         xms: "512m"
         xmx: "1024m"
-    env_vars:
+    vars:
       - name: JAVA_OPTS
         value: "-Xmx256m"
     resources:
@@ -2575,7 +2575,7 @@ containers:
 	}
 }
 
-func TestBuildAppliesContainerEnvVarDefaultsOverrideAndRemove(t *testing.T) {
+func TestBuildAppliesContainerVarDefaultsOverrideAndRemove(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
 	envDir := filepath.Join(root, "test")
@@ -2587,16 +2587,16 @@ func TestBuildAppliesContainerEnvVarDefaultsOverrideAndRemove(t *testing.T) {
 		},
 	})
 	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
-container_env_vars:
+container_vars:
   - name: "*"
-    env_vars:
+    vars:
       - name: GLOBAL_FLAG
         value: "true"
       - name: SHARED_SECRET
         secret_name: shared-secret
         key: shared-key
   - name: "api"
-    env_vars:
+    vars:
       - name: SERVICE_ONLY
         value: "service-default"
 `)
@@ -2606,7 +2606,7 @@ replicas: 1
 containers:
   - name: api
     image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
-    env_vars:
+    vars:
       - name: GLOBAL_FLAG
         value: "false"
       - name: SHARED_SECRET

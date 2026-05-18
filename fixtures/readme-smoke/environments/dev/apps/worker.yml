@@ -4,7 +4,7 @@ disable_create_service: true
 containers:
   - name: worker
     image: "{{env:TSM_REGISTRY_URL}}/worker:{{env:TSM_RELEASE_ID}}"
-    env_vars:
+    vars:
       - name: WORKER_QUEUE
         value: default
     resources:

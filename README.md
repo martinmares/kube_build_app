@@ -242,7 +242,7 @@ name: "{{var:APP_NAME}}"
 containers:
   - name: "{{var:APP_NAME}}"
     image: "{{env:TSM_REGISTRY_URL}}/{{var:APP_NAME}}:{{env:TSM_RELEASE_ID}}"
-    env_vars:
+    vars:
       - name: RUNTIME_VALUE
         value: "{{RUNTIME_VALUE}}"
 ```
@@ -492,7 +492,7 @@ Add:
 containers:
   - name: api
     image: nginx:stable
-    env_vars:
+    vars:
       - name: JAVA_OPTS
         value: "-Xms256m -Xmx512m"
       - name: POD_NAME
@@ -544,7 +544,7 @@ env:
     value: "-Xms512m -Xmx2048m -XX:+UseG1GC"
 ```
 
-`export.env_name` defaults to `JAVA_OPTS`. If the same variable is also specified manually in `env_vars`, validation fails. This keeps JVM heap sizing visible in `kube-build-app summary` and avoids hidden conflicts with startup scripts.
+`export.env_name` defaults to `JAVA_OPTS`. If the same variable is also specified manually in `vars`, validation fails. This keeps JVM heap sizing visible in `kube-build-app summary` and avoids hidden conflicts with startup scripts.
 
 ### 5. Ports and Services
 
@@ -967,7 +967,7 @@ init_containers:
     image: registry.example.com/api-migrate:latest
     command: ["/bin/sh", "-c"]
     arguments: ["./migrate.sh"]
-    env_vars:
+    vars:
       - name: LOG_LEVEL
         value: INFO
     env_from:
@@ -993,7 +993,7 @@ Supported init container fields intentionally mirror the common subset of regula
 - `image`
 - `command`
 - `arguments`
-- `env_vars`
+- `vars`
 - `env_from`
 - `mounts`
 - `security_context`
@@ -1039,7 +1039,7 @@ Dedicated model fields are preferred because they can be validated and represent
 
 ### 18. Cgroup Exporter Defaults
 
-At container level you can enable automatic env var injection for cgroup exporter:
+At container level you can enable automatic variable injection for cgroup exporter:
 
 ```yaml
 containers:
@@ -1088,14 +1088,14 @@ vars:
   - name: LOG_LEVEL
     value: INFO
 
-container_env_vars:
+container_vars:
   - name: "*"
-    env_vars:
+    vars:
       - name: GLOBAL_FLAG
         value: "true"
 
   - name: api
-    env_vars:
+    vars:
       - name: JAVA_OPTS
         value: "-Xms256m"
 ```
@@ -1104,11 +1104,11 @@ Semantics:
 
 - generic map keys are recursively merged, app values win
 - `vars` are matched by `name`; app-level item fully replaces default item
-- `container_env_vars` are applied by `container.name`
+- `container_vars` are applied by `container.name`
 - `name: "*"` applies to all containers first
 - concrete container defaults are applied next
-- local `containers[].env_vars` are applied last
-- matching env vars are fully replaced by `name`
+- local `containers[].vars` are applied last
+- matching variables are fully replaced by `name`
 
 Removal / tombstone:
 
@@ -1121,7 +1121,7 @@ vars:
 ```yaml
 containers:
   - name: api
-    env_vars:
+    vars:
       - name: GLOBAL_FLAG
         remove: true
 ```
