@@ -61,6 +61,7 @@ async function init() {
     renderInventory();
   });
   qs('#app-vars-save-btn')?.addEventListener('click', () => saveAppVars());
+  qs('#app-replicas-save-btn')?.addEventListener('click', () => saveAppReplicas());
   qs('#app-vars-add-btn')?.addEventListener('click', () => addAppVarRow());
   qs('#app-vars')?.addEventListener('click', (e) => {
     const button = e.target.closest('[data-remove-app-var]');
@@ -269,6 +270,7 @@ function resetSelectedDetails() {
   setHTML('#app-overview', '<div class="text-muted">Select an application to show structured model overview.</div>');
   setText('#app-raw', '');
   setText('#app-rendered', '');
+  renderAppReplicasEditor(null);
   const appVarsBody = qs('#app-vars tbody');
   if (appVarsBody) appVarsBody.innerHTML = '';
   qs('#app-diff-section')?.classList.add('hidden');
@@ -344,6 +346,7 @@ async function selectApp(file) {
     setText('#app-detail-meta', `${model.containers?.length || 0} container(s), ${vars.items?.length || 0} local variable(s)${detail.is_dirty ? ', dirty file' : ''}`);
     setHTML('#app-detail-badges', renderAppDetailBadges(model, detail));
     renderAppOverview(model);
+    renderAppReplicasEditor(model);
     setText('#app-raw', detail.content);
     setText('#app-rendered', rendered.content);
     renderAppVarsEditor(vars.items || []);
@@ -359,6 +362,22 @@ function renderAppVarsEditor(items) {
   if (save) save.disabled = state.readOnly || !state.appFile;
   const add = qs('#app-vars-add-btn');
   if (add) add.disabled = state.readOnly || !state.appFile;
+}
+function renderAppReplicasEditor(model) {
+  const input = qs('#app-replicas-input');
+  const save = qs('#app-replicas-save-btn');
+  const hint = qs('#app-replicas-hint');
+  const selected = !!model && !!state.appFile;
+  if (input) {
+    input.value = selected && model.replicas !== null && model.replicas !== undefined ? model.replicas : '';
+    input.disabled = state.readOnly || !selected;
+  }
+  if (save) save.disabled = state.readOnly || !selected;
+  if (hint) {
+    if (!selected) hint.textContent = 'Select an application to edit replicas.';
+    else if (model.autoscaling?.enabled) hint.textContent = 'Autoscaling is enabled. Deployment replicas are initial desired state; runtime count is controlled by HPA.';
+    else hint.textContent = 'Updates the top-level replicas field in the app YAML.';
+  }
 }
 function renderAppVarRow(name = '', value = '') {
   const disabled = state.readOnly ? 'disabled' : '';
@@ -392,6 +411,23 @@ async function saveAppVars() {
   })).filter((item) => item.name !== '');
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/vars`, {items, expected_hash: state.appContentHash});
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
+}
+async function saveAppReplicas() {
+  if (!state.env || !state.appFile || state.readOnly) return;
+  const input = qs('#app-replicas-input');
+  const raw = input?.value ?? '';
+  const replicas = Number(raw);
+  if (!Number.isInteger(replicas) || replicas < 0) {
+    showError(new Error('Replicas must be an integer greater than or equal to 0.'));
+    return;
+  }
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/replicas`, {replicas, expected_hash: state.appContentHash});
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);

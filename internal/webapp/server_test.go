@@ -347,6 +347,32 @@ func TestAppVarsUpdateEndpointRejectsStaleHash(t *testing.T) {
 	}
 }
 
+func TestAppReplicasUpdateEndpoint(t *testing.T) {
+	root := t.TempDir()
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, "name: api\nreplicas: 1\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	body := `{"expected_hash":"` + detail.ContentHash + `","replicas":3}`
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/replicas", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"replicas":3`) {
+		t.Fatalf("unexpected response:\n%s", response.Body.String())
+	}
+}
+
 func TestAssetContentEndpoint(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "assets", "ui", "nginx.conf"), "server {}\n")

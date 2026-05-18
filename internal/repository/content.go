@@ -44,6 +44,13 @@ type AppVars struct {
 	Items       []VarItem `json:"items"`
 }
 
+type AppReplicas struct {
+	Env         string `json:"env"`
+	FileName    string `json:"file_name"`
+	ContentHash string `json:"content_hash"`
+	Replicas    *int   `json:"replicas"`
+}
+
 type VarItem struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
@@ -218,6 +225,36 @@ func (r *Repository) UpdateAppVars(envName string, appFile string, items []VarIt
 		return AppVars{}, err
 	}
 	return r.AppVars(envName, filepath.Base(path))
+}
+
+func (r *Repository) AppReplicas(envName string, appFile string) (AppReplicas, error) {
+	detail, err := r.AppDetail(envName, appFile)
+	if err != nil {
+		return AppReplicas{}, err
+	}
+	return AppReplicas{Env: envName, FileName: detail.FileName, ContentHash: detail.ContentHash, Replicas: detail.Summary.Replicas}, nil
+}
+
+func (r *Repository) UpdateAppReplicas(envName string, appFile string, replicas int, expectedHash string) (AppReplicas, error) {
+	if replicas < 0 {
+		return AppReplicas{}, errors.New("replicas must be greater than or equal to 0")
+	}
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return AppReplicas{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return AppReplicas{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return AppReplicas{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	updated := replaceTopLevelScalar(string(contentBytes), "replicas", strconv.Itoa(replicas))
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return AppReplicas{}, err
+	}
+	return r.AppReplicas(envName, filepath.Base(path))
 }
 
 func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) {
@@ -521,6 +558,38 @@ func replaceVarsBlock(content string, items []VarItem) string {
 	}
 	out := strings.Join(lines, "\n")
 	if strings.HasSuffix(content, "\n") {
+		out += "\n"
+	}
+	return out
+}
+
+func replaceTopLevelScalar(content string, key string, value string) string {
+	lines := strings.Split(content, "\n")
+	prefix := key + ":"
+	for idx, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			lines[idx] = prefix + " " + value
+			out := strings.Join(lines, "\n")
+			if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
+				out += "\n"
+			}
+			return out
+		}
+	}
+	insertAt := 0
+	if len(lines) > 0 && strings.HasPrefix(lines[0], "vars:") {
+		_, start, end := splitVarsBlock(content)
+		if start == 0 && end > 0 {
+			insertAt = end
+		}
+	}
+	replacement := key + ": " + value
+	updated := make([]string, 0, len(lines)+1)
+	updated = append(updated, lines[:insertAt]...)
+	updated = append(updated, replacement)
+	updated = append(updated, lines[insertAt:]...)
+	out := strings.Join(updated, "\n")
+	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
 		out += "\n"
 	}
 	return out

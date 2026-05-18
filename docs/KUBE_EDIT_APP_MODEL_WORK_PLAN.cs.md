@@ -111,12 +111,14 @@ Toto je důležité před rozšiřováním dalších mutujících editorů.
 
 Model: `gpt-5.5 medium`
 
+Stav: první verze hotová.
+
 Úkoly:
 
-- editovat app-level `replicas`
-- validovat celé číslo >= 0
-- po uložení refreshnout app detail, dirty state a diff
-- testy repository a web endpointu
+- editovat app-level `replicas` - hotovo
+- validovat celé číslo >= 0 - hotovo
+- po uložení refreshnout app detail, dirty state a diff - hotovo
+- testy repository a web endpointu - hotovo
 
 Nízké riziko, dobrý další editor po `Local variables`.
 

@@ -381,6 +381,70 @@ func TestUpdateAppVarsRejectsStaleContentHash(t *testing.T) {
 	}
 }
 
+func TestUpdateAppReplicasReplacesTopLevelReplicas(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\nreplicas: 1\ncontainers:\n  - name: api\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	replicas, err := repo.UpdateAppReplicas("test", "api.yml", 3, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replicas.Replicas == nil || *replicas.Replicas != 3 {
+		t.Fatalf("replicas = %#v, want 3", replicas.Replicas)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, "replicas: 3") || contains(detail.Content, "replicas: 1") {
+		t.Fatalf("unexpected content:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppReplicasInsertsAfterVarsBlock(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "vars:\n  - name: APP_NAME\n    value: api\nname: \"{{var:APP_NAME}}\"\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.UpdateAppReplicas("test", "api.yml", 2, ""); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, "vars:\n  - name: APP_NAME\n    value: api\nreplicas: 2\nname:") {
+		t.Fatalf("replicas not inserted after vars block:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppReplicasRejectsStaleContentHash(t *testing.T) {
+	root := t.TempDir()
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, "name: api\nreplicas: 1\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replicas, err := repo.AppReplicas("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, appPath, "name: api\nreplicas: 4\n")
+
+	_, err = repo.UpdateAppReplicas("test", "api.yml", 2, replicas.ContentHash)
+	if !IsConflictError(err) {
+		t.Fatalf("UpdateAppReplicas error = %v, want conflict", err)
+	}
+}
+
 func TestAssetDetailSupportsSpecialRootAndRejectsEscapes(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "assets", "ui", "nginx.conf"), "server {}\n")
