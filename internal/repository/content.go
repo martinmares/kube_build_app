@@ -90,6 +90,14 @@ type AppContainerRuntime struct {
 	Runtime        RuntimeModel `json:"runtime"`
 }
 
+type AppContainerPorts struct {
+	Env            string      `json:"env"`
+	FileName       string      `json:"file_name"`
+	ContentHash    string      `json:"content_hash"`
+	ContainerIndex int         `json:"container_index"`
+	Ports          []PortModel `json:"ports"`
+}
+
 type AutoscalingUpdate struct {
 	Enabled                  bool   `json:"enabled"`
 	MinReplicas              string `json:"min_replicas"`
@@ -116,6 +124,32 @@ type JavaRuntimeUpdate struct {
 	Xmx           string   `json:"xmx"`
 	Opts          []string `json:"opts"`
 	ExportEnvName string   `json:"export_env_name"`
+}
+
+type PortUpdate struct {
+	Name           string         `json:"name"`
+	Port           string         `json:"port"`
+	Metrics        bool           `json:"metrics"`
+	MetricsPathFor string         `json:"metrics_path_for"`
+	ExposeAs       []ExposeUpdate `json:"expose_as"`
+}
+
+type ExposeUpdate struct {
+	ServiceName string           `json:"service_name"`
+	Port        string           `json:"port"`
+	ServiceType string           `json:"service_type"`
+	Externals   []ExternalUpdate `json:"externals"`
+}
+
+type ExternalUpdate struct {
+	Name          string `json:"name"`
+	AsRoute       bool   `json:"as_route"`
+	ClassName     string `json:"class_name"`
+	HTTPHostname  string `json:"http_hostname"`
+	HTTPPath      string `json:"http_path"`
+	HTTPSHostname string `json:"https_hostname"`
+	HTTPSPath     string `json:"https_path"`
+	SecretName    string `json:"secret_name"`
 }
 
 type VarItem struct {
@@ -217,14 +251,17 @@ type AutoscalingModel struct {
 }
 
 type PortModel struct {
-	Index    int             `json:"index"`
-	Name     *string         `json:"name"`
-	Port     *string         `json:"port"`
-	ExposeAs []ExposeAsModel `json:"expose_as"`
+	Index          int             `json:"index"`
+	Name           *string         `json:"name"`
+	Port           *string         `json:"port"`
+	Metrics        bool            `json:"metrics"`
+	MetricsPathFor *string         `json:"metrics_path_for"`
+	ExposeAs       []ExposeAsModel `json:"expose_as"`
 }
 
 type ExposeAsModel struct {
 	Index          int             `json:"index"`
+	ServiceName    *string         `json:"service_name"`
 	Hostname       *string         `json:"hostname"`
 	Port           *string         `json:"port"`
 	ServiceType    *string         `json:"service_type"`
@@ -234,11 +271,15 @@ type ExposeAsModel struct {
 }
 
 type ExternalModel struct {
-	Index        int     `json:"index"`
-	Name         *string `json:"name"`
-	AsRoute      bool    `json:"as_route"`
-	HTTPHostname *string `json:"http_hostname"`
-	HTTPPath     *string `json:"http_path"`
+	Index         int     `json:"index"`
+	Name          *string `json:"name"`
+	AsRoute       bool    `json:"as_route"`
+	ClassName     *string `json:"class_name"`
+	HTTPHostname  *string `json:"http_hostname"`
+	HTTPPath      *string `json:"http_path"`
+	HTTPSHostname *string `json:"https_hostname"`
+	HTTPSPath     *string `json:"https_path"`
+	SecretName    *string `json:"secret_name"`
 }
 
 func (r *Repository) AppDetail(envName string, appFile string) (AppDetail, error) {
@@ -537,6 +578,48 @@ func (r *Repository) UpdateAppContainerRuntime(envName string, appFile string, c
 	return AppContainerRuntime{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Runtime: model.Containers[containerIndex].Runtime}, nil
 }
 
+func (r *Repository) UpdateAppContainerPorts(envName string, appFile string, containerIndex int, ports []PortUpdate, expectedHash string) (AppContainerPorts, error) {
+	if containerIndex < 0 {
+		return AppContainerPorts{}, errors.New("container index must be greater than or equal to 0")
+	}
+	if err := validatePortUpdates(ports); err != nil {
+		return AppContainerPorts{}, err
+	}
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return AppContainerPorts{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return AppContainerPorts{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return AppContainerPorts{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	if err := rejectUnsupportedPortsForUpdate(string(contentBytes), containerIndex); err != nil {
+		return AppContainerPorts{}, err
+	}
+	updated, err := replaceContainerPortsBlock(string(contentBytes), containerIndex, ports)
+	if err != nil {
+		return AppContainerPorts{}, err
+	}
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return AppContainerPorts{}, err
+	}
+	model, err := r.AppModel(envName, filepath.Base(path))
+	if err != nil {
+		return AppContainerPorts{}, err
+	}
+	if containerIndex >= len(model.Containers) {
+		return AppContainerPorts{}, errors.New("container index not found after update")
+	}
+	detail, err := r.AppDetail(envName, filepath.Base(path))
+	if err != nil {
+		return AppContainerPorts{}, err
+	}
+	return AppContainerPorts{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Ports: model.Containers[containerIndex].Ports}, nil
+}
+
 func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) {
 	detail, err := r.AppDetail(envName, appFile)
 	if err != nil {
@@ -582,17 +665,40 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 		}
 		for pIdx, rawPort := range anySlice(containerMap["ports"]) {
 			portMap, _ := rawPort.(map[string]any)
-			port := PortModel{Index: pIdx, Name: stringPtr(stringValue(portMap["name"])), Port: stringPtr(stringValue(portMap["port"]))}
+			port := PortModel{
+				Index:          pIdx,
+				Name:           stringPtr(stringValue(portMap["name"])),
+				Port:           stringPtr(stringValue(portMap["port"])),
+				Metrics:        boolValue(portMap["metrics"]),
+				MetricsPathFor: stringPtr(stringValue(portMap["metricsPathFor"])),
+			}
 			for eIdx, rawExpose := range anySlice(portMap["expose_as"]) {
 				exposeMap, _ := rawExpose.(map[string]any)
-				expose := ExposeAsModel{Index: eIdx, Hostname: stringPtr(stringValue(exposeMap["hostname"])), Port: stringPtr(stringValue(exposeMap["port"])), ServiceType: stringPtr(stringValue(exposeMap["type"]))}
+				serviceName := stringValue(exposeMap["service_name"])
+				legacyHostname := stringValue(exposeMap["hostname"])
+				if serviceName == "" {
+					serviceName = legacyHostname
+				}
+				expose := ExposeAsModel{
+					Index:       eIdx,
+					ServiceName: stringPtr(serviceName),
+					Hostname:    stringPtr(legacyHostname),
+					Port:        stringPtr(stringValue(exposeMap["port"])),
+					ServiceType: stringPtr(stringValue(exposeMap["type"])),
+				}
 				for xIdx, rawExternal := range anySlice(exposeMap["external"]) {
 					externalMap, _ := rawExternal.(map[string]any)
-					external := ExternalModel{Index: xIdx, Name: stringPtr(stringValue(externalMap["name"])), AsRoute: boolValue(externalMap["as_route"])}
+					external := ExternalModel{Index: xIdx, Name: stringPtr(stringValue(externalMap["name"])), AsRoute: boolValue(externalMap["as_route"]), ClassName: stringPtr(stringValue(externalMap["class_name"]))}
 					if httpItems := anySlice(externalMap["http"]); len(httpItems) > 0 {
 						httpMap, _ := httpItems[0].(map[string]any)
 						external.HTTPHostname = stringPtr(stringValue(httpMap["hostname"]))
 						external.HTTPPath = stringPtr(stringValue(httpMap["path"]))
+					}
+					if httpsItems := anySlice(externalMap["https"]); len(httpsItems) > 0 {
+						httpsMap, _ := httpsItems[0].(map[string]any)
+						external.HTTPSHostname = stringPtr(stringValue(httpsMap["hostname"]))
+						external.HTTPSPath = stringPtr(stringValue(httpsMap["path"]))
+						external.SecretName = stringPtr(stringValue(httpsMap["secret_name"]))
 					}
 					expose.Externals = append(expose.Externals, external)
 				}
@@ -1062,6 +1168,33 @@ func replaceContainerRuntimeBlock(content string, containerIndex int, runtime Ja
 	return out, nil
 }
 
+func replaceContainerPortsBlock(content string, containerIndex int, ports []PortUpdate) (string, error) {
+	lines, start, end, err := containerBlockRange(content, containerIndex)
+	if err != nil {
+		return "", err
+	}
+
+	portsStart, portsEnd := containerChildBlockRange(lines, start, end, "ports")
+	replacement := renderPortsBlock(ports)
+	insertAt := start + 1
+	if portsStart >= 0 {
+		insertAt = portsStart
+		lines = append(lines[:portsStart], lines[portsEnd:]...)
+	}
+	if len(replacement) > 0 {
+		updated := make([]string, 0, len(lines)+len(replacement))
+		updated = append(updated, lines[:insertAt]...)
+		updated = append(updated, replacement...)
+		updated = append(updated, lines[insertAt:]...)
+		lines = updated
+	}
+	out := strings.Join(lines, "\n")
+	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return out, nil
+}
+
 func replaceContainerProbesBlock(content string, containerIndex int, probes ProbeUpdate) (string, error) {
 	lines, start, end, err := containerBlockRange(content, containerIndex)
 	if err != nil {
@@ -1280,6 +1413,59 @@ func renderJavaRuntimeBlock(runtime JavaRuntimeUpdate) []string {
 	return lines
 }
 
+func renderPortsBlock(ports []PortUpdate) []string {
+	if len(ports) == 0 {
+		return nil
+	}
+	lines := []string{"    ports:"}
+	for _, port := range ports {
+		lines = append(lines, "      - name: "+strings.TrimSpace(port.Name), "        port: "+strings.TrimSpace(port.Port))
+		if port.Metrics {
+			lines = append(lines, "        metrics: true")
+		}
+		if value := strings.TrimSpace(port.MetricsPathFor); value != "" {
+			lines = append(lines, "        metricsPathFor: "+strconv.Quote(value))
+		}
+		if len(port.ExposeAs) > 0 {
+			lines = append(lines, "        expose_as:")
+			for _, expose := range port.ExposeAs {
+				lines = append(lines, "          - service_name: "+strings.TrimSpace(expose.ServiceName), "            port: "+strings.TrimSpace(expose.Port))
+				if value := strings.TrimSpace(expose.ServiceType); value != "" && value != "clusterip" {
+					lines = append(lines, "            type: "+value)
+				}
+				if len(expose.Externals) > 0 {
+					lines = append(lines, "            external:")
+					for _, external := range expose.Externals {
+						lines = append(lines, "              - name: "+strings.TrimSpace(external.Name))
+						if external.AsRoute {
+							lines = append(lines, "                as_route: true")
+						}
+						if value := strings.TrimSpace(external.ClassName); value != "" {
+							lines = append(lines, "                class_name: "+value)
+						}
+						if strings.TrimSpace(external.HTTPHostname) != "" {
+							lines = append(lines, "                http:", "                  - hostname: "+strconv.Quote(strings.TrimSpace(external.HTTPHostname)))
+							if value := strings.TrimSpace(external.HTTPPath); value != "" {
+								lines = append(lines, "                    path: "+strconv.Quote(value))
+							}
+						}
+						if strings.TrimSpace(external.HTTPSHostname) != "" {
+							lines = append(lines, "                https:", "                  - hostname: "+strconv.Quote(strings.TrimSpace(external.HTTPSHostname)))
+							if value := strings.TrimSpace(external.HTTPSPath); value != "" {
+								lines = append(lines, "                    path: "+strconv.Quote(value))
+							}
+							if value := strings.TrimSpace(external.SecretName); value != "" {
+								lines = append(lines, "                    secret_name: "+value)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return lines
+}
+
 func renderProbesBlock(probes ProbeUpdate) []string {
 	preset := strings.TrimSpace(probes.Preset)
 	port := strings.TrimSpace(probes.Port)
@@ -1423,6 +1609,158 @@ func validateJavaRuntimeUpdate(runtime JavaRuntimeUpdate) error {
 		return errors.New("export_env_name contains unsupported colon")
 	}
 	return nil
+}
+
+func validatePortUpdates(ports []PortUpdate) error {
+	portNames := map[string]bool{}
+	for _, port := range ports {
+		name := strings.TrimSpace(port.Name)
+		if name == "" {
+			return errors.New("port name is required")
+		}
+		if strings.ContainsAny(name, "\r\n:") {
+			return fmt.Errorf("invalid port name %q", name)
+		}
+		if portNames[name] {
+			return fmt.Errorf("duplicate port name %q", name)
+		}
+		portNames[name] = true
+		if err := validatePositivePort("port", port.Port); err != nil {
+			return err
+		}
+		if strings.ContainsAny(port.MetricsPathFor, "\r\n") {
+			return fmt.Errorf("metricsPathFor for port %q contains unsupported newline", name)
+		}
+		serviceNames := map[string]bool{}
+		for _, expose := range port.ExposeAs {
+			serviceName := strings.TrimSpace(expose.ServiceName)
+			if serviceName == "" {
+				return fmt.Errorf("service_name is required for port %q", name)
+			}
+			if strings.ContainsAny(serviceName, "\r\n:") {
+				return fmt.Errorf("invalid service_name %q", serviceName)
+			}
+			if serviceNames[serviceName] {
+				return fmt.Errorf("duplicate service_name %q for port %q", serviceName, name)
+			}
+			serviceNames[serviceName] = true
+			if err := validatePositivePort("service port", expose.Port); err != nil {
+				return err
+			}
+			if strings.ContainsAny(expose.ServiceType, "\r\n:") {
+				return fmt.Errorf("invalid service type %q", expose.ServiceType)
+			}
+			externalNames := map[string]bool{}
+			for _, external := range expose.Externals {
+				externalName := strings.TrimSpace(external.Name)
+				if externalName == "" {
+					return fmt.Errorf("external name is required for service %q", serviceName)
+				}
+				if strings.ContainsAny(externalName, "\r\n:") {
+					return fmt.Errorf("invalid external name %q", externalName)
+				}
+				if externalNames[externalName] {
+					return fmt.Errorf("duplicate external name %q for service %q", externalName, serviceName)
+				}
+				externalNames[externalName] = true
+				for label, value := range map[string]string{
+					"class_name":     external.ClassName,
+					"http_hostname":  external.HTTPHostname,
+					"http_path":      external.HTTPPath,
+					"https_hostname": external.HTTPSHostname,
+					"https_path":     external.HTTPSPath,
+					"secret_name":    external.SecretName,
+				} {
+					if strings.ContainsAny(value, "\r\n") {
+						return fmt.Errorf("%s for external %q contains unsupported newline", label, externalName)
+					}
+				}
+				if strings.TrimSpace(external.HTTPHostname) == "" && strings.TrimSpace(external.HTTPSHostname) == "" {
+					return fmt.Errorf("external %q requires at least one HTTP or HTTPS hostname", externalName)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validatePositivePort(label string, value string) error {
+	port, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("%s must be an integer between 1 and 65535", label)
+	}
+	return nil
+}
+
+func rejectUnsupportedPortsForUpdate(content string, containerIndex int) error {
+	var root any
+	if err := yaml.Unmarshal([]byte(renderVarsPreview(content)), &root); err != nil {
+		return err
+	}
+	rootMap, _ := root.(map[string]any)
+	containers := anySlice(rootMap["containers"])
+	if containerIndex >= len(containers) {
+		return errors.New("container index not found")
+	}
+	containerMap, _ := containers[containerIndex].(map[string]any)
+	for _, rawPort := range anySlice(containerMap["ports"]) {
+		portMap, _ := rawPort.(map[string]any)
+		for key := range portMap {
+			if !stringIn(key, "name", "port", "metrics", "metricsPathFor", "expose_as") {
+				return fmt.Errorf("ports editor does not support existing port field %q", key)
+			}
+		}
+		for _, rawExpose := range anySlice(portMap["expose_as"]) {
+			exposeMap, _ := rawExpose.(map[string]any)
+			for key := range exposeMap {
+				if !stringIn(key, "service_name", "hostname", "port", "type", "external") {
+					return fmt.Errorf("ports editor does not support existing expose_as field %q", key)
+				}
+			}
+			if serviceName := stringValue(exposeMap["service_name"]); serviceName != "" {
+				if legacy := stringValue(exposeMap["hostname"]); legacy != "" && legacy != serviceName {
+					return errors.New("expose_as has conflicting service_name and legacy hostname")
+				}
+			}
+			for _, rawExternal := range anySlice(exposeMap["external"]) {
+				externalMap, _ := rawExternal.(map[string]any)
+				for key := range externalMap {
+					if !stringIn(key, "name", "as_route", "class_name", "http", "https") {
+						return fmt.Errorf("ports editor does not support existing external field %q", key)
+					}
+				}
+				if err := rejectUnsupportedExternalHosts(externalMap, "http", false); err != nil {
+					return err
+				}
+				if err := rejectUnsupportedExternalHosts(externalMap, "https", true); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func rejectUnsupportedExternalHosts(externalMap map[string]any, key string, allowSecret bool) error {
+	for _, rawHost := range anySlice(externalMap[key]) {
+		hostMap, _ := rawHost.(map[string]any)
+		for hostKey := range hostMap {
+			if hostKey == "hostname" || hostKey == "path" || (allowSecret && hostKey == "secret_name") {
+				continue
+			}
+			return fmt.Errorf("ports editor does not support existing %s field %q", key, hostKey)
+		}
+	}
+	return nil
+}
+
+func stringIn(value string, allowed ...string) bool {
+	for _, item := range allowed {
+		if value == item {
+			return true
+		}
+	}
+	return false
 }
 
 func cleanStringItems(items []string) []string {

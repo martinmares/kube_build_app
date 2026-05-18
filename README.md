@@ -568,7 +568,7 @@ ports:
   - name: http
     port: 8080
     expose_as:
-      - hostname: api
+      - service_name: api
         port: 80
 ```
 
@@ -585,6 +585,8 @@ spec:
       port: 80
       targetPort: 8080
 ```
+
+`service_name` is the Kubernetes Service name and the short DNS name inside the namespace. Legacy `expose_as[].hostname` is still accepted as an alias for backward compatibility.
 
 External exposure can be attached under `expose_as[].external` and generates Ingress or OpenShift Route according to the model.
 

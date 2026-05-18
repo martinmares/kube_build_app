@@ -50,6 +50,15 @@
 .container-stack { display: grid; gap: .75rem; }
 .container-card { padding: .85rem; border: 1px solid var(--tblr-border-color); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface) 88%, var(--tblr-primary) 12%); }
 .resource-editor { padding: .65rem; border: 1px solid color-mix(in srgb, var(--tblr-border-color) 78%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 82%, transparent); }
+.compact-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.ports-preview { display: grid; gap: .45rem; }
+.ports-preview-item { padding: .6rem .7rem; border: 1px solid color-mix(in srgb, var(--tblr-border-color) 76%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 72%, transparent); }
+.ports-preview-service, .ports-preview-external { margin-top: .25rem; margin-left: 1.35rem; color: var(--tblr-muted); font-size: .8125rem; }
+.ports-preview-external { margin-left: 2.7rem; }
+#ports-edit-modal .modal-body { background: color-mix(in srgb, var(--tblr-bg-surface) 94%, var(--tblr-primary) 6%); }
+#ports-edit-modal .container-var-editor { margin-top: 0 !important; }
+#edit-modal .modal-body { background: color-mix(in srgb, var(--tblr-bg-surface) 94%, var(--tblr-primary) 6%); }
+#edit-modal .resource-editor, #edit-modal .container-var-editor { margin-top: 0 !important; }
 .modal-blur .modal-content { box-shadow: 0 2.2rem 4.8rem rgba(0, 0, 0, .62), 0 .8rem 1.8rem rgba(0, 0, 0, .42), 0 0 0 1px rgba(255, 255, 255, .04); }
 .modal-backdrop.show { opacity: .62; }
 .read-only-mode .write-only { display: none !important; }

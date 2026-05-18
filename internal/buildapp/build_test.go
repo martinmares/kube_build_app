@@ -54,7 +54,7 @@ containers:
       - name: http
         port: 8080
         expose_as:
-          - hostname: api
+          - service_name: api
             port: 80
 `)
 

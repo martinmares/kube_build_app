@@ -404,10 +404,11 @@ type portSpec struct {
 }
 
 type exposeSpec struct {
-	Hostname string         `yaml:"hostname"`
-	Port     int            `yaml:"port"`
-	Type     string         `yaml:"type"`
-	External []externalSpec `yaml:"external"`
+	ServiceName string         `yaml:"service_name"`
+	Hostname    string         `yaml:"hostname"`
+	Port        int            `yaml:"port"`
+	Type        string         `yaml:"type"`
+	External    []externalSpec `yaml:"external"`
 }
 
 type externalSpec struct {
@@ -1354,6 +1355,13 @@ func validateApps(apps []appModel) error {
 			}
 		}
 		for _, container := range app.Containers {
+			for _, port := range container.Ports {
+				for _, expose := range port.ExposeAs {
+					if expose.ServiceName != "" && expose.Hostname != "" && expose.ServiceName != expose.Hostname {
+						return fmt.Errorf("%s: container %q port %q expose_as has conflicting service_name and legacy hostname", app.Name, container.Name, port.Name)
+					}
+				}
+			}
 			if javaRuntimeEnabled(container.Runtime.Java) {
 				envName := javaRuntimeEnvName(container.Runtime.Java)
 				if containerHasEnvVar(container.Vars, envName) {
@@ -3242,7 +3250,11 @@ func renderServices(app appModel, namespace string, environment string) []render
 	for _, container := range app.Containers {
 		for _, port := range container.Ports {
 			for _, expose := range port.ExposeAs {
-				if expose.Hostname == "" {
+				serviceName := expose.ServiceName
+				if serviceName == "" {
+					serviceName = expose.Hostname
+				}
+				if serviceName == "" {
 					continue
 				}
 				serviceType := expose.Type
@@ -3254,16 +3266,16 @@ func renderServices(app appModel, namespace string, environment string) []render
 					"port":       expose.Port,
 					"targetPort": port.Port,
 				}
-				servicesByHost[expose.Hostname] = append(servicesByHost[expose.Hostname], servicePort)
+				servicesByHost[serviceName] = append(servicesByHost[serviceName], servicePort)
 				if len(expose.External) > 0 {
-					externalPortsByHost[expose.Hostname] = append(externalPortsByHost[expose.Hostname], serviceExternalPort{
+					externalPortsByHost[serviceName] = append(externalPortsByHost[serviceName], serviceExternalPort{
 						Name:      fmt.Sprintf("%s-%d", port.Name, expose.Port),
 						Port:      expose.Port,
 						Externals: expose.External,
 					})
 				}
 				if serviceType == "headless" {
-					headlessByHost[expose.Hostname] = true
+					headlessByHost[serviceName] = true
 				}
 				if port.Metrics {
 					metricsPort := map[string]any{
@@ -3271,17 +3283,17 @@ func renderServices(app appModel, namespace string, environment string) []render
 						"port":       9090,
 						"targetPort": port.Port,
 					}
-					servicesByHost[expose.Hostname] = append(servicesByHost[expose.Hostname], metricsPort)
+					servicesByHost[serviceName] = append(servicesByHost[serviceName], metricsPort)
 					if len(expose.External) > 0 {
-						externalPortsByHost[expose.Hostname] = append(externalPortsByHost[expose.Hostname], serviceExternalPort{
+						externalPortsByHost[serviceName] = append(externalPortsByHost[serviceName], serviceExternalPort{
 							Name:      "metrics",
 							Port:      9090,
 							Externals: expose.External,
 						})
 					}
-					hasMetricsByHost[expose.Hostname] = true
+					hasMetricsByHost[serviceName] = true
 					if port.MetricsPathFor != nil {
-						metricsPathForByHost[expose.Hostname] = expose.Hostname
+						metricsPathForByHost[serviceName] = serviceName
 					}
 				}
 			}

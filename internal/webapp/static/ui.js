@@ -18,6 +18,38 @@ function showError(e) { const el = qs('#ui-error'); el.textContent = String(e); 
 function clearError() { const el = qs('#ui-error'); el.textContent = ''; el.classList.add('hidden'); }
 function setText(id, value) { const el = qs(id); if (el) el.textContent = value ?? '-'; }
 function setHTML(id, value) { const el = qs(id); if (el) el.innerHTML = value ?? ''; }
+function openModalElement(modalEl, focusEl, onClosed = null) {
+  if (!modalEl) return () => {};
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop fade show';
+  const closeButtons = Array.from(modalEl.querySelectorAll('[data-modal-close], [data-bs-dismiss="modal"], .btn-close'));
+  const close = () => {
+    modalEl.classList.remove('show');
+    modalEl.style.display = 'none';
+    modalEl.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('modal-open');
+    document.body.style.removeProperty('overflow');
+    backdrop.remove();
+    backdrop.removeEventListener('click', close);
+    document.removeEventListener('keydown', onKeydown);
+    closeButtons.forEach((button) => button.removeEventListener('click', close));
+    onClosed?.();
+  };
+  const onKeydown = (e) => {
+    if (e.key === 'Escape') close();
+  };
+  backdrop.addEventListener('click', close);
+  document.addEventListener('keydown', onKeydown);
+  closeButtons.forEach((button) => button.addEventListener('click', close));
+  document.body.appendChild(backdrop);
+  document.body.classList.add('modal-open');
+  document.body.style.overflow = 'hidden';
+  modalEl.style.display = 'block';
+  modalEl.removeAttribute('aria-hidden');
+  modalEl.classList.add('show');
+  (focusEl || modalEl.querySelector('button, input, textarea, select'))?.focus();
+  return close;
+}
 function confirmAction({title, body, subject = '', confirmLabel = 'Confirm', confirmClass = 'btn-warning', icon = 'ti-alert-triangle', statusClass = 'bg-warning'} = {}) {
   const modalEl = qs('#confirm-modal');
   if (!modalEl) return Promise.resolve(false);
@@ -36,41 +68,20 @@ function confirmAction({title, body, subject = '', confirmLabel = 'Confirm', con
   }
   return new Promise((resolve) => {
     let confirmed = false;
-    const backdrop = document.createElement('div');
-    backdrop.className = 'modal-backdrop fade show';
-    const closeButtons = qsa('#confirm-modal [data-bs-dismiss="modal"], #confirm-modal .btn-close');
-    const close = () => {
-      modalEl.classList.remove('show');
-      modalEl.style.display = 'none';
-      modalEl.setAttribute('aria-hidden', 'true');
-      document.body.classList.remove('modal-open');
-      document.body.style.removeProperty('overflow');
-      backdrop.remove();
+    let settled = false;
+    let closeModal = () => {};
+    const finish = () => {
+      if (settled) return;
+      settled = true;
       confirm?.removeEventListener('click', onConfirm);
-      backdrop.removeEventListener('click', onCancel);
-      document.removeEventListener('keydown', onKeydown);
-      closeButtons.forEach((button) => button.removeEventListener('click', onCancel));
       resolve(confirmed);
     };
     const onConfirm = () => {
       confirmed = true;
-      close();
-    };
-    const onCancel = () => close();
-    const onKeydown = (e) => {
-      if (e.key === 'Escape') close();
+      closeModal();
     };
     confirm?.addEventListener('click', onConfirm);
-    backdrop.addEventListener('click', onCancel);
-    document.addEventListener('keydown', onKeydown);
-    closeButtons.forEach((button) => button.addEventListener('click', onCancel));
-    document.body.appendChild(backdrop);
-    document.body.classList.add('modal-open');
-    document.body.style.overflow = 'hidden';
-    modalEl.style.display = 'block';
-    modalEl.removeAttribute('aria-hidden');
-    modalEl.classList.add('show');
-    confirm?.focus();
+    closeModal = openModalElement(modalEl, confirm, finish);
   });
 }
 function emptyState(icon, title, text = '') {
@@ -140,10 +151,14 @@ async function init() {
     if (saveProbes && !state.readOnly) return saveContainerProbes(Number(saveProbes.dataset.saveProbes));
     const saveAutoscaling = e.target.closest('[data-save-autoscaling]');
     if (saveAutoscaling && !state.readOnly) return saveAppAutoscaling();
+    const editPanel = e.target.closest('[data-edit-panel]');
+    if (editPanel && !state.readOnly) return openEditPanel(editPanel.dataset.editPanel, Number(editPanel.dataset.containerIndex));
     const fixLegacyProbes = e.target.closest('[data-fix-legacy-probes]');
     if (fixLegacyProbes && !state.readOnly) return fixContainerLegacyProbes(Number(fixLegacyProbes.dataset.fixLegacyProbes));
     const addVar = e.target.closest('[data-add-container-var]');
     if (addVar && !state.readOnly) return addContainerVarRow(Number(addVar.dataset.addContainerVar));
+    const editPorts = e.target.closest('[data-edit-ports]');
+    if (editPorts && !state.readOnly) return openPortsEditorModal(Number(editPorts.dataset.editPorts));
     const removeVar = e.target.closest('[data-remove-container-var]');
     if (removeVar && !state.readOnly) {
       const index = Number(removeVar.dataset.removeContainerVar);
@@ -151,6 +166,8 @@ async function init() {
       syncContainerVarsEmptyState(index);
     }
   });
+  qs('#ports-edit-modal')?.addEventListener('click', (e) => handlePortsModalClick(e));
+  qs('#edit-modal')?.addEventListener('click', (e) => handleEditModalClick(e));
   await loadAll();
 }
 async function loadAll() {
@@ -349,6 +366,8 @@ async function restoreGitPath(path, code) {
 }
 function resetSelectedDetails() {
   state.appFile = null;
+  state.model = null;
+  state.appVars = [];
   state.assetPath = null;
   state.inventory = null;
   setText('#app-detail-title', 'Select app');
@@ -433,6 +452,8 @@ async function selectApp(file) {
       api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(file)}/vars`),
       api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(file)}/model`),
     ]);
+    state.model = model;
+    state.appVars = vars.items || [];
     setText('#app-detail-title', model.app_name || detail.summary?.app_name || detail.file_name);
     state.appContentHash = detail.content_hash || vars.content_hash || null;
     setText('#app-detail-path', detail.path);
@@ -482,28 +503,31 @@ function renderAppVarRow(name = '', value = '') {
     </tr>`;
 }
 function syncAppVarsEmptyState() {
-  const body = qs('#app-vars tbody');
+  const body = qs('[data-app-vars-modal] tbody') || qs('#app-vars tbody');
   if (!body) return;
-  const hasRows = qsa('#app-vars tbody tr').some((row) => row.querySelector('.app-var-name'));
+  const hasRows = Array.from(body.querySelectorAll('tr')).some((row) => row.querySelector('.app-var-name'));
   if (!hasRows) body.innerHTML = `<tr><td colspan="3">${emptyState('ti-variable', 'No local variables', state.readOnly ? 'Start with --allow-write to add variables.' : 'Use Add variable to create the first one.')}</td></tr>`;
 }
 function addAppVarRow() {
   if (state.readOnly || !state.appFile) return;
-  const body = qs('#app-vars tbody');
+  const body = qs('[data-app-vars-modal] tbody') || qs('#app-vars tbody');
   if (!body) return;
-  if (!qsa('#app-vars tbody tr').some((row) => row.querySelector('.app-var-name'))) body.innerHTML = '';
+  if (!Array.from(body.querySelectorAll('tr')).some((row) => row.querySelector('.app-var-name'))) body.innerHTML = '';
   body.insertAdjacentHTML('beforeend', renderAppVarRow());
-  qsa('#app-vars tbody tr').at(-1)?.querySelector('.app-var-name')?.focus();
+  Array.from(body.querySelectorAll('tr')).at(-1)?.querySelector('.app-var-name')?.focus();
 }
 async function saveAppVars() {
   if (!state.env || !state.appFile || state.readOnly) return;
   clearError();
-  const items = qsa('#app-vars tbody tr').map((row) => ({
+  const body = qs('[data-app-vars-modal] tbody') || qs('#app-vars tbody');
+  const items = Array.from(body?.querySelectorAll('tr') || []).map((row) => ({
     name: row.querySelector('.app-var-name')?.value?.trim() || '',
     value: row.querySelector('.app-var-value')?.value || '',
   })).filter((item) => item.name !== '');
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/vars`, {items, expected_hash: state.appContentHash});
+    state.editModalClose?.();
+    state.editModalClose = null;
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);
@@ -521,6 +545,8 @@ async function saveAppReplicas() {
   clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/replicas`, {replicas, expected_hash: state.appContentHash});
+    state.editModalClose?.();
+    state.editModalClose = null;
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);
@@ -568,12 +594,11 @@ function renderAppOverview(model) {
   host.innerHTML = `
     <div class="overview-grid">${appFacts.join('')}</div>
     ${autoscalingMetrics}
-    ${renderAutoscalingEditor(autoscaling)}
+    ${renderAppQuickEditors(model, autoscaling)}
     <div class="overview-section">
       <div class="overview-title"><i class="ti ti-box me-1"></i>Containers</div>
       <div class="container-stack">${containers || emptyState('ti-box', 'No containers', 'This app model does not declare containers.')}</div>
     </div>`;
-  syncAutoscalingEditor();
 }
 function renderContainerOverview(container) {
   const resources = container.resources || {};
@@ -588,6 +613,7 @@ function renderContainerOverview(container) {
       ${chip('export', java.export_env_name || 'JAVA_OPTS')}
       ${java.opts?.length ? chip('opts', java.opts.length) : ''}
     </div>` : '<div class="text-muted small">Java runtime not configured.</div>';
+  const editButton = (panel, label) => state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary mt-2" type="button" data-edit-panel="${panel}" data-container-index="${container.index}"><i class="ti ti-pencil me-1"></i>${esc(label)}</button>`;
   return `
     <div class="container-card">
       <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
@@ -603,11 +629,21 @@ function renderContainerOverview(container) {
           ${chip('CPU lim', resources.cpu_limit || '-')}
           ${chip('Mem req', resources.memory_request || '-')}
           ${chip('Mem lim', resources.memory_limit || '-')}
-        </div>${renderResourcesEditor(container.index, resources)}</div>
-        <div class="col-12 col-xl-4"><div class="overview-subtitle">Java runtime</div>${javaBlock}${renderJavaRuntimeEditor(container.index, java)}</div>
-        <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div>${renderProbePreview(container.index, probes)}</div>
+        </div>${editButton('resources', 'Edit resources')}</div>
+        <div class="col-12 col-xl-4"><div class="overview-subtitle">Java runtime</div>${javaBlock}${editButton('runtime', 'Edit runtime')}</div>
+        <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div>${renderProbePreview(container.index, probes)}${editButton('probes', 'Edit probes')}</div>
       </div>
-      ${renderContainerVarsEditor(container.index, vars)}
+      ${renderPortsPreview(container.index, ports)}
+      ${renderContainerVarsPreview(container.index, vars)}
+    </div>`;
+}
+function renderAppQuickEditors(model, autoscaling) {
+  if (state.readOnly) return '';
+  return `
+    <div class="overview-section compact-actions">
+      <button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="autoscaling"><i class="ti ti-arrows-maximize me-1"></i>Edit autoscaling</button>
+      <button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="replicas"><i class="ti ti-copy me-1"></i>Edit replicas</button>
+      <button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="app-vars"><i class="ti ti-variable me-1"></i>Edit local variables (${state.appVars?.length || 0})</button>
     </div>`;
 }
 function renderAutoscalingEditor(autoscaling) {
@@ -637,6 +673,29 @@ function renderAutoscalingEditor(autoscaling) {
       </div>
     </div>`;
 }
+function renderReplicasEditorModal(model) {
+  const value = model?.replicas ?? '';
+  return `
+    <div class="detail-panel">
+      <div class="row g-2 align-items-end">
+        <div class="col-12 col-sm-5"><label class="form-label">Desired replicas</label><input class="form-control" id="app-replicas-input" type="number" min="0" step="1" value="${esc(value)}"></div>
+        <div class="col-12 col-sm-7"><div class="text-muted small">${model?.autoscaling?.enabled ? 'Autoscaling is enabled. Deployment replicas are initial desired state; runtime count is controlled by HPA.' : 'Updates the top-level replicas field in the app YAML.'}</div></div>
+      </div>
+      <div class="text-end mt-3"><button class="btn btn-primary" type="button" data-save-replicas-modal><i class="ti ti-device-floppy me-1"></i>Save replicas</button></div>
+    </div>`;
+}
+function renderAppVarsEditorModal(items) {
+  const rows = (items || []).map((v) => renderAppVarRow(v.name, v.value)).join('');
+  return `
+    <div class="detail-panel">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Local variables</div>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-add-app-var-modal><i class="ti ti-plus me-1"></i>Add variable</button>
+      </div>
+      <div class="table-responsive"><table class="table table-sm" data-app-vars-modal><tbody>${rows || `<tr><td colspan="3">${emptyState('ti-variable', 'No local variables', 'Use Add variable to create the first one.')}</td></tr>`}</tbody></table></div>
+      <div class="text-end mt-3"><button class="btn btn-primary" type="button" data-save-app-vars-modal><i class="ti ti-device-floppy me-1"></i>Save variables</button></div>
+    </div>`;
+}
 function autoscalingInput(field, label, value) {
   const disabled = state.readOnly ? 'disabled' : '';
   return `<div class="col-6 col-lg-3"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" type="number" min="0" step="1" data-autoscaling-field="${field}" value="${esc(value)}" ${disabled}></div>`;
@@ -658,13 +717,15 @@ async function saveAppAutoscaling() {
   clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/autoscaling`, {autoscaling, expected_hash: state.appContentHash});
+    state.editModalClose?.();
+    state.editModalClose = null;
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);
   } catch (e) { showError(e); }
 }
 function renderProbePreview(index, probes) {
-  if (!probes?.enabled) return `<div class="text-muted small">Not configured.</div>${renderProbesEditor(index, probes)}`;
+  if (!probes?.enabled) return '<div class="text-muted small">Not configured.</div>';
   const modern = [
     probes.preset && chip('preset', probes.preset),
     probes.port && chip('port', probes.port),
@@ -672,7 +733,7 @@ function renderProbePreview(index, probes) {
   ].filter(Boolean).join('');
   const legacy = probes.legacy ? `<div class="alert alert-warning py-2 px-2 mb-2 small"><i class="ti ti-alert-triangle me-1"></i>Legacy ${esc(legacyProbeKinds(probes))} detected.</div>` : '';
   const custom = probes.legacy ? 'Legacy-only configuration.' : 'Custom probes configured.';
-  return `${legacy}${modern ? `<div class="chip-row">${modern}</div>` : `<div class="text-muted small">${custom}</div>`}${renderProbesEditor(index, probes)}`;
+  return `${legacy}${modern ? `<div class="chip-row">${modern}</div>` : `<div class="text-muted small">${custom}</div>`}`;
 }
 function legacyProbeKinds(probes) {
   return (probes?.legacy_kinds || []).join(' + ') || 'health/probe';
@@ -758,6 +819,8 @@ async function saveContainerResources(index) {
   clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/resources`, {resources, expected_hash: state.appContentHash});
+    state.editModalClose?.();
+    state.editModalClose = null;
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);
@@ -776,6 +839,8 @@ async function saveContainerRuntime(index) {
   clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/runtime/java`, {runtime, expected_hash: state.appContentHash});
+    state.editModalClose?.();
+    state.editModalClose = null;
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);
@@ -792,6 +857,8 @@ async function saveContainerProbes(index) {
   clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/probes`, {probes, expected_hash: state.appContentHash});
+    state.editModalClose?.();
+    state.editModalClose = null;
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);
@@ -809,6 +876,333 @@ async function fixContainerLegacyProbes(index) {
   clearError();
   try {
     await apiPostJSON(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/probes/fix-legacy`, {expected_hash: state.appContentHash});
+    state.editModalClose?.();
+    state.editModalClose = null;
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
+}
+function renderPortsEditor(index, ports) {
+  if (state.readOnly) return '';
+  const disabled = state.readOnly ? 'disabled' : '';
+  const rows = (ports || []).map((port) => renderPortRow(index, port)).join('');
+  return `
+    <div class="container-var-editor mt-3" data-ports-editor="${index}">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Ports / services / ingress</div>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-add-port="${index}" ${disabled}><i class="ti ti-plus me-1"></i>Add port</button>
+      </div>
+      <div data-port-body="${index}">${rows || renderPortsEmpty(index)}</div>
+      <div class="d-flex align-items-center justify-content-between gap-2 mt-2">
+        <div class="text-muted small">Uses service_name as Service DNS name. Legacy expose_as.hostname is read as an alias.</div>
+        <button class="btn btn-sm btn-primary" type="button" data-save-ports="${index}" ${disabled}><i class="ti ti-device-floppy me-1"></i>Save ports</button>
+      </div>
+    </div>`;
+}
+function renderPortsPreview(index, ports) {
+  const rows = (ports || []).map((port) => renderPortPreviewLine(port)).join('');
+  const edit = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-ports="${index}"><i class="ti ti-pencil me-1"></i>Edit ports</button>`;
+  return `
+    <div class="overview-section">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Ports / services / ingress</div>
+        ${edit}
+      </div>
+      <div class="ports-preview">${rows || emptyState('ti-route', 'No ports', state.readOnly ? 'No container ports configured.' : 'Use Edit ports to add container ports.')}</div>
+    </div>`;
+}
+function renderContainerVarsPreview(index, vars) {
+  const edit = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="container-vars" data-container-index="${index}"><i class="ti ti-pencil me-1"></i>Edit variables</button>`;
+  const chips = (vars || []).slice(0, 8).map((item) => chip(item.name || '?', item.kind === 'value' ? (item.value || '') : item.kind)).join('');
+  const more = (vars || []).length > 8 ? `<span class="badge bg-secondary-lt">+${vars.length - 8} more</span>` : '';
+  return `
+    <div class="overview-section">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div class="overview-subtitle mb-0">Container variables</div>
+        ${edit}
+      </div>
+      ${(vars || []).length ? `<div class="chip-row">${chips}${more}</div>` : emptyState('ti-variable', 'No container variables', state.readOnly ? '' : 'Use Edit variables to add container variables.')}
+    </div>`;
+}
+function renderPortPreviewLine(port) {
+  const exposes = (port.expose_as || []).map((expose) => {
+    const externals = (expose.externals || []).map((external) => {
+      const kind = external.as_route ? 'route' : 'ingress';
+      const http = [external.http_hostname, external.http_path].filter(Boolean).join(' ');
+      const https = [external.https_hostname, external.https_path].filter(Boolean).join(' ');
+      return `<div class="ports-preview-external"><i class="ti ti-world me-1"></i>${esc(kind)} ${esc(external.name || '?')}${http ? ` -> ${esc(http)}` : ''}${https ? ` / tls ${esc(https)}` : ''}</div>`;
+    }).join('');
+    return `<div class="ports-preview-service"><i class="ti ti-plug-connected me-1"></i>svc <span class="font-monospace">${esc(expose.service_name || expose.hostname || '?')}:${esc(expose.port || '?')}</span>${externals}</div>`;
+  }).join('');
+  return `
+    <div class="ports-preview-item">
+      <div><i class="ti ti-route me-1"></i><span class="font-monospace">${esc(port.name || '?')}:${esc(port.port || '?')}</span>${port.metrics ? ' <span class="badge bg-green-lt ms-1">metrics</span>' : ''}</div>
+      ${exposes || '<div class="text-muted small ms-4">No service exposure.</div>'}
+    </div>`;
+}
+function openPortsEditorModal(index) {
+  if (state.readOnly || !state.model || !Number.isInteger(index)) return;
+  const container = (state.model.containers || []).find((item) => item.index === index);
+  if (!container) return;
+  setText('#ports-edit-modal-title', `Edit ports: ${container.name || `container-${index + 1}`}`);
+  setHTML('#ports-edit-modal-body', renderPortsEditor(index, container.ports || []));
+  const modal = qs('#ports-edit-modal');
+  state.portsModalClose = openModalElement(modal, modal?.querySelector('[data-add-port], [data-save-ports]'));
+}
+function openEditPanel(panel, index) {
+  if (state.readOnly || !state.model) return;
+  const container = Number.isInteger(index) ? (state.model.containers || []).find((item) => item.index === index) : null;
+  const titleName = container?.name || (Number.isInteger(index) ? `container-${index + 1}` : state.appFile);
+  const modal = qs('#edit-modal');
+  let title = 'Edit';
+  let subtitle = '';
+  let body = '';
+  if (panel === 'resources' && container) {
+    title = `Edit resources: ${titleName}`;
+    subtitle = 'Container CPU and memory requests/limits.';
+    body = renderResourcesEditor(index, container.resources || {});
+  } else if (panel === 'runtime' && container) {
+    title = `Edit Java runtime: ${titleName}`;
+    subtitle = 'runtime.java xms/xmx/opts/export.env_name.';
+    body = renderJavaRuntimeEditor(index, container.runtime?.java || {});
+  } else if (panel === 'probes' && container) {
+    title = `Edit probes: ${titleName}`;
+    subtitle = 'Modern probes preset/port/path and legacy conversion.';
+    body = renderProbesEditor(index, container.probes || {});
+  } else if (panel === 'container-vars' && container) {
+    title = `Edit variables: ${titleName}`;
+    subtitle = 'Container-local variables.';
+    body = renderContainerVarsEditor(index, container.vars || []);
+  } else if (panel === 'autoscaling') {
+    title = 'Edit autoscaling';
+    subtitle = 'Top-level HPA settings.';
+    body = renderAutoscalingEditor(state.model.autoscaling || {});
+  } else if (panel === 'replicas') {
+    title = 'Edit replicas';
+    subtitle = 'Top-level deployment replica count.';
+    body = renderReplicasEditorModal(state.model);
+  } else if (panel === 'app-vars') {
+    title = 'Edit local variables';
+    subtitle = 'Top-level vars used by {{var:NAME}} placeholders.';
+    body = renderAppVarsEditorModal(state.appVars || []);
+  }
+  if (!body) return;
+  setText('#edit-modal-title', title);
+  setText('#edit-modal-subtitle', subtitle);
+  setHTML('#edit-modal-body', body);
+  syncAutoscalingEditor();
+  state.editModalClose = openModalElement(modal);
+}
+function handleEditModalClick(e) {
+  const saveResources = e.target.closest('[data-save-resources]');
+  if (saveResources && !state.readOnly) return saveContainerResources(Number(saveResources.dataset.saveResources));
+  const saveRuntime = e.target.closest('[data-save-runtime]');
+  if (saveRuntime && !state.readOnly) return saveContainerRuntime(Number(saveRuntime.dataset.saveRuntime));
+  const saveProbes = e.target.closest('[data-save-probes]');
+  if (saveProbes && !state.readOnly) return saveContainerProbes(Number(saveProbes.dataset.saveProbes));
+  const fixLegacyProbes = e.target.closest('[data-fix-legacy-probes]');
+  if (fixLegacyProbes && !state.readOnly) return fixContainerLegacyProbes(Number(fixLegacyProbes.dataset.fixLegacyProbes));
+  const saveVars = e.target.closest('[data-save-container-vars]');
+  if (saveVars && !state.readOnly) return saveContainerVars(Number(saveVars.dataset.saveContainerVars));
+  const addVar = e.target.closest('[data-add-container-var]');
+  if (addVar && !state.readOnly) return addContainerVarRow(Number(addVar.dataset.addContainerVar));
+  const removeVar = e.target.closest('[data-remove-container-var]');
+  if (removeVar && !state.readOnly) {
+    const index = Number(removeVar.dataset.removeContainerVar);
+    removeVar.closest('tr')?.remove();
+    syncContainerVarsEmptyState(index);
+  }
+  const saveAutoscaling = e.target.closest('[data-save-autoscaling]');
+  if (saveAutoscaling && !state.readOnly) return saveAppAutoscaling();
+  const saveReplicas = e.target.closest('[data-save-replicas-modal]');
+  if (saveReplicas && !state.readOnly) return saveAppReplicas();
+  const addAppVar = e.target.closest('[data-add-app-var-modal]');
+  if (addAppVar && !state.readOnly) return addAppVarRow();
+  const saveAppVar = e.target.closest('[data-save-app-vars-modal]');
+  if (saveAppVar && !state.readOnly) return saveAppVars();
+}
+function handlePortsModalClick(e) {
+  const savePorts = e.target.closest('[data-save-ports]');
+  if (savePorts && !state.readOnly) return saveContainerPorts(Number(savePorts.dataset.savePorts));
+  const addPort = e.target.closest('[data-add-port]');
+  if (addPort && !state.readOnly) return addPortRow(Number(addPort.dataset.addPort));
+  const addExpose = e.target.closest('[data-add-expose]');
+  if (addExpose && !state.readOnly) return addExposeRow(Number(addExpose.dataset.addExpose), addExpose);
+  const addExternal = e.target.closest('[data-add-external]');
+  if (addExternal && !state.readOnly) return addExternalRow(Number(addExternal.dataset.addExternal), addExternal);
+  const removePortItem = e.target.closest('[data-remove-port-item]');
+  if (removePortItem && !state.readOnly) {
+    const index = Number(removePortItem.dataset.removePortItem);
+    removePortItem.closest('[data-port-row]')?.remove();
+    syncPortsEmptyState(index);
+  }
+  const removeExposeItem = e.target.closest('[data-remove-expose-item]');
+  if (removeExposeItem && !state.readOnly) {
+    const index = Number(removeExposeItem.dataset.removeExposeItem);
+    removeExposeItem.closest('[data-expose-row]')?.remove();
+    syncExposeEmptyState(index);
+  }
+  const removeExternalItem = e.target.closest('[data-remove-external-item]');
+  if (removeExternalItem && !state.readOnly) {
+    const index = Number(removeExternalItem.dataset.removeExternalItem);
+    removeExternalItem.closest('[data-external-row]')?.remove();
+    syncExternalEmptyState(index);
+  }
+}
+function renderPortRow(index, port = {}) {
+  const rowId = crypto.randomUUID?.() || String(Date.now() + Math.random());
+  const exposes = (port.expose_as || []).map((expose) => renderExposeRow(index, expose)).join('');
+  return `
+    <div class="detail-panel mb-2" data-port-row="${index}">
+      <div class="row g-2 align-items-end">
+        ${portInput(index, 'name', 'Port name', port.name || '')}
+        ${portInput(index, 'port', 'Container port', port.port || '', 'number')}
+        ${portInput(index, 'metrics-path-for', 'Metrics path for', port.metrics_path_for || '')}
+        <div class="col-6 col-lg-2">
+          <label class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" data-port-field="${index}:metrics" ${port.metrics ? 'checked' : ''} ${state.readOnly ? 'disabled' : ''}>
+            <span class="form-check-label">metrics</span>
+          </label>
+        </div>
+        <div class="col-6 col-lg-1 text-end">
+          <button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-port-item="${index}" title="Remove port"><i class="ti ti-trash"></i></button>
+        </div>
+      </div>
+      <div class="mt-2 ps-2 border-start" data-expose-host="${rowId}">
+        <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+          <div class="text-muted small fw-semibold">Service exposure</div>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-add-expose="${index}" data-expose-target="${rowId}"><i class="ti ti-plus me-1"></i>Add service</button>
+        </div>
+        <div data-expose-body="${index}">${exposes || renderExposeEmpty(index)}</div>
+      </div>
+    </div>`;
+}
+function renderExposeRow(index, expose = {}) {
+  const rowId = crypto.randomUUID?.() || String(Date.now() + Math.random());
+  const externals = (expose.externals || []).map((external) => renderExternalRow(index, external)).join('');
+  return `
+    <div class="resource-editor mb-2" data-expose-row="${index}">
+      <div class="row g-2 align-items-end">
+        ${exposeInput(index, 'service-name', 'Service DNS name', expose.service_name || expose.hostname || '')}
+        ${exposeInput(index, 'port', 'Service port', expose.port || '', 'number')}
+        ${exposeInput(index, 'service-type', 'Service type', expose.service_type || '')}
+        <div class="col-12 col-lg-1 text-end">
+          <button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-expose-item="${index}" title="Remove service"><i class="ti ti-trash"></i></button>
+        </div>
+      </div>
+      <div class="mt-2 ps-2 border-start" data-external-host="${rowId}">
+        <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+          <div class="text-muted small fw-semibold">External exposure</div>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-add-external="${index}" data-external-target="${rowId}"><i class="ti ti-plus me-1"></i>Add external</button>
+        </div>
+        <div data-external-body="${index}">${externals || renderExternalEmpty(index)}</div>
+      </div>
+    </div>`;
+}
+function renderExternalRow(index, external = {}) {
+  return `
+    <div class="metric-card mb-2" data-external-row="${index}">
+      <div class="row g-2 align-items-end">
+        ${externalInput(index, 'name', 'Name', external.name || '')}
+        ${externalInput(index, 'class-name', 'Ingress class', external.class_name || '')}
+        ${externalInput(index, 'http-hostname', 'HTTP hostname', external.http_hostname || '')}
+        ${externalInput(index, 'http-path', 'HTTP path', external.http_path || '')}
+        ${externalInput(index, 'https-hostname', 'HTTPS hostname', external.https_hostname || '')}
+        ${externalInput(index, 'https-path', 'HTTPS path', external.https_path || '')}
+        ${externalInput(index, 'secret-name', 'TLS secret', external.secret_name || '')}
+        <div class="col-6 col-lg-2">
+          <label class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" data-external-field="${index}:as-route" ${external.as_route ? 'checked' : ''} ${state.readOnly ? 'disabled' : ''}>
+            <span class="form-check-label">Route</span>
+          </label>
+        </div>
+        <div class="col-6 col-lg-1 text-end">
+          <button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-external-item="${index}" title="Remove external"><i class="ti ti-trash"></i></button>
+        </div>
+      </div>
+    </div>`;
+}
+function portInput(index, field, label, value, type = 'text') {
+  return `<div class="col-12 col-lg-3"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" type="${type}" data-port-field="${index}:${field}" value="${esc(value)}" ${state.readOnly ? 'disabled' : ''}></div>`;
+}
+function exposeInput(index, field, label, value, type = 'text') {
+  return `<div class="col-12 col-lg-3"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" type="${type}" data-expose-field="${index}:${field}" value="${esc(value)}" ${state.readOnly ? 'disabled' : ''}></div>`;
+}
+function externalInput(index, field, label, value) {
+  return `<div class="col-12 col-lg-3"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" data-external-field="${index}:${field}" value="${esc(value)}" ${state.readOnly ? 'disabled' : ''}></div>`;
+}
+function renderPortsEmpty(index) {
+  return `<div data-port-empty="${index}">${emptyState('ti-route', 'No ports', 'Use Add port to declare a container port.')}</div>`;
+}
+function renderExposeEmpty(index) {
+  return `<div data-expose-empty="${index}">${emptyState('ti-plug-connected', 'No service exposure', 'Use Add service to expose this port inside the cluster.')}</div>`;
+}
+function renderExternalEmpty(index) {
+  return `<div data-external-empty="${index}">${emptyState('ti-world', 'No external exposure', 'Use Add external to create an Ingress or Route.')}</div>`;
+}
+function syncPortsEmptyState(index) {
+  const body = qs(`[data-port-body="${index}"]`);
+  if (body && !body.querySelector(`[data-port-row="${index}"]`)) body.innerHTML = renderPortsEmpty(index);
+}
+function syncExposeEmptyState(index) {
+  qsa(`[data-expose-body="${index}"]`).forEach((body) => {
+    if (!body.querySelector(`[data-expose-row="${index}"]`)) body.innerHTML = renderExposeEmpty(index);
+  });
+}
+function syncExternalEmptyState(index) {
+  qsa(`[data-external-body="${index}"]`).forEach((body) => {
+    if (!body.querySelector(`[data-external-row="${index}"]`)) body.innerHTML = renderExternalEmpty(index);
+  });
+}
+function addPortRow(index) {
+  const body = qs(`[data-port-body="${index}"]`);
+  if (!body) return;
+  body.querySelector(`[data-port-empty="${index}"]`)?.remove();
+  body.insertAdjacentHTML('beforeend', renderPortRow(index));
+}
+function addExposeRow(index, button) {
+  const host = button?.dataset.exposeTarget ? qs(`[data-expose-host="${button.dataset.exposeTarget}"]`) : null;
+  const body = host?.querySelector(`[data-expose-body="${index}"]`);
+  if (!body) return;
+  body.querySelector(`[data-expose-empty="${index}"]`)?.remove();
+  body.insertAdjacentHTML('beforeend', renderExposeRow(index));
+}
+function addExternalRow(index, button) {
+  const host = button?.dataset.externalTarget ? qs(`[data-external-host="${button.dataset.externalTarget}"]`) : null;
+  const body = host?.querySelector(`[data-external-body="${index}"]`);
+  if (!body) return;
+  body.querySelector(`[data-external-empty="${index}"]`)?.remove();
+  body.insertAdjacentHTML('beforeend', renderExternalRow(index));
+}
+async function saveContainerPorts(index) {
+  if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
+  const ports = qsa(`[data-port-row="${index}"]`).map((portRow) => ({
+    name: portRow.querySelector(`[data-port-field="${index}:name"]`)?.value?.trim() || '',
+    port: portRow.querySelector(`[data-port-field="${index}:port"]`)?.value?.trim() || '',
+    metrics: !!portRow.querySelector(`[data-port-field="${index}:metrics"]`)?.checked,
+    metrics_path_for: portRow.querySelector(`[data-port-field="${index}:metrics-path-for"]`)?.value?.trim() || '',
+    expose_as: Array.from(portRow.querySelectorAll(`[data-expose-row="${index}"]`)).map((exposeRow) => ({
+      service_name: exposeRow.querySelector(`[data-expose-field="${index}:service-name"]`)?.value?.trim() || '',
+      port: exposeRow.querySelector(`[data-expose-field="${index}:port"]`)?.value?.trim() || '',
+      service_type: exposeRow.querySelector(`[data-expose-field="${index}:service-type"]`)?.value?.trim() || '',
+      externals: Array.from(exposeRow.querySelectorAll(`[data-external-row="${index}"]`)).map((externalRow) => ({
+        name: externalRow.querySelector(`[data-external-field="${index}:name"]`)?.value?.trim() || '',
+        as_route: !!externalRow.querySelector(`[data-external-field="${index}:as-route"]`)?.checked,
+        class_name: externalRow.querySelector(`[data-external-field="${index}:class-name"]`)?.value?.trim() || '',
+        http_hostname: externalRow.querySelector(`[data-external-field="${index}:http-hostname"]`)?.value?.trim() || '',
+        http_path: externalRow.querySelector(`[data-external-field="${index}:http-path"]`)?.value?.trim() || '',
+        https_hostname: externalRow.querySelector(`[data-external-field="${index}:https-hostname"]`)?.value?.trim() || '',
+        https_path: externalRow.querySelector(`[data-external-field="${index}:https-path"]`)?.value?.trim() || '',
+        secret_name: externalRow.querySelector(`[data-external-field="${index}:secret-name"]`)?.value?.trim() || '',
+      })),
+    })),
+  })).filter((port) => port.name || port.port);
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/ports`, {ports, expected_hash: state.appContentHash});
+    state.portsModalClose?.();
+    state.portsModalClose = null;
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);
@@ -885,6 +1279,8 @@ async function saveContainerVars(index) {
   clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/vars`, {items, expected_hash: state.appContentHash});
+    state.editModalClose?.();
+    state.editModalClose = null;
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);

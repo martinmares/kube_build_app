@@ -35,7 +35,7 @@ containers:
         port: 8080
         metrics: true
         expose_as:
-          - hostname: api
+          - service_name: api
             port: 80
             external:
               - name: api-public

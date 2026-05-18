@@ -100,6 +100,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/resources", s.handleAppContainerResourcesUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/vars", s.handleAppContainerVarsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/runtime/java", s.handleAppContainerRuntimeUpdate)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/ports", s.handleAppContainerPortsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/probes", s.handleAppContainerProbesUpdate)
 	mux.HandleFunc("POST /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/probes/fix-legacy", s.handleAppContainerLegacyProbesFix)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/model", s.handleAppModel)
@@ -454,6 +455,36 @@ func (s *Server) handleAppContainerRuntimeUpdate(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, runtime)
+}
+
+func (s *Server) handleAppContainerPortsUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	containerIndex, err := strconv.Atoi(r.PathValue("container_index"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "container index must be an integer")
+		return
+	}
+	var payload struct {
+		ExpectedHash string                  `json:"expected_hash"`
+		Ports        []repository.PortUpdate `json:"ports"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ports, err := s.repo.UpdateAppContainerPorts(r.PathValue("env"), r.PathValue("app_file"), containerIndex, payload.Ports, payload.ExpectedHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, ports)
 }
 
 func (s *Server) handleAppContainerProbesUpdate(w http.ResponseWriter, r *http.Request) {

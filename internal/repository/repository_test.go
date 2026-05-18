@@ -637,6 +637,73 @@ func TestUpdateAppContainerRuntimeWritesJavaRuntime(t *testing.T) {
 	}
 }
 
+func TestUpdateAppContainerPortsWritesServiceAndExternal(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n    image: api:1\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repo.UpdateAppContainerPorts("test", "api.yml", 0, []PortUpdate{{
+		Name:    "http",
+		Port:    "8080",
+		Metrics: true,
+		ExposeAs: []ExposeUpdate{{
+			ServiceName: "api",
+			Port:        "80",
+			Externals: []ExternalUpdate{{
+				Name:         "api-public",
+				HTTPHostname: "api.example.test",
+				HTTPPath:     "/",
+			}},
+		}},
+	}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Ports) != 1 || result.Ports[0].ExposeAs[0].ServiceName == nil || *result.Ports[0].ExposeAs[0].ServiceName != "api" {
+		t.Fatalf("ports = %#v, want service_name api", result.Ports)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, "  - name: api\n    ports:\n      - name: http\n        port: 8080\n        metrics: true\n        expose_as:\n          - service_name: api\n            port: 80\n            external:\n              - name: api-public\n                http:\n                  - hostname: \"api.example.test\"\n                    path: \"/\"\n    image: api:1") {
+		t.Fatalf("ports block not inserted after container name:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppContainerPortsRejectsUnsupportedAdvancedFields(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    ports:
+      - name: http
+        port: 8080
+        expose_as:
+          - service_name: api
+            port: 80
+            external:
+              - name: api-public
+                annotations:
+                  nginx.ingress.kubernetes.io/rewrite-target: /
+                http:
+                  - hostname: api.example.test
+                    path: /
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = repo.UpdateAppContainerPorts("test", "api.yml", 0, []PortUpdate{{Name: "http", Port: "8080"}}, "")
+	if err == nil || !contains(err.Error(), "annotations") {
+		t.Fatalf("UpdateAppContainerPorts error = %v, want unsupported annotations error", err)
+	}
+}
+
 func TestUpdateAppContainerProbesWritesModernBlock(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n    image: api:1\n")
