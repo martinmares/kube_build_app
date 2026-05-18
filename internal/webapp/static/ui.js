@@ -1316,11 +1316,11 @@ function renderSpecialEntryRow(entry = {}) {
       <td><select class="form-select form-select-sm special-entry-type">${['string','number','bool','null','json'].map((type) => `<option value="${type}" ${entry.value_type === type ? 'selected' : ''}>${type}</option>`).join('')}</select></td>
       <td class="special-entry-actions-col">
         <div class="btn-list justify-content-end flex-nowrap">
-          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-special-entry-action="add-above" title="Add entry above"><i class="ti ti-row-insert-top"></i></button>
-          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-special-entry-action="add-below" title="Add entry below"><i class="ti ti-row-insert-bottom"></i></button>
-          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-special-entry-action="duplicate-above" title="Duplicate above"><i class="ti ti-copy-plus"></i></button>
-          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-special-entry-action="duplicate-below" title="Duplicate below"><i class="ti ti-copy"></i></button>
-          <button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-special-entry-action="delete" title="Delete entry"><i class="ti ti-trash"></i></button>
+          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="add-above" title="Add entry above"><i class="ti ti-row-insert-top"></i></button>
+          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="add-below" title="Add entry below"><i class="ti ti-row-insert-bottom"></i></button>
+          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="duplicate-above" title="Duplicate above"><i class="ti ti-copy-plus"></i></button>
+          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="duplicate-below" title="Duplicate below"><i class="ti ti-copy"></i></button>
+          <button class="btn btn-sm btn-ghost-danger btn-icon special-entry-action-btn" type="button" data-special-entry-action="delete" title="Delete entry"><i class="ti ti-trash"></i></button>
         </div>
       </td>
     </tr>`;
@@ -1881,8 +1881,8 @@ function renderSpecialEntryPreview(item) {
       <div class="special-entry-card-head">
         <div class="special-entry-name font-monospace text-break">${esc(item.key)}</div>
         <div class="special-entry-card-actions">
-          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-copy-special-entry="name" data-copy-value="${esc(item.key)}" title="Copy name"><i class="ti ti-copy"></i></button>
-          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-copy-special-entry="value" data-copy-value="${esc(item.value_text)}" title="Copy value"><i class="ti ti-copy-check"></i></button>
+          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-copy-special-entry="name" data-copy-value="${esc(item.key)}" title="Copy name"><i class="ti ti-copy"></i></button>
+          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-copy-special-entry="value" data-copy-value="${esc(item.value_text)}" title="Copy value"><i class="ti ti-copy-check"></i></button>
           <span class="badge bg-blue-lt">${esc(item.value_type)}</span>
         </div>
       </div>
