@@ -425,6 +425,58 @@ func TestAppContainerVarsUpdateEndpoint(t *testing.T) {
 	}
 }
 
+func TestAppContainerProbesUpdateEndpoint(t *testing.T) {
+	root := t.TempDir()
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, "name: api\ncontainers:\n  - name: api\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	body := `{"expected_hash":"` + detail.ContentHash + `","probes":{"preset":"spring-actuator","port":"8080","path":"/healthz"}}`
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/probes", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"preset":"spring-actuator"`) || !strings.Contains(response.Body.String(), `"port":"8080"`) {
+		t.Fatalf("unexpected response:\n%s", response.Body.String())
+	}
+}
+
+func TestAppContainerLegacyProbesFixEndpoint(t *testing.T) {
+	root := t.TempDir()
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, "name: api\ncontainers:\n  - name: api\n    probe:\n      ready:\n        http:\n          port: 8080\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	body := `{"expected_hash":"` + detail.ContentHash + `"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/envs/test/apps/api.yml/containers/0/probes/fix-legacy", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), `"legacy":true`) {
+		t.Fatalf("unexpected response:\n%s", response.Body.String())
+	}
+}
+
 func TestAssetContentEndpoint(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "assets", "ui", "nginx.conf"), "server {}\n")

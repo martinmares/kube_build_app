@@ -578,6 +578,106 @@ containers:
 	}
 }
 
+func TestUpdateAppContainerProbesWritesModernBlock(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n    image: api:1\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repo.UpdateAppContainerProbes("test", "api.yml", 0, ProbeUpdate{Preset: "spring-actuator", Port: "8080", Path: "/actuator/health"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Probes.Preset == nil || *result.Probes.Preset != "spring-actuator" {
+		t.Fatalf("probes = %#v, want spring-actuator preset", result.Probes)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, "  - name: api\n    probes:\n      preset: \"spring-actuator\"\n      port: \"8080\"\n      path: \"/actuator/health\"\n    image: api:1") {
+		t.Fatalf("probes not inserted after container name:\n%s", detail.Content)
+	}
+}
+
+func TestFixAppContainerLegacyProbeRenamesBlock(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    probe:
+      live:
+        http:
+          port: 8080
+          path: /live
+    image: api:1
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repo.FixAppContainerLegacyProbes("test", "api.yml", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Probes.Legacy {
+		t.Fatalf("probes = %#v, want no legacy probes", result.Probes)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(detail.Content, "    probe:") || !contains(detail.Content, "    probes:\n      live:\n        http:\n          port: 8080\n          path: /live") {
+		t.Fatalf("legacy probe was not renamed:\n%s", detail.Content)
+	}
+}
+
+func TestFixAppContainerLegacyHealthCopiesLiveReady(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    health:
+      http:
+        port: 8080
+        path:
+          live: /live
+          ready: /ready
+    image: api:1
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repo.FixAppContainerLegacyProbes("test", "api.yml", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Probes.Enabled || result.Probes.Legacy {
+		t.Fatalf("probes = %#v, want modern custom probes", result.Probes)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(detail.Content, "    health:") {
+		t.Fatalf("legacy health was not removed:\n%s", detail.Content)
+	}
+	for _, expected := range []string{
+		"    probes:\n      live:\n        http:\n          port: 8080",
+		"      ready:\n        http:\n          port: 8080",
+		"          ready: /ready",
+	} {
+		if !contains(detail.Content, expected) {
+			t.Fatalf("content missing %q:\n%s", expected, detail.Content)
+		}
+	}
+}
+
 func TestAssetDetailSupportsSpecialRootAndRejectsEscapes(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "assets", "ui", "nginx.conf"), "server {}\n")

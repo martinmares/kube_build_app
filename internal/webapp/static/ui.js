@@ -75,6 +75,10 @@ async function init() {
     if (saveResources && !state.readOnly) return saveContainerResources(Number(saveResources.dataset.saveResources));
     const saveVars = e.target.closest('[data-save-container-vars]');
     if (saveVars && !state.readOnly) return saveContainerVars(Number(saveVars.dataset.saveContainerVars));
+    const saveProbes = e.target.closest('[data-save-probes]');
+    if (saveProbes && !state.readOnly) return saveContainerProbes(Number(saveProbes.dataset.saveProbes));
+    const fixLegacyProbes = e.target.closest('[data-fix-legacy-probes]');
+    if (fixLegacyProbes && !state.readOnly) return fixContainerLegacyProbes(Number(fixLegacyProbes.dataset.fixLegacyProbes));
     const addVar = e.target.closest('[data-add-container-var]');
     if (addVar && !state.readOnly) return addContainerVarRow(Number(addVar.dataset.addContainerVar));
     const removeVar = e.target.closest('[data-remove-container-var]');
@@ -531,23 +535,48 @@ function renderContainerOverview(container) {
           ${chip('Mem lim', resources.memory_limit || '-')}
         </div>${renderResourcesEditor(container.index, resources)}</div>
         <div class="col-12 col-xl-4"><div class="overview-subtitle">Java runtime</div>${javaBlock}</div>
-        <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div>${renderProbePreview(probes)}</div>
+        <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div>${renderProbePreview(container.index, probes)}</div>
       </div>
       ${renderContainerVarsEditor(container.index, vars)}
     </div>`;
 }
-function renderProbePreview(probes) {
-  if (!probes?.enabled) return '<div class="text-muted small">Not configured.</div>';
+function renderProbePreview(index, probes) {
+  if (!probes?.enabled) return `<div class="text-muted small">Not configured.</div>${renderProbesEditor(index, probes)}`;
   const modern = [
     probes.preset && chip('preset', probes.preset),
     probes.port && chip('port', probes.port),
     probes.path && chip('path', probes.path),
   ].filter(Boolean).join('');
   const legacy = probes.legacy ? `<div class="alert alert-warning py-2 px-2 mb-2 small"><i class="ti ti-alert-triangle me-1"></i>Legacy ${esc(legacyProbeKinds(probes))} detected.</div>` : '';
-  return `${legacy}${modern ? `<div class="chip-row">${modern}</div>` : '<div class="text-muted small">Legacy-only configuration.</div>'}`;
+  const custom = probes.legacy ? 'Legacy-only configuration.' : 'Custom probes configured.';
+  return `${legacy}${modern ? `<div class="chip-row">${modern}</div>` : `<div class="text-muted small">${custom}</div>`}${renderProbesEditor(index, probes)}`;
 }
 function legacyProbeKinds(probes) {
   return (probes?.legacy_kinds || []).join(' + ') || 'health/probe';
+}
+function renderProbesEditor(index, probes) {
+  if (state.readOnly) return '';
+  const disabled = state.readOnly ? 'disabled' : '';
+  const fixButton = probes?.legacy ? `<button class="btn btn-sm btn-outline-warning" type="button" data-fix-legacy-probes="${index}" ${disabled}><i class="ti ti-wand me-1"></i>Fix legacy probes</button>` : '';
+  return `
+    <div class="probe-editor mt-2" data-probe-editor="${index}">
+      <div class="row g-2">
+        ${probeInput(index, 'preset', 'Preset', probes?.preset || '')}
+        ${probeInput(index, 'port', 'Port', probes?.port || '')}
+        ${probeInput(index, 'path', 'Path', probes?.path || '')}
+      </div>
+      <div class="d-flex align-items-center justify-content-between gap-2 mt-2">
+        <div class="text-muted small">Saves as modern probes preset/port/path.</div>
+        <div class="d-flex gap-2 flex-wrap justify-content-end">
+          ${fixButton}
+          <button class="btn btn-sm btn-primary" type="button" data-save-probes="${index}" ${disabled}><i class="ti ti-device-floppy me-1"></i>Save probes</button>
+        </div>
+      </div>
+    </div>`;
+}
+function probeInput(index, field, label, value) {
+  const disabled = state.readOnly ? 'disabled' : '';
+  return `<div class="col-12 col-md-4"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" data-probe-field="${index}:${field}" value="${esc(value)}" ${disabled}></div>`;
 }
 function renderResourcesEditor(index, resources) {
   if (state.readOnly) return '';
@@ -582,6 +611,33 @@ async function saveContainerResources(index) {
   clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/resources`, {resources, expected_hash: state.appContentHash});
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
+}
+async function saveContainerProbes(index) {
+  if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
+  const value = (field) => qs(`[data-probe-field="${index}:${field}"]`)?.value?.trim() || '';
+  const probes = {
+    preset: value('preset'),
+    port: value('port'),
+    path: value('path'),
+  };
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/probes`, {probes, expected_hash: state.appContentHash});
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
+}
+async function fixContainerLegacyProbes(index) {
+  if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
+  if (!window.confirm('Convert legacy health/probe block to modern probes for this container?')) return;
+  clearError();
+  try {
+    await apiPostJSON(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/probes/fix-legacy`, {expected_hash: state.appContentHash});
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);

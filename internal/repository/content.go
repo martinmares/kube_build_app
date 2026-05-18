@@ -67,11 +67,25 @@ type AppContainerVars struct {
 	Vars           []EnvVarModel `json:"vars"`
 }
 
+type AppContainerProbes struct {
+	Env            string      `json:"env"`
+	FileName       string      `json:"file_name"`
+	ContentHash    string      `json:"content_hash"`
+	ContainerIndex int         `json:"container_index"`
+	Probes         ProbesModel `json:"probes"`
+}
+
 type ResourceUpdate struct {
 	CPURequest    string `json:"cpu_request"`
 	CPULimit      string `json:"cpu_limit"`
 	MemoryRequest string `json:"memory_request"`
 	MemoryLimit   string `json:"memory_limit"`
+}
+
+type ProbeUpdate struct {
+	Preset string `json:"preset"`
+	Port   string `json:"port"`
+	Path   string `json:"path"`
 }
 
 type VarItem struct {
@@ -354,6 +368,74 @@ func (r *Repository) UpdateAppContainerVars(envName string, appFile string, cont
 		return AppContainerVars{}, err
 	}
 	return AppContainerVars{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Vars: model.Containers[containerIndex].Vars}, nil
+}
+
+func (r *Repository) UpdateAppContainerProbes(envName string, appFile string, containerIndex int, probes ProbeUpdate, expectedHash string) (AppContainerProbes, error) {
+	if containerIndex < 0 {
+		return AppContainerProbes{}, errors.New("container index must be greater than or equal to 0")
+	}
+	if err := validateProbeUpdate(probes); err != nil {
+		return AppContainerProbes{}, err
+	}
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return AppContainerProbes{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return AppContainerProbes{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return AppContainerProbes{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	updated, err := replaceContainerProbesBlock(string(contentBytes), containerIndex, probes)
+	if err != nil {
+		return AppContainerProbes{}, err
+	}
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return AppContainerProbes{}, err
+	}
+	return r.appContainerProbes(envName, filepath.Base(path), containerIndex)
+}
+
+func (r *Repository) FixAppContainerLegacyProbes(envName string, appFile string, containerIndex int, expectedHash string) (AppContainerProbes, error) {
+	if containerIndex < 0 {
+		return AppContainerProbes{}, errors.New("container index must be greater than or equal to 0")
+	}
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return AppContainerProbes{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return AppContainerProbes{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return AppContainerProbes{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	updated, err := fixContainerLegacyProbesBlock(string(contentBytes), containerIndex)
+	if err != nil {
+		return AppContainerProbes{}, err
+	}
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return AppContainerProbes{}, err
+	}
+	return r.appContainerProbes(envName, filepath.Base(path), containerIndex)
+}
+
+func (r *Repository) appContainerProbes(envName string, appFile string, containerIndex int) (AppContainerProbes, error) {
+	model, err := r.AppModel(envName, appFile)
+	if err != nil {
+		return AppContainerProbes{}, err
+	}
+	if containerIndex >= len(model.Containers) {
+		return AppContainerProbes{}, errors.New("container index not found after update")
+	}
+	detail, err := r.AppDetail(envName, appFile)
+	if err != nil {
+		return AppContainerProbes{}, err
+	}
+	return AppContainerProbes{Env: envName, FileName: detail.FileName, ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Probes: model.Containers[containerIndex].Probes}, nil
 }
 
 func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) {
@@ -760,21 +842,7 @@ func replaceContainerVarsBlock(content string, containerIndex int, items []VarIt
 		return "", err
 	}
 
-	varsStart := -1
-	varsEnd := -1
-	for idx := start + 1; idx < end; idx++ {
-		if strings.HasPrefix(lines[idx], "    vars:") {
-			varsStart = idx
-			varsEnd = end
-			for j := idx + 1; j < end; j++ {
-				if strings.TrimSpace(lines[j]) != "" && leadingSpaces(lines[j]) <= 4 {
-					varsEnd = j
-					break
-				}
-			}
-			break
-		}
-	}
+	varsStart, varsEnd := containerChildBlockRange(lines, start, end, "vars")
 
 	preserved := [][]string{}
 	preservedNames := map[string]bool{}
@@ -806,6 +874,82 @@ func replaceContainerVarsBlock(content string, containerIndex int, items []VarIt
 		updated = append(updated, lines[insertAt:]...)
 		lines = updated
 	}
+	out := strings.Join(lines, "\n")
+	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return out, nil
+}
+
+func replaceContainerProbesBlock(content string, containerIndex int, probes ProbeUpdate) (string, error) {
+	lines, start, end, err := containerBlockRange(content, containerIndex)
+	if err != nil {
+		return "", err
+	}
+
+	probesStart, probesEnd := containerChildBlockRange(lines, start, end, "probes")
+	replacement := renderProbesBlock(probes)
+	insertAt := start + 1
+	if probesStart >= 0 {
+		insertAt = probesStart
+		lines = append(lines[:probesStart], lines[probesEnd:]...)
+	}
+	if len(replacement) > 0 {
+		updated := make([]string, 0, len(lines)+len(replacement))
+		updated = append(updated, lines[:insertAt]...)
+		updated = append(updated, replacement...)
+		updated = append(updated, lines[insertAt:]...)
+		lines = updated
+	}
+	out := strings.Join(lines, "\n")
+	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return out, nil
+}
+
+func fixContainerLegacyProbesBlock(content string, containerIndex int) (string, error) {
+	lines, start, end, err := containerBlockRange(content, containerIndex)
+	if err != nil {
+		return "", err
+	}
+
+	probesStart, _ := containerChildBlockRange(lines, start, end, "probes")
+	probeStart, probeEnd := containerChildBlockRange(lines, start, end, "probe")
+	healthStart, healthEnd := containerChildBlockRange(lines, start, end, "health")
+	if probeStart < 0 && healthStart < 0 {
+		return "", errors.New("legacy probes block not found")
+	}
+
+	replacement := []string{}
+	insertAt := end
+	if probesStart >= 0 {
+		insertAt = probesStart
+	} else if probeStart >= 0 {
+		insertAt = probeStart
+		replacement = legacyProbeToProbesBlock(lines[probeStart:probeEnd])
+	} else {
+		insertAt = healthStart
+		replacement = legacyHealthToProbesBlock(lines[healthStart:healthEnd])
+	}
+
+	for _, block := range sortedRangesDesc([][2]int{{probeStart, probeEnd}, {healthStart, healthEnd}}) {
+		if block[0] < 0 {
+			continue
+		}
+		if block[0] < insertAt {
+			insertAt -= block[1] - block[0]
+		}
+		lines = append(lines[:block[0]], lines[block[1]:]...)
+	}
+	if probesStart < 0 && len(replacement) > 0 {
+		updated := make([]string, 0, len(lines)+len(replacement))
+		updated = append(updated, lines[:insertAt]...)
+		updated = append(updated, replacement...)
+		updated = append(updated, lines[insertAt:]...)
+		lines = updated
+	}
+
 	out := strings.Join(lines, "\n")
 	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
 		out += "\n"
@@ -853,6 +997,34 @@ func containerBlockRange(content string, containerIndex int) ([]string, int, int
 	return lines, start, end, nil
 }
 
+func containerChildBlockRange(lines []string, start int, end int, key string) (int, int) {
+	prefix := "    " + key + ":"
+	for idx := start + 1; idx < end; idx++ {
+		if strings.HasPrefix(lines[idx], prefix) {
+			blockEnd := end
+			for j := idx + 1; j < end; j++ {
+				if strings.TrimSpace(lines[j]) != "" && leadingSpaces(lines[j]) <= 4 {
+					blockEnd = j
+					break
+				}
+			}
+			return idx, blockEnd
+		}
+	}
+	return -1, -1
+}
+
+func sortedRangesDesc(ranges [][2]int) [][2]int {
+	out := [][2]int{}
+	for _, item := range ranges {
+		if item[0] >= 0 && item[1] > item[0] {
+			out = append(out, item)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] > out[j][0] })
+	return out
+}
+
 func renderResourcesBlock(resources ResourceUpdate) []string {
 	cpuRequest := strings.TrimSpace(resources.CPURequest)
 	cpuLimit := strings.TrimSpace(resources.CPULimit)
@@ -883,6 +1055,50 @@ func renderResourcesBlock(resources ResourceUpdate) []string {
 	return lines
 }
 
+func renderProbesBlock(probes ProbeUpdate) []string {
+	preset := strings.TrimSpace(probes.Preset)
+	port := strings.TrimSpace(probes.Port)
+	path := strings.TrimSpace(probes.Path)
+	if preset == "" && port == "" && path == "" {
+		return nil
+	}
+	lines := []string{"    probes:"}
+	if preset != "" {
+		lines = append(lines, "      preset: "+strconv.Quote(preset))
+	}
+	if port != "" {
+		lines = append(lines, "      port: "+strconv.Quote(port))
+	}
+	if path != "" {
+		lines = append(lines, "      path: "+strconv.Quote(path))
+	}
+	return lines
+}
+
+func legacyProbeToProbesBlock(block []string) []string {
+	if len(block) == 0 {
+		return nil
+	}
+	out := append([]string(nil), block...)
+	out[0] = strings.Replace(out[0], "    probe:", "    probes:", 1)
+	return out
+}
+
+func legacyHealthToProbesBlock(block []string) []string {
+	if len(block) <= 1 {
+		return []string{"    probes:"}
+	}
+	out := []string{"    probes:", "      live:"}
+	for _, line := range block[1:] {
+		out = append(out, "  "+line)
+	}
+	out = append(out, "      ready:")
+	for _, line := range block[1:] {
+		out = append(out, "  "+line)
+	}
+	return out
+}
+
 func validateResourceUpdate(resources ResourceUpdate) error {
 	for label, value := range map[string]string{
 		"cpu_request":    resources.CPURequest,
@@ -892,6 +1108,24 @@ func validateResourceUpdate(resources ResourceUpdate) error {
 	} {
 		if strings.ContainsAny(value, "\r\n") {
 			return fmt.Errorf("%s contains unsupported newline", label)
+		}
+	}
+	return nil
+}
+
+func validateProbeUpdate(probes ProbeUpdate) error {
+	for label, value := range map[string]string{
+		"preset": probes.Preset,
+		"port":   probes.Port,
+		"path":   probes.Path,
+	} {
+		if strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("%s contains unsupported newline", label)
+		}
+	}
+	if port := strings.TrimSpace(probes.Port); port != "" {
+		if _, err := strconv.Atoi(port); err != nil {
+			return errors.New("port must be an integer")
 		}
 	}
 	return nil
@@ -1142,7 +1376,9 @@ func probesModel(containerMap map[string]any) ProbesModel {
 		out.LegacyKinds = append(out.LegacyKinds, "probe")
 	}
 	out.Legacy = len(out.LegacyKinds) > 0
-	out.Enabled = out.Preset != nil || out.Port != nil || out.Path != nil || out.Legacy
+	out.Enabled = out.Preset != nil || out.Port != nil || out.Path != nil || out.Legacy ||
+		nestedValue(probes, "http") != nil || nestedValue(probes, "live") != nil ||
+		nestedValue(probes, "ready") != nil || nestedValue(probes, "start") != nil
 	return out
 }
 
