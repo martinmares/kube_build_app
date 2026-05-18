@@ -840,14 +840,22 @@ func (r *Repository) SpecialEntries(envName string, specialFile string) (Special
 	if err := json.Unmarshal([]byte(detail.Content), &root); err != nil {
 		return SpecialEntries{}, err
 	}
-	rawSection, ok := root[kind.rootKey].(map[string]any)
-	if !ok {
-		return SpecialEntries{}, fmt.Errorf("missing object at .%s", kind.rootKey)
-	}
 	out := SpecialEntries{Env: envName, SpecialFile: specialFile, ContentHash: detail.ContentHash, Editable: !kind.secured, IsDirty: detail.IsDirty}
 	if kind.secured {
 		warning := "secured file is shown without decrypt; edit flow requires EncJson preflight"
 		out.Warning = &warning
+	}
+	if kind.rootKey == "environment" {
+		entries, err := orderedEnvironmentSpecialEntries(detail.Content, kind.rootKey)
+		if err != nil {
+			return SpecialEntries{}, err
+		}
+		out.Entries = entries
+		return out, nil
+	}
+	rawSection, ok := root[kind.rootKey].(map[string]any)
+	if !ok {
+		return SpecialEntries{}, fmt.Errorf("missing object at .%s", kind.rootKey)
 	}
 	keys := make([]string, 0, len(rawSection))
 	for key := range rawSection {
@@ -1073,6 +1081,9 @@ func specialEntryValue(entry SpecialEntry) (any, error) {
 }
 
 func replaceSpecialEntries(content string, rootKey string, entries []SpecialEntry) (string, error) {
+	if rootKey == "environment" {
+		return patchEnvironmentSpecialEntries(content, rootKey, entries)
+	}
 	seen := map[string]bool{}
 	section := map[string]any{}
 	for _, entry := range entries {
@@ -1106,6 +1117,373 @@ func replaceSpecialEntries(content string, rootKey string, entries []SpecialEntr
 		return "", err
 	}
 	return string(out) + "\n", nil
+}
+
+type jsonObjectMember struct {
+	key         string
+	memberStart int
+	keyStart    int
+	valueStart  int
+	valueEnd    int
+	memberEnd   int
+	commaPos    int
+	hasComma    bool
+}
+
+type encodedSpecialEntry struct {
+	key       string
+	valueJSON string
+}
+
+func orderedEnvironmentSpecialEntries(content string, rootKey string) ([]SpecialEntry, error) {
+	rootMember, err := findJSONObjectMember(content, 0, rootKey)
+	if err != nil {
+		return nil, err
+	}
+	members, _, err := parseJSONObjectMembers(content, rootMember.valueStart)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]SpecialEntry, 0, len(members))
+	for _, member := range members {
+		var value any
+		if err := json.Unmarshal([]byte(content[member.valueStart:member.valueEnd]), &value); err != nil {
+			return nil, fmt.Errorf("invalid value for entry %q: %w", member.key, err)
+		}
+		entries = append(entries, specialEntryFromValue(member.key, value, rootKey))
+	}
+	return entries, nil
+}
+
+func patchEnvironmentSpecialEntries(content string, rootKey string, entries []SpecialEntry) (string, error) {
+	encoded, err := encodeSpecialEntries(entries)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(content) == "" {
+		return "", errors.New("missing JSON content")
+	}
+	rootMember, err := findJSONObjectMember(content, 0, rootKey)
+	if err != nil {
+		return "", err
+	}
+	members, objectEnd, err := parseJSONObjectMembers(content, rootMember.valueStart)
+	if err != nil {
+		return "", err
+	}
+	existing := map[string]jsonObjectMember{}
+	for _, member := range members {
+		existing[member.key] = member
+	}
+	seen := map[string]bool{}
+	var additions []encodedSpecialEntry
+	var edits []textEdit
+	for _, entry := range encoded {
+		seen[entry.key] = true
+		member, ok := existing[entry.key]
+		if !ok {
+			additions = append(additions, entry)
+			continue
+		}
+		if content[member.valueStart:member.valueEnd] != entry.valueJSON {
+			edits = append(edits, textEdit{start: member.valueStart, end: member.valueEnd, replacement: entry.valueJSON})
+		}
+	}
+	for idx, member := range members {
+		if !seen[member.key] {
+			start, end := memberRemovalRange(members, idx)
+			edits = append(edits, textEdit{start: start, end: end})
+		}
+	}
+	if len(additions) > 0 {
+		insertionPoint := environmentInsertionPoint(content, rootMember.valueStart, objectEnd)
+		edits = append(edits, textEdit{start: insertionPoint, end: insertionPoint, replacement: environmentInsertion(content, rootMember.valueStart, objectEnd, members, additions)})
+	}
+	return applyTextEdits(content, edits), nil
+}
+
+func encodeSpecialEntries(entries []SpecialEntry) ([]encodedSpecialEntry, error) {
+	seen := map[string]bool{}
+	encoded := make([]encodedSpecialEntry, 0, len(entries))
+	for _, entry := range entries {
+		key := strings.TrimSpace(entry.Key)
+		if key == "" {
+			return nil, errors.New("entry key is required")
+		}
+		if strings.ContainsAny(key, "\r\n") {
+			return nil, fmt.Errorf("invalid entry key %q", key)
+		}
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate entry key %q", key)
+		}
+		seen[key] = true
+		value, err := specialEntryValue(entry)
+		if err != nil {
+			return nil, err
+		}
+		valueBytes, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		encoded = append(encoded, encodedSpecialEntry{key: key, valueJSON: string(valueBytes)})
+	}
+	return encoded, nil
+}
+
+func findJSONObjectMember(content string, objectStart int, key string) (jsonObjectMember, error) {
+	members, _, err := parseJSONObjectMembers(content, objectStart)
+	if err != nil {
+		return jsonObjectMember{}, err
+	}
+	for _, member := range members {
+		if member.key == key {
+			if member.valueStart >= len(content) || content[member.valueStart] != '{' {
+				return jsonObjectMember{}, fmt.Errorf("missing object at .%s", key)
+			}
+			return member, nil
+		}
+	}
+	return jsonObjectMember{}, fmt.Errorf("missing object at .%s", key)
+}
+
+func parseJSONObjectMembers(content string, objectStart int) ([]jsonObjectMember, int, error) {
+	pos := skipJSONWhitespace(content, objectStart)
+	if pos >= len(content) || content[pos] != '{' {
+		return nil, 0, errors.New("expected JSON object")
+	}
+	pos++
+	var members []jsonObjectMember
+	for {
+		memberStart := pos
+		pos = skipJSONWhitespace(content, pos)
+		if pos >= len(content) {
+			return nil, 0, errors.New("unterminated JSON object")
+		}
+		if content[pos] == '}' {
+			return members, pos, nil
+		}
+		memberStart = min(memberStart, pos)
+		if content[pos] != '"' {
+			return nil, 0, errors.New("expected JSON object key")
+		}
+		keyStart := pos
+		keyEnd, err := scanJSONStringEnd(content, keyStart)
+		if err != nil {
+			return nil, 0, err
+		}
+		var key string
+		if err := json.Unmarshal([]byte(content[keyStart:keyEnd]), &key); err != nil {
+			return nil, 0, err
+		}
+		pos = skipJSONWhitespace(content, keyEnd)
+		if pos >= len(content) || content[pos] != ':' {
+			return nil, 0, fmt.Errorf("expected ':' after JSON object key %q", key)
+		}
+		pos = skipJSONWhitespace(content, pos+1)
+		valueStart := pos
+		valueEnd, err := scanJSONValueEnd(content, valueStart)
+		if err != nil {
+			return nil, 0, err
+		}
+		pos = skipJSONWhitespace(content, valueEnd)
+		member := jsonObjectMember{key: key, memberStart: memberStart, keyStart: keyStart, valueStart: valueStart, valueEnd: valueEnd, memberEnd: pos}
+		if pos < len(content) && content[pos] == ',' {
+			member.hasComma = true
+			member.commaPos = pos
+			member.memberEnd = pos + 1
+			pos++
+		}
+		members = append(members, member)
+	}
+}
+
+func scanJSONStringEnd(content string, start int) (int, error) {
+	if start >= len(content) || content[start] != '"' {
+		return 0, errors.New("expected JSON string")
+	}
+	for pos := start + 1; pos < len(content); pos++ {
+		switch content[pos] {
+		case '\\':
+			pos++
+		case '"':
+			return pos + 1, nil
+		}
+	}
+	return 0, errors.New("unterminated JSON string")
+}
+
+func scanJSONValueEnd(content string, start int) (int, error) {
+	if start >= len(content) {
+		return 0, errors.New("expected JSON value")
+	}
+	switch content[start] {
+	case '"':
+		return scanJSONStringEnd(content, start)
+	case '{', '[':
+		open := content[start]
+		close := byte('}')
+		if open == '[' {
+			close = ']'
+		}
+		depth := 1
+		for pos := start + 1; pos < len(content); pos++ {
+			switch content[pos] {
+			case '"':
+				end, err := scanJSONStringEnd(content, pos)
+				if err != nil {
+					return 0, err
+				}
+				pos = end - 1
+			case open:
+				depth++
+			case close:
+				depth--
+				if depth == 0 {
+					return pos + 1, nil
+				}
+			case '{':
+				if open == '[' {
+					end, err := scanNestedJSON(content, pos, '{', '}')
+					if err != nil {
+						return 0, err
+					}
+					pos = end - 1
+				}
+			case '[':
+				if open == '{' {
+					end, err := scanNestedJSON(content, pos, '[', ']')
+					if err != nil {
+						return 0, err
+					}
+					pos = end - 1
+				}
+			}
+		}
+		return 0, errors.New("unterminated JSON value")
+	default:
+		pos := start
+		for pos < len(content) && !strings.ContainsRune(",}]\r\n\t ", rune(content[pos])) {
+			pos++
+		}
+		if pos == start {
+			return 0, errors.New("expected JSON value")
+		}
+		return pos, nil
+	}
+}
+
+func scanNestedJSON(content string, start int, open byte, close byte) (int, error) {
+	depth := 1
+	for pos := start + 1; pos < len(content); pos++ {
+		switch content[pos] {
+		case '"':
+			end, err := scanJSONStringEnd(content, pos)
+			if err != nil {
+				return 0, err
+			}
+			pos = end - 1
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return pos + 1, nil
+			}
+		}
+	}
+	return 0, errors.New("unterminated JSON value")
+}
+
+func skipJSONWhitespace(content string, pos int) int {
+	for pos < len(content) {
+		switch content[pos] {
+		case ' ', '\n', '\r', '\t':
+			pos++
+		default:
+			return pos
+		}
+	}
+	return pos
+}
+
+func memberRemovalRange(members []jsonObjectMember, idx int) (int, int) {
+	member := members[idx]
+	if member.hasComma {
+		return member.memberStart, member.commaPos + 1
+	}
+	if idx > 0 && members[idx-1].hasComma {
+		return members[idx-1].commaPos, member.valueEnd
+	}
+	return member.memberStart, member.valueEnd
+}
+
+func environmentInsertion(content string, objectStart int, objectEnd int, members []jsonObjectMember, additions []encodedSpecialEntry) string {
+	memberIndent, closeIndent := environmentIndents(content, objectStart, objectEnd, members)
+	lines := make([]string, 0, len(additions))
+	for _, entry := range additions {
+		keyBytes, _ := json.Marshal(entry.key)
+		lines = append(lines, memberIndent+string(keyBytes)+": "+entry.valueJSON)
+	}
+	if memberIndent == "" && closeIndent == "" {
+		inline := make([]string, 0, len(additions))
+		for _, entry := range additions {
+			keyBytes, _ := json.Marshal(entry.key)
+			inline = append(inline, string(keyBytes)+":"+entry.valueJSON)
+		}
+		if len(members) == 0 {
+			return strings.Join(inline, ",")
+		}
+		return "," + strings.Join(inline, ",")
+	}
+	if len(members) == 0 {
+		return "\n" + strings.Join(lines, ",\n") + "\n" + closeIndent
+	}
+	return ",\n" + strings.Join(lines, ",\n")
+}
+
+func environmentInsertionPoint(content string, objectStart int, objectEnd int) int {
+	pos := objectEnd
+	for pos > objectStart+1 {
+		switch content[pos-1] {
+		case ' ', '\n', '\r', '\t':
+			pos--
+		default:
+			return pos
+		}
+	}
+	return objectStart + 1
+}
+
+func environmentIndents(content string, objectStart int, objectEnd int, members []jsonObjectMember) (string, string) {
+	closeIndent := ""
+	if lineStart := strings.LastIndex(content[:objectEnd], "\n"); lineStart >= 0 {
+		closeIndent = content[lineStart+1 : objectEnd]
+	}
+	if len(members) > 0 {
+		prefix := content[members[0].memberStart:members[0].keyStart]
+		if lineStart := strings.LastIndex(prefix, "\n"); lineStart >= 0 {
+			return prefix[lineStart+1:], closeIndent
+		}
+		return prefix, closeIndent
+	}
+	return closeIndent + "  ", closeIndent
+}
+
+type textEdit struct {
+	start       int
+	end         int
+	replacement string
+}
+
+func applyTextEdits(content string, edits []textEdit) string {
+	sort.SliceStable(edits, func(i, j int) bool {
+		return edits[i].start > edits[j].start
+	})
+	out := content
+	for _, edit := range edits {
+		out = out[:edit.start] + edit.replacement + out[edit.end:]
+	}
+	return out
 }
 
 func defaultsModelFromDetail(detail AssetDetail) (DefaultsModel, error) {

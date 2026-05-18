@@ -966,7 +966,133 @@ func TestUpdateSpecialEntriesUpdatesEnvUnsecuredJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(detail.Content, `"A": "two"`) || !contains(detail.Content, `"COUNT": 2`) || !contains(detail.Content, `"FLAG": true`) {
+	if !contains(detail.Content, `"A":"two"`) || !contains(detail.Content, `"COUNT":2`) || !contains(detail.Content, `"FLAG":true`) {
 		t.Fatalf("unexpected env.unsecured.json content:\n%s", detail.Content)
+	}
+}
+
+func TestSpecialEntriesPreservesEnvUnsecuredJSONOrder(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "env.unsecured.json"), `{
+  "_public_key": "keep",
+  "environment": {
+    "B": "two",
+    "A": "one",
+    "COUNT": 1
+  },
+  "other": true
+}
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := repo.SpecialEntries("test", "env.unsecured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{}
+	for _, entry := range entries.Entries {
+		keys = append(keys, entry.Key)
+	}
+	if strings.Join(keys, ",") != "B,A,COUNT" {
+		t.Fatalf("entry order = %q, want B,A,COUNT", strings.Join(keys, ","))
+	}
+}
+
+func TestUpdateSpecialEntriesPatchesEnvUnsecuredJSONWithoutReordering(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "test", "env.unsecured.json")
+	writeFile(t, path, `{
+  "_public_key": "keep",
+  "environment": {
+    "B": "two",
+    "A": "one",
+    "COUNT": 1
+  },
+  "other": true
+}
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := repo.SpecialEntries("test", "env.unsecured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = repo.UpdateSpecialEntries("test", "env.unsecured.json", []SpecialEntry{
+		{Key: "B", ValueType: "string", ValueText: "two"},
+		{Key: "A", ValueType: "string", ValueText: "changed"},
+		{Key: "COUNT", ValueType: "number", ValueText: "1"},
+	}, entries.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{
+  "_public_key": "keep",
+  "environment": {
+    "B": "two",
+    "A": "changed",
+    "COUNT": 1
+  },
+  "other": true
+}
+`
+	if string(gotBytes) != want {
+		t.Fatalf("content changed unexpectedly:\n%s", string(gotBytes))
+	}
+}
+
+func TestUpdateSpecialEntriesAppendsAndDeletesEnvUnsecuredJSONWithoutReordering(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "test", "env.unsecured.json")
+	writeFile(t, path, `{
+  "environment": {
+    "B": "two",
+    "A": "one",
+    "COUNT": 1
+  },
+  "other": true
+}
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := repo.SpecialEntries("test", "env.unsecured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = repo.UpdateSpecialEntries("test", "env.unsecured.json", []SpecialEntry{
+		{Key: "B", ValueType: "string", ValueText: "two"},
+		{Key: "COUNT", ValueType: "number", ValueText: "1"},
+		{Key: "NEW", ValueType: "bool", ValueText: "true"},
+	}, entries.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{
+  "environment": {
+    "B": "two",
+    "COUNT": 1,
+    "NEW": true
+  },
+  "other": true
+}
+`
+	if string(gotBytes) != want {
+		t.Fatalf("content changed unexpectedly:\n%s", string(gotBytes))
 	}
 }
