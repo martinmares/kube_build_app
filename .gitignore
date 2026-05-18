@@ -20,6 +20,7 @@ dist/
 .qlty/
 images/
 .deploy/
+.codex-handoff/
 
 # include
 conf/*
