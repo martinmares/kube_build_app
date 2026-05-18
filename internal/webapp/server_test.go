@@ -699,6 +699,41 @@ func TestBuildPreviewContentEndpoint(t *testing.T) {
 	}
 }
 
+func TestSecuredSpecialPreflightAndDecryptedEntries(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "env.secured.json"), `{"environment":{"SECRET":"EncJson[@api=2.0:@box=<x>]"}}`)
+	fakeEncjson := filepath.Join(root, "fake-encjson")
+	writeFile(t, fakeEncjson, "#!/bin/sh\nprintf '%s\\n' '{\"environment\":{\"SECRET\":\"plain\",\"COUNT\":2}}'\n")
+	if err := os.Chmod(fakeEncjson, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{EncjsonPath: fakeEncjson})
+
+	preflightReq := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/assets/special/env.secured.json/preflight", nil)
+	preflightRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(preflightRes, preflightReq)
+	if preflightRes.Code != http.StatusOK {
+		t.Fatalf("preflight status = %d, want 200: %s", preflightRes.Code, preflightRes.Body.String())
+	}
+	if !strings.Contains(preflightRes.Body.String(), `"decrypt_ok":true`) {
+		t.Fatalf("preflight did not decrypt:\n%s", preflightRes.Body.String())
+	}
+
+	entriesReq := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/assets/special/env.secured.json/decrypted-entries", nil)
+	entriesRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(entriesRes, entriesReq)
+	if entriesRes.Code != http.StatusOK {
+		t.Fatalf("decrypted entries status = %d, want 200: %s", entriesRes.Code, entriesRes.Body.String())
+	}
+	if !strings.Contains(entriesRes.Body.String(), `"key":"SECRET"`) || !strings.Contains(entriesRes.Body.String(), `"value_text":"plain"`) {
+		t.Fatalf("unexpected decrypted entries:\n%s", entriesRes.Body.String())
+	}
+}
+
 func writeBuildFixture(t *testing.T, root string) {
 	t.Helper()
 	envDir := filepath.Join(root, "test")

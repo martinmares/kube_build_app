@@ -1826,10 +1826,23 @@ async function selectAsset(path) {
     setText('#asset-detail-title', path);
     setHTML('#asset-structured', '');
     if (isSpecial(path)) {
-      const [detail, entries] = await Promise.all([
+      const [detail, rawEntries, preflight] = await Promise.all([
         api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/content/${path.split('/').map(encodeURIComponent).join('/')}`),
         api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/special/${encodeURIComponent(path)}/entries`),
+        api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/special/${encodeURIComponent(path)}/preflight`),
       ]);
+      let entries = rawEntries;
+      if (isSecuredSpecial(path) && preflight?.ok && preflight?.decrypt_ok) {
+        try {
+          entries = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/special/${encodeURIComponent(path)}/decrypted-entries`);
+          entries.decrypted = true;
+        } catch (e) {
+          entries = {...rawEntries, warning: `Decrypt preview failed: ${String(e)}`};
+        }
+      } else if (isSecuredSpecial(path) && preflight?.issues?.length) {
+        entries = {...rawEntries, warning: preflight.issues.join('\n')};
+      }
+      entries.preflight = preflight;
       state.assetContentHash = entries.content_hash || detail.content_hash || null;
       state.specialEntries = entries;
       setText('#asset-detail-path', `${entries.entries?.length || 0} entrie(s), editable=${entries.editable}`);
@@ -1902,13 +1915,17 @@ function renderDefaultsGroupPreview(group) {
 function renderSpecialEntriesPreview(entries) {
   const items = entries.entries || [];
   const edit = !state.readOnly && entries.editable && state.assetPath === 'env.unsecured.json' ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-special-entries><i class="ti ti-pencil me-1"></i>Edit entries</button>` : '';
+  const decryptBadge = entries.decrypted ? `<span class="badge bg-green-lt"><i class="ti ti-lock-open me-1"></i>decrypted preview</span>` : (isSecuredSpecial(state.assetPath) ? `<span class="badge bg-yellow-lt"><i class="ti ti-lock me-1"></i>encrypted/raw</span>` : '');
   return `
     <div class="overview-section mb-3">
       <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
-        <div class="overview-subtitle mb-0">Special entries</div>
+        <div class="d-flex align-items-center gap-2">
+          <div class="overview-subtitle mb-0">Special entries</div>
+          ${decryptBadge}
+        </div>
         ${edit}
       </div>
-      ${entries.warning ? `<div class="alert alert-warning py-2">${esc(entries.warning)}</div>` : ''}
+      ${entries.warning ? `<div class="alert ${entries.decrypted ? 'alert-info' : 'alert-warning'} py-2">${esc(entries.warning)}</div>` : ''}
       ${items.length ? `
         <div class="input-icon mb-2">
           <span class="input-icon-addon"><i class="ti ti-search"></i></span>
@@ -1967,6 +1984,7 @@ async function copySpecialEntryValue(button) {
   }
 }
 function isSpecial(path) { return ['env.secured.json','env.unsecured.json','assets.secured.json','assets.unsecured.json'].includes(path); }
+function isSecuredSpecial(path) { return ['env.secured.json','assets.secured.json'].includes(path); }
 function isDefaultsAsset(path) { return path === '_defaults.yml' || path === '_defaults.yaml'; }
 async function loadGitDiff(relativePath, isDirty, sectionSelector, targetSelector) {
   const section = qs(sectionSelector);

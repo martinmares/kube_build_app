@@ -6,12 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -134,6 +136,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets", s.handleAssets)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/content/{asset_path...}", s.handleAssetContent)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/special/{special_file}/entries", s.handleSpecialEntries)
+	mux.HandleFunc("GET /api/v1/envs/{env}/assets/special/{special_file}/decrypted-entries", s.handleSpecialDecryptedEntries)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/assets/special/{special_file}/entries", s.handleSpecialEntriesUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/special/{special_file}/preflight", s.handleSpecialPreflight)
 	mux.HandleFunc("POST /api/v1/envs/{env}/validate", s.handleBuildValidate)
@@ -677,6 +680,37 @@ func (s *Server) handleSpecialEntries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, entries)
 }
 
+func (s *Server) handleSpecialDecryptedEntries(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
+		return
+	}
+	env := r.PathValue("env")
+	specialFile := r.PathValue("special_file")
+	if !isSecuredSpecialFile(specialFile) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "special file is not secured"})
+		return
+	}
+	detail, err := s.repo.AssetDetail(env, specialFile)
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	decrypted, err := s.decryptSpecialFile(detail.Path, detail.Content)
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	entries, err := specialEntriesFromContent(env, specialFile, detail.ContentHash, detail.IsDirty, string(decrypted), false)
+	if err != nil {
+		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
+		return
+	}
+	warning := "decrypted read-only preview; write/encrypt flow is not enabled yet"
+	entries.Warning = &warning
+	writeJSON(w, http.StatusOK, entries)
+}
+
 func (s *Server) handleSpecialEntriesUpdate(w http.ResponseWriter, r *http.Request) {
 	if s.repo == nil {
 		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
@@ -716,11 +750,9 @@ func (s *Server) handleSpecialPreflight(w http.ResponseWriter, r *http.Request) 
 	}
 	mode := detectEncjsonMode(detail.Content)
 	issues := []string{}
+	decryptOK := false
 	if isSecuredSpecialFile(specialFile) {
-		bin := s.options.EncjsonPath
-		if mode == "legacy" {
-			bin = s.options.EncjsonLegacyPath
-		}
+		bin := s.encjsonBinForMode(mode)
 		if bin == "" {
 			if mode == "legacy" {
 				issues = append(issues, "missing ENCJSON_LEGACY_PATH or --encjson-legacy-path")
@@ -729,6 +761,10 @@ func (s *Server) handleSpecialPreflight(w http.ResponseWriter, r *http.Request) 
 			}
 		} else if info, err := os.Stat(bin); err != nil || info.IsDir() {
 			issues = append(issues, "encjson binary is not accessible: "+bin)
+		} else if _, err := s.decryptSpecialFile(detail.Path, detail.Content); err != nil {
+			issues = append(issues, err.Error())
+		} else {
+			decryptOK = true
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -736,6 +772,7 @@ func (s *Server) handleSpecialPreflight(w http.ResponseWriter, r *http.Request) 
 		"special_file": specialFile,
 		"mode":         mode,
 		"ok":           len(issues) == 0,
+		"decrypt_ok":   decryptOK,
 		"issues":       issues,
 	})
 }
@@ -910,6 +947,115 @@ func previewFiles(root string) ([]buildPreviewFile, error) {
 		return files[i].Path < files[j].Path
 	})
 	return files, nil
+}
+
+func (s *Server) decryptSpecialFile(path string, content string) ([]byte, error) {
+	mode := detectEncjsonMode(content)
+	bin := s.encjsonBinForMode(mode)
+	if bin == "" {
+		if mode == "legacy" {
+			return nil, errors.New("missing ENCJSON_LEGACY_PATH or --encjson-legacy-path")
+		}
+		return nil, errors.New("missing ENCJSON_PATH or --encjson-path")
+	}
+	args := []string{"decrypt"}
+	if keydir := strings.TrimSpace(s.options.EncjsonKeydir); keydir != "" {
+		args = append(args, "-k", keydir)
+	}
+	args = append(args, "-f", path)
+	cmd := exec.Command(bin, args...)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			if stderr != "" {
+				return nil, fmt.Errorf("EncJson decrypt failed: %w: %s", err, stderr)
+			}
+		}
+		return nil, fmt.Errorf("EncJson decrypt failed: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Server) encjsonBinForMode(mode string) string {
+	if mode == "legacy" {
+		return strings.TrimSpace(s.options.EncjsonLegacyPath)
+	}
+	return strings.TrimSpace(s.options.EncjsonPath)
+}
+
+func specialEntriesFromContent(env string, specialFile string, contentHash string, isDirty bool, content string, editable bool) (repository.SpecialEntries, error) {
+	rootKey := "environment"
+	if specialFile == "assets.secured.json" || specialFile == "assets.unsecured.json" {
+		rootKey = "assets"
+	}
+	var root map[string]any
+	if err := json.Unmarshal([]byte(content), &root); err != nil {
+		return repository.SpecialEntries{}, err
+	}
+	rawSection, ok := root[rootKey].(map[string]any)
+	if !ok {
+		return repository.SpecialEntries{}, fmt.Errorf("missing object at .%s", rootKey)
+	}
+	out := repository.SpecialEntries{Env: env, SpecialFile: specialFile, ContentHash: contentHash, Editable: editable, IsDirty: isDirty}
+	keys := make([]string, 0, len(rawSection))
+	for key := range rawSection {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		out.Entries = append(out.Entries, specialEntryFromValue(key, rawSection[key], rootKey))
+	}
+	return out, nil
+}
+
+func specialEntryFromValue(key string, value any, rootKey string) repository.SpecialEntry {
+	if rootKey == "assets" {
+		if object, ok := value.(map[string]any); ok {
+			return repository.SpecialEntry{
+				Key:       key,
+				ValueType: firstNonEmpty(stringValue(object["kind"]), "unknown"),
+				ValueText: stringValue(object["content"]),
+			}
+		}
+		return repository.SpecialEntry{Key: key, ValueType: "legacy", ValueText: stringValue(value)}
+	}
+	switch value.(type) {
+	case string:
+		return repository.SpecialEntry{Key: key, ValueType: "string", ValueText: stringValue(value)}
+	case bool:
+		return repository.SpecialEntry{Key: key, ValueType: "bool", ValueText: stringValue(value)}
+	case float64, int, int64:
+		return repository.SpecialEntry{Key: key, ValueType: "number", ValueText: stringValue(value)}
+	case nil:
+		return repository.SpecialEntry{Key: key, ValueType: "null", ValueText: ""}
+	default:
+		raw, _ := json.Marshal(value)
+		return repository.SpecialEntry{Key: key, ValueType: "json", ValueText: string(raw)}
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func stringValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case json.Number:
+		return typed.String()
+	default:
+		return fmt.Sprint(value)
+	}
 }
 
 func (s *Server) rememberBuildPreview(id string, snapshot buildPreviewSnapshot) {
