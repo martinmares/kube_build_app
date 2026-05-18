@@ -118,6 +118,10 @@ async function init() {
   });
   qs('#app-vars-save-btn')?.addEventListener('click', () => saveAppVars());
   qs('#app-replicas-save-btn')?.addEventListener('click', () => saveAppReplicas());
+  qs('#app-overview')?.addEventListener('change', (e) => {
+    const enabled = e.target.closest('[data-autoscaling-enabled]');
+    if (enabled && !state.readOnly) syncAutoscalingEditor();
+  });
   qs('#app-vars-add-btn')?.addEventListener('click', () => addAppVarRow());
   qs('#app-vars')?.addEventListener('click', (e) => {
     const button = e.target.closest('[data-remove-app-var]');
@@ -130,8 +134,12 @@ async function init() {
     if (saveResources && !state.readOnly) return saveContainerResources(Number(saveResources.dataset.saveResources));
     const saveVars = e.target.closest('[data-save-container-vars]');
     if (saveVars && !state.readOnly) return saveContainerVars(Number(saveVars.dataset.saveContainerVars));
+    const saveRuntime = e.target.closest('[data-save-runtime]');
+    if (saveRuntime && !state.readOnly) return saveContainerRuntime(Number(saveRuntime.dataset.saveRuntime));
     const saveProbes = e.target.closest('[data-save-probes]');
     if (saveProbes && !state.readOnly) return saveContainerProbes(Number(saveProbes.dataset.saveProbes));
+    const saveAutoscaling = e.target.closest('[data-save-autoscaling]');
+    if (saveAutoscaling && !state.readOnly) return saveAppAutoscaling();
     const fixLegacyProbes = e.target.closest('[data-fix-legacy-probes]');
     if (fixLegacyProbes && !state.readOnly) return fixContainerLegacyProbes(Number(fixLegacyProbes.dataset.fixLegacyProbes));
     const addVar = e.target.closest('[data-add-container-var]');
@@ -560,10 +568,12 @@ function renderAppOverview(model) {
   host.innerHTML = `
     <div class="overview-grid">${appFacts.join('')}</div>
     ${autoscalingMetrics}
+    ${renderAutoscalingEditor(autoscaling)}
     <div class="overview-section">
       <div class="overview-title"><i class="ti ti-box me-1"></i>Containers</div>
       <div class="container-stack">${containers || emptyState('ti-box', 'No containers', 'This app model does not declare containers.')}</div>
     </div>`;
+  syncAutoscalingEditor();
 }
 function renderContainerOverview(container) {
   const resources = container.resources || {};
@@ -594,11 +604,64 @@ function renderContainerOverview(container) {
           ${chip('Mem req', resources.memory_request || '-')}
           ${chip('Mem lim', resources.memory_limit || '-')}
         </div>${renderResourcesEditor(container.index, resources)}</div>
-        <div class="col-12 col-xl-4"><div class="overview-subtitle">Java runtime</div>${javaBlock}</div>
+        <div class="col-12 col-xl-4"><div class="overview-subtitle">Java runtime</div>${javaBlock}${renderJavaRuntimeEditor(container.index, java)}</div>
         <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div>${renderProbePreview(container.index, probes)}</div>
       </div>
       ${renderContainerVarsEditor(container.index, vars)}
     </div>`;
+}
+function renderAutoscalingEditor(autoscaling) {
+  if (state.readOnly) return '';
+  const disabled = state.readOnly ? 'disabled' : '';
+  const enabled = autoscaling?.enabled ? 'checked' : '';
+  return `
+    <div class="overview-section">
+      <div class="resource-editor" data-autoscaling-editor>
+        <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+          <div class="overview-title mb-0"><i class="ti ti-arrows-maximize me-1"></i>Autoscaling editor</div>
+          <label class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" data-autoscaling-enabled ${enabled} ${disabled}>
+            <span class="form-check-label">enabled</span>
+          </label>
+        </div>
+        <div class="row g-2" data-autoscaling-fields>
+          ${autoscalingInput('min-replicas', 'Min replicas', autoscaling?.min_replicas ?? '')}
+          ${autoscalingInput('max-replicas', 'Max replicas', autoscaling?.max_replicas ?? '')}
+          ${autoscalingInput('cpu-average-utilization', 'CPU avg %', autoscaling?.cpu_average_utilization ?? '')}
+          ${autoscalingInput('memory-average-utilization', 'Memory avg %', autoscaling?.memory_average_utilization ?? '')}
+        </div>
+        <div class="d-flex align-items-center justify-content-between gap-2 mt-2">
+          <div class="text-muted small">Saves top-level autoscaling.enabled/min/max and CPU/memory average utilization.</div>
+          <button class="btn btn-sm btn-primary" type="button" data-save-autoscaling ${disabled}><i class="ti ti-device-floppy me-1"></i>Save autoscaling</button>
+        </div>
+      </div>
+    </div>`;
+}
+function autoscalingInput(field, label, value) {
+  const disabled = state.readOnly ? 'disabled' : '';
+  return `<div class="col-6 col-lg-3"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" type="number" min="0" step="1" data-autoscaling-field="${field}" value="${esc(value)}" ${disabled}></div>`;
+}
+function syncAutoscalingEditor() {
+  const enabled = !!qs('[data-autoscaling-enabled]')?.checked;
+  qsa('[data-autoscaling-field]').forEach((input) => { input.disabled = state.readOnly || !enabled; });
+}
+async function saveAppAutoscaling() {
+  if (!state.env || !state.appFile || state.readOnly) return;
+  const value = (field) => qs(`[data-autoscaling-field="${field}"]`)?.value?.trim() || '';
+  const autoscaling = {
+    enabled: !!qs('[data-autoscaling-enabled]')?.checked,
+    min_replicas: value('min-replicas'),
+    max_replicas: value('max-replicas'),
+    cpu_average_utilization: value('cpu-average-utilization'),
+    memory_average_utilization: value('memory-average-utilization'),
+  };
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/autoscaling`, {autoscaling, expected_hash: state.appContentHash});
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
 }
 function renderProbePreview(index, probes) {
   if (!probes?.enabled) return `<div class="text-muted small">Not configured.</div>${renderProbesEditor(index, probes)}`;
@@ -638,6 +701,30 @@ function probeInput(index, field, label, value) {
   const disabled = state.readOnly ? 'disabled' : '';
   return `<div class="col-12 col-md-4"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" data-probe-field="${index}:${field}" value="${esc(value)}" ${disabled}></div>`;
 }
+function renderJavaRuntimeEditor(index, java) {
+  if (state.readOnly) return '';
+  const disabled = state.readOnly ? 'disabled' : '';
+  return `
+    <div class="resource-editor mt-2" data-runtime-editor="${index}">
+      <div class="row g-2">
+        ${runtimeInput(index, 'xms', 'Xms', java?.xms || '')}
+        ${runtimeInput(index, 'xmx', 'Xmx', java?.xmx || '')}
+        ${runtimeInput(index, 'export-env-name', 'Export env', java?.export_env_name || 'JAVA_OPTS')}
+        <div class="col-12">
+          <label class="form-label small mb-1">Opts</label>
+          <textarea class="form-control form-control-sm font-monospace" rows="3" data-runtime-field="${index}:opts" ${disabled}>${esc((java?.opts || []).join('\n'))}</textarea>
+        </div>
+      </div>
+      <div class="d-flex align-items-center justify-content-between gap-2 mt-2">
+        <div class="text-muted small">Saves runtime.java xms/xmx/opts/export.env_name. Empty fields remove the runtime block.</div>
+        <button class="btn btn-sm btn-primary" type="button" data-save-runtime="${index}" ${disabled}><i class="ti ti-device-floppy me-1"></i>Save runtime</button>
+      </div>
+    </div>`;
+}
+function runtimeInput(index, field, label, value) {
+  const disabled = state.readOnly ? 'disabled' : '';
+  return `<div class="col-12 col-md-4"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" data-runtime-field="${index}:${field}" value="${esc(value)}" ${disabled}></div>`;
+}
 function renderResourcesEditor(index, resources) {
   if (state.readOnly) return '';
   const disabled = state.readOnly ? 'disabled' : '';
@@ -671,6 +758,24 @@ async function saveContainerResources(index) {
   clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/resources`, {resources, expected_hash: state.appContentHash});
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
+}
+async function saveContainerRuntime(index) {
+  if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
+  const value = (field) => qs(`[data-runtime-field="${index}:${field}"]`)?.value?.trim() || '';
+  const opts = (qs(`[data-runtime-field="${index}:opts"]`)?.value || '').split('\n').map((item) => item.trim()).filter(Boolean);
+  const runtime = {
+    xms: value('xms'),
+    xmx: value('xmx'),
+    opts,
+    export_env_name: value('export-env-name'),
+  };
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/runtime/java`, {runtime, expected_hash: state.appContentHash});
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);

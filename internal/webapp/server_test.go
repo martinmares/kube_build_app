@@ -425,6 +425,58 @@ func TestAppContainerVarsUpdateEndpoint(t *testing.T) {
 	}
 }
 
+func TestAppAutoscalingUpdateEndpoint(t *testing.T) {
+	root := t.TempDir()
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, "name: api\ncontainers:\n  - name: api\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	body := `{"expected_hash":"` + detail.ContentHash + `","autoscaling":{"enabled":true,"min_replicas":"2","max_replicas":"6","cpu_average_utilization":"75"}}`
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/autoscaling", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"enabled":true`) || !strings.Contains(response.Body.String(), `"max_replicas":6`) {
+		t.Fatalf("unexpected response:\n%s", response.Body.String())
+	}
+}
+
+func TestAppContainerRuntimeUpdateEndpoint(t *testing.T) {
+	root := t.TempDir()
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, "name: api\ncontainers:\n  - name: api\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	body := `{"expected_hash":"` + detail.ContentHash + `","runtime":{"xms":"512m","xmx":"1536m","opts":["-XX:+UseG1GC"],"export_env_name":"APP_JAVA_OPTS"}}`
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/runtime/java", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"xmx":"1536m"`) || !strings.Contains(response.Body.String(), `"export_env_name":"APP_JAVA_OPTS"`) {
+		t.Fatalf("unexpected response:\n%s", response.Body.String())
+	}
+}
+
 func TestAppContainerProbesUpdateEndpoint(t *testing.T) {
 	root := t.TempDir()
 	appPath := filepath.Join(root, "test", "apps", "api.yml")

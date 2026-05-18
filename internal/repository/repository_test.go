@@ -446,6 +446,36 @@ func TestUpdateAppReplicasRejectsStaleContentHash(t *testing.T) {
 	}
 }
 
+func TestUpdateAppAutoscalingWritesBlock(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\nreplicas: 2\ncontainers:\n  - name: api\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repo.UpdateAppAutoscaling("test", "api.yml", AutoscalingUpdate{
+		Enabled:                  true,
+		MinReplicas:              "2",
+		MaxReplicas:              "6",
+		CPUAverageUtilization:    "75",
+		MemoryAverageUtilization: "80",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Autoscaling.Enabled || result.Autoscaling.MaxReplicas == nil || *result.Autoscaling.MaxReplicas != 6 {
+		t.Fatalf("autoscaling = %#v, want enabled max 6", result.Autoscaling)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, "replicas: 2\nautoscaling:\n  enabled: true\n  min_replicas: 2\n  max_replicas: 6\n  cpu:\n    average_utilization: 75\n  memory:\n    average_utilization: 80\ncontainers:") {
+		t.Fatalf("autoscaling block not inserted after replicas:\n%s", detail.Content)
+	}
+}
+
 func TestUpdateAppContainerResourcesWritesRequestsLimits(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
@@ -575,6 +605,35 @@ containers:
 	}
 	if !contains(detail.Content, `value: "new"`) || !contains(detail.Content, "valueFrom:") || !contains(detail.Content, "name: api-secret") {
 		t.Fatalf("valueFrom variable was not preserved:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppContainerRuntimeWritesJavaRuntime(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n    image: api:1\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repo.UpdateAppContainerRuntime("test", "api.yml", 0, JavaRuntimeUpdate{
+		Xms:           "512m",
+		Xmx:           "1536m",
+		Opts:          []string{"-XX:+UseG1GC", "-Dspring.profiles.active=prod"},
+		ExportEnvName: "APP_JAVA_OPTS",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Runtime.Java.Enabled || result.Runtime.Java.Xmx == nil || *result.Runtime.Java.Xmx != "1536m" {
+		t.Fatalf("runtime = %#v, want java xmx 1536m", result.Runtime)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, "  - name: api\n    runtime:\n      java:\n        xms: \"512m\"\n        xmx: \"1536m\"\n        opts:\n          - \"-XX:+UseG1GC\"\n          - \"-Dspring.profiles.active=prod\"\n        export:\n          env_name: APP_JAVA_OPTS\n    image: api:1") {
+		t.Fatalf("runtime block not inserted after container name:\n%s", detail.Content)
 	}
 }
 

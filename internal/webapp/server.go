@@ -96,8 +96,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVars)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVarsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/replicas", s.handleAppReplicasUpdate)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/autoscaling", s.handleAppAutoscalingUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/resources", s.handleAppContainerResourcesUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/vars", s.handleAppContainerVarsUpdate)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/runtime/java", s.handleAppContainerRuntimeUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/probes", s.handleAppContainerProbesUpdate)
 	mux.HandleFunc("POST /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/probes/fix-legacy", s.handleAppContainerLegacyProbesFix)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/model", s.handleAppModel)
@@ -339,6 +341,31 @@ func (s *Server) handleAppReplicasUpdate(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, replicas)
 }
 
+func (s *Server) handleAppAutoscalingUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	var payload struct {
+		ExpectedHash string                       `json:"expected_hash"`
+		Autoscaling  repository.AutoscalingUpdate `json:"autoscaling"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	autoscaling, err := s.repo.UpdateAppAutoscaling(r.PathValue("env"), r.PathValue("app_file"), payload.Autoscaling, payload.ExpectedHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, autoscaling)
+}
+
 func (s *Server) handleAppContainerResourcesUpdate(w http.ResponseWriter, r *http.Request) {
 	if s.repo == nil {
 		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
@@ -397,6 +424,36 @@ func (s *Server) handleAppContainerVarsUpdate(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusOK, vars)
+}
+
+func (s *Server) handleAppContainerRuntimeUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	containerIndex, err := strconv.Atoi(r.PathValue("container_index"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "container index must be an integer")
+		return
+	}
+	var payload struct {
+		ExpectedHash string                       `json:"expected_hash"`
+		Runtime      repository.JavaRuntimeUpdate `json:"runtime"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	runtime, err := s.repo.UpdateAppContainerRuntime(r.PathValue("env"), r.PathValue("app_file"), containerIndex, payload.Runtime, payload.ExpectedHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runtime)
 }
 
 func (s *Server) handleAppContainerProbesUpdate(w http.ResponseWriter, r *http.Request) {

@@ -51,6 +51,13 @@ type AppReplicas struct {
 	Replicas    *int   `json:"replicas"`
 }
 
+type AppAutoscaling struct {
+	Env         string           `json:"env"`
+	FileName    string           `json:"file_name"`
+	ContentHash string           `json:"content_hash"`
+	Autoscaling AutoscalingModel `json:"autoscaling"`
+}
+
 type AppContainerResources struct {
 	Env            string        `json:"env"`
 	FileName       string        `json:"file_name"`
@@ -75,6 +82,22 @@ type AppContainerProbes struct {
 	Probes         ProbesModel `json:"probes"`
 }
 
+type AppContainerRuntime struct {
+	Env            string       `json:"env"`
+	FileName       string       `json:"file_name"`
+	ContentHash    string       `json:"content_hash"`
+	ContainerIndex int          `json:"container_index"`
+	Runtime        RuntimeModel `json:"runtime"`
+}
+
+type AutoscalingUpdate struct {
+	Enabled                  bool   `json:"enabled"`
+	MinReplicas              string `json:"min_replicas"`
+	MaxReplicas              string `json:"max_replicas"`
+	CPUAverageUtilization    string `json:"cpu_average_utilization"`
+	MemoryAverageUtilization string `json:"memory_average_utilization"`
+}
+
 type ResourceUpdate struct {
 	CPURequest    string `json:"cpu_request"`
 	CPULimit      string `json:"cpu_limit"`
@@ -86,6 +109,13 @@ type ProbeUpdate struct {
 	Preset string `json:"preset"`
 	Port   string `json:"port"`
 	Path   string `json:"path"`
+}
+
+type JavaRuntimeUpdate struct {
+	Xms           string   `json:"xms"`
+	Xmx           string   `json:"xmx"`
+	Opts          []string `json:"opts"`
+	ExportEnvName string   `json:"export_env_name"`
 }
 
 type VarItem struct {
@@ -295,6 +325,36 @@ func (r *Repository) UpdateAppReplicas(envName string, appFile string, replicas 
 	return r.AppReplicas(envName, filepath.Base(path))
 }
 
+func (r *Repository) UpdateAppAutoscaling(envName string, appFile string, autoscaling AutoscalingUpdate, expectedHash string) (AppAutoscaling, error) {
+	if err := validateAutoscalingUpdate(autoscaling); err != nil {
+		return AppAutoscaling{}, err
+	}
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return AppAutoscaling{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return AppAutoscaling{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return AppAutoscaling{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	updated := replaceAutoscalingBlock(string(contentBytes), autoscaling)
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return AppAutoscaling{}, err
+	}
+	model, err := r.AppModel(envName, filepath.Base(path))
+	if err != nil {
+		return AppAutoscaling{}, err
+	}
+	detail, err := r.AppDetail(envName, filepath.Base(path))
+	if err != nil {
+		return AppAutoscaling{}, err
+	}
+	return AppAutoscaling{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, Autoscaling: model.Autoscaling}, nil
+}
+
 func (r *Repository) UpdateAppContainerResources(envName string, appFile string, containerIndex int, resources ResourceUpdate, expectedHash string) (AppContainerResources, error) {
 	if containerIndex < 0 {
 		return AppContainerResources{}, errors.New("container index must be greater than or equal to 0")
@@ -436,6 +496,45 @@ func (r *Repository) appContainerProbes(envName string, appFile string, containe
 		return AppContainerProbes{}, err
 	}
 	return AppContainerProbes{Env: envName, FileName: detail.FileName, ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Probes: model.Containers[containerIndex].Probes}, nil
+}
+
+func (r *Repository) UpdateAppContainerRuntime(envName string, appFile string, containerIndex int, runtime JavaRuntimeUpdate, expectedHash string) (AppContainerRuntime, error) {
+	if containerIndex < 0 {
+		return AppContainerRuntime{}, errors.New("container index must be greater than or equal to 0")
+	}
+	if err := validateJavaRuntimeUpdate(runtime); err != nil {
+		return AppContainerRuntime{}, err
+	}
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return AppContainerRuntime{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return AppContainerRuntime{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return AppContainerRuntime{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	updated, err := replaceContainerRuntimeBlock(string(contentBytes), containerIndex, runtime)
+	if err != nil {
+		return AppContainerRuntime{}, err
+	}
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return AppContainerRuntime{}, err
+	}
+	model, err := r.AppModel(envName, filepath.Base(path))
+	if err != nil {
+		return AppContainerRuntime{}, err
+	}
+	if containerIndex >= len(model.Containers) {
+		return AppContainerRuntime{}, errors.New("container index not found after update")
+	}
+	detail, err := r.AppDetail(envName, filepath.Base(path))
+	if err != nil {
+		return AppContainerRuntime{}, err
+	}
+	return AppContainerRuntime{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Runtime: model.Containers[containerIndex].Runtime}, nil
 }
 
 func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) {
@@ -794,6 +893,61 @@ func replaceTopLevelScalar(content string, key string, value string) string {
 	return out
 }
 
+func replaceAutoscalingBlock(content string, autoscaling AutoscalingUpdate) string {
+	return replaceTopLevelBlock(content, "autoscaling", renderAutoscalingBlock(autoscaling))
+}
+
+func replaceTopLevelBlock(content string, key string, replacement []string) string {
+	lines := strings.Split(content, "\n")
+	start, end := topLevelBlockRange(lines, key)
+	insertAt := topLevelInsertIndex(lines)
+	if start >= 0 {
+		insertAt = start
+		lines = append(lines[:start], lines[end:]...)
+	}
+	if len(replacement) > 0 {
+		updated := make([]string, 0, len(lines)+len(replacement))
+		updated = append(updated, lines[:insertAt]...)
+		updated = append(updated, replacement...)
+		updated = append(updated, lines[insertAt:]...)
+		lines = updated
+	}
+	out := strings.Join(lines, "\n")
+	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return out
+}
+
+func topLevelBlockRange(lines []string, key string) (int, int) {
+	prefix := key + ":"
+	for idx, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			end := len(lines)
+			for j := idx + 1; j < len(lines); j++ {
+				if isTopLevelLine(lines[j]) {
+					end = j
+					break
+				}
+			}
+			return idx, end
+		}
+	}
+	return -1, -1
+}
+
+func topLevelInsertIndex(lines []string) int {
+	keys := []string{"vars", "name", "kind", "replicas"}
+	insertAt := 0
+	for _, key := range keys {
+		start, end := topLevelBlockRange(lines, key)
+		if start >= 0 && end > insertAt {
+			insertAt = end
+		}
+	}
+	return insertAt
+}
+
 func replaceContainerResourcesBlock(content string, containerIndex int, resources ResourceUpdate) (string, error) {
 	lines, start, end, err := containerBlockRange(content, containerIndex)
 	if err != nil {
@@ -866,6 +1020,33 @@ func replaceContainerVarsBlock(content string, containerIndex int, items []VarIt
 	if varsStart >= 0 {
 		insertAt = varsStart
 		lines = append(lines[:varsStart], lines[varsEnd:]...)
+	}
+	if len(replacement) > 0 {
+		updated := make([]string, 0, len(lines)+len(replacement))
+		updated = append(updated, lines[:insertAt]...)
+		updated = append(updated, replacement...)
+		updated = append(updated, lines[insertAt:]...)
+		lines = updated
+	}
+	out := strings.Join(lines, "\n")
+	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return out, nil
+}
+
+func replaceContainerRuntimeBlock(content string, containerIndex int, runtime JavaRuntimeUpdate) (string, error) {
+	lines, start, end, err := containerBlockRange(content, containerIndex)
+	if err != nil {
+		return "", err
+	}
+
+	runtimeStart, runtimeEnd := containerChildBlockRange(lines, start, end, "runtime")
+	replacement := renderJavaRuntimeBlock(runtime)
+	insertAt := start + 1
+	if runtimeStart >= 0 {
+		insertAt = runtimeStart
+		lines = append(lines[:runtimeStart], lines[runtimeEnd:]...)
 	}
 	if len(replacement) > 0 {
 		updated := make([]string, 0, len(lines)+len(replacement))
@@ -1055,6 +1236,50 @@ func renderResourcesBlock(resources ResourceUpdate) []string {
 	return lines
 }
 
+func renderAutoscalingBlock(autoscaling AutoscalingUpdate) []string {
+	lines := []string{"autoscaling:", "  enabled: " + strconv.FormatBool(autoscaling.Enabled)}
+	if value := strings.TrimSpace(autoscaling.MinReplicas); value != "" {
+		lines = append(lines, "  min_replicas: "+value)
+	}
+	if value := strings.TrimSpace(autoscaling.MaxReplicas); value != "" {
+		lines = append(lines, "  max_replicas: "+value)
+	}
+	if value := strings.TrimSpace(autoscaling.CPUAverageUtilization); value != "" {
+		lines = append(lines, "  cpu:", "    average_utilization: "+value)
+	}
+	if value := strings.TrimSpace(autoscaling.MemoryAverageUtilization); value != "" {
+		lines = append(lines, "  memory:", "    average_utilization: "+value)
+	}
+	return lines
+}
+
+func renderJavaRuntimeBlock(runtime JavaRuntimeUpdate) []string {
+	xms := strings.TrimSpace(runtime.Xms)
+	xmx := strings.TrimSpace(runtime.Xmx)
+	exportEnvName := strings.TrimSpace(runtime.ExportEnvName)
+	opts := cleanStringItems(runtime.Opts)
+	if xms == "" && xmx == "" && exportEnvName == "" && len(opts) == 0 {
+		return nil
+	}
+	lines := []string{"    runtime:", "      java:"}
+	if xms != "" {
+		lines = append(lines, "        xms: "+strconv.Quote(xms))
+	}
+	if xmx != "" {
+		lines = append(lines, "        xmx: "+strconv.Quote(xmx))
+	}
+	if len(opts) > 0 {
+		lines = append(lines, "        opts:")
+		for _, opt := range opts {
+			lines = append(lines, "          - "+strconv.Quote(opt))
+		}
+	}
+	if exportEnvName != "" && exportEnvName != "JAVA_OPTS" {
+		lines = append(lines, "        export:", "          env_name: "+exportEnvName)
+	}
+	return lines
+}
+
 func renderProbesBlock(probes ProbeUpdate) []string {
 	preset := strings.TrimSpace(probes.Preset)
 	port := strings.TrimSpace(probes.Port)
@@ -1129,6 +1354,86 @@ func validateProbeUpdate(probes ProbeUpdate) error {
 		}
 	}
 	return nil
+}
+
+func validateAutoscalingUpdate(autoscaling AutoscalingUpdate) error {
+	values := map[string]int{}
+	for label, value := range map[string]string{
+		"min_replicas":               autoscaling.MinReplicas,
+		"max_replicas":               autoscaling.MaxReplicas,
+		"cpu_average_utilization":    autoscaling.CPUAverageUtilization,
+		"memory_average_utilization": autoscaling.MemoryAverageUtilization,
+	} {
+		if strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("%s contains unsupported newline", label)
+		}
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil || parsed < 0 {
+			return fmt.Errorf("%s must be an integer greater than or equal to 0", label)
+		}
+		values[label] = parsed
+	}
+	if !autoscaling.Enabled {
+		return nil
+	}
+	minReplicas, hasMin := values["min_replicas"]
+	maxReplicas, hasMax := values["max_replicas"]
+	if !hasMin || minReplicas < 1 {
+		return errors.New("min_replicas must be greater than 0 when autoscaling is enabled")
+	}
+	if !hasMax || maxReplicas < minReplicas {
+		return errors.New("max_replicas must be greater than or equal to min_replicas when autoscaling is enabled")
+	}
+	cpuAverage := values["cpu_average_utilization"]
+	memoryAverage := values["memory_average_utilization"]
+	if cpuAverage == 0 && memoryAverage == 0 {
+		return errors.New("autoscaling requires at least one CPU or memory average utilization metric")
+	}
+	for label, value := range map[string]int{
+		"cpu_average_utilization":    cpuAverage,
+		"memory_average_utilization": memoryAverage,
+	} {
+		if value != 0 && (value < 1 || value > 100) {
+			return fmt.Errorf("%s must be between 1 and 100", label)
+		}
+	}
+	return nil
+}
+
+func validateJavaRuntimeUpdate(runtime JavaRuntimeUpdate) error {
+	for label, value := range map[string]string{
+		"xms":             runtime.Xms,
+		"xmx":             runtime.Xmx,
+		"export_env_name": runtime.ExportEnvName,
+	} {
+		if strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("%s contains unsupported newline", label)
+		}
+	}
+	for _, opt := range runtime.Opts {
+		if strings.ContainsAny(opt, "\r\n") {
+			return errors.New("runtime opts contain unsupported newline")
+		}
+	}
+	exportEnvName := strings.TrimSpace(runtime.ExportEnvName)
+	if strings.Contains(exportEnvName, ":") {
+		return errors.New("export_env_name contains unsupported colon")
+	}
+	return nil
+}
+
+func cleanStringItems(items []string) []string {
+	out := []string{}
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func splitVarItemBlocks(lines []string) [][]string {
