@@ -126,14 +126,16 @@ Nízké riziko, dobrý další editor po `Local variables`.
 
 Model: `gpt-5.5 medium`
 
+Stav: první verze hotová.
+
 Úkoly:
 
-- CPU requests/limits
-- memory requests/limits
-- zobrazit i legacy `from/to`
-- nové změny zapisovat preferovaně jako `requests/limits`
-- zachovat kompatibilitu se starým zápisem
-- promítnout do structured overview
+- CPU requests/limits - hotovo
+- memory requests/limits - hotovo
+- zobrazit i legacy `from/to` - hotovo přes normalized overview
+- nové změny zapisovat preferovaně jako `requests/limits` - hotovo
+- zachovat kompatibilitu se starým zápisem - hotovo
+- promítnout do structured overview - hotovo
 
 Kontrakt:
 

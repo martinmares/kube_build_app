@@ -51,6 +51,21 @@ type AppReplicas struct {
 	Replicas    *int   `json:"replicas"`
 }
 
+type AppContainerResources struct {
+	Env            string        `json:"env"`
+	FileName       string        `json:"file_name"`
+	ContentHash    string        `json:"content_hash"`
+	ContainerIndex int           `json:"container_index"`
+	Resources      ResourceModel `json:"resources"`
+}
+
+type ResourceUpdate struct {
+	CPURequest    string `json:"cpu_request"`
+	CPULimit      string `json:"cpu_limit"`
+	MemoryRequest string `json:"memory_request"`
+	MemoryLimit   string `json:"memory_limit"`
+}
+
 type VarItem struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
@@ -255,6 +270,45 @@ func (r *Repository) UpdateAppReplicas(envName string, appFile string, replicas 
 		return AppReplicas{}, err
 	}
 	return r.AppReplicas(envName, filepath.Base(path))
+}
+
+func (r *Repository) UpdateAppContainerResources(envName string, appFile string, containerIndex int, resources ResourceUpdate, expectedHash string) (AppContainerResources, error) {
+	if containerIndex < 0 {
+		return AppContainerResources{}, errors.New("container index must be greater than or equal to 0")
+	}
+	if err := validateResourceUpdate(resources); err != nil {
+		return AppContainerResources{}, err
+	}
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return AppContainerResources{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return AppContainerResources{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return AppContainerResources{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	updated, err := replaceContainerResourcesBlock(string(contentBytes), containerIndex, resources)
+	if err != nil {
+		return AppContainerResources{}, err
+	}
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return AppContainerResources{}, err
+	}
+	model, err := r.AppModel(envName, filepath.Base(path))
+	if err != nil {
+		return AppContainerResources{}, err
+	}
+	if containerIndex >= len(model.Containers) {
+		return AppContainerResources{}, errors.New("container index not found after update")
+	}
+	detail, err := r.AppDetail(envName, filepath.Base(path))
+	if err != nil {
+		return AppContainerResources{}, err
+	}
+	return AppContainerResources{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Resources: model.Containers[containerIndex].Resources}, nil
 }
 
 func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) {
@@ -593,6 +647,128 @@ func replaceTopLevelScalar(content string, key string, value string) string {
 		out += "\n"
 	}
 	return out
+}
+
+func replaceContainerResourcesBlock(content string, containerIndex int, resources ResourceUpdate) (string, error) {
+	lines := strings.Split(content, "\n")
+	containersLine := -1
+	for idx, line := range lines {
+		if line == "containers:" {
+			containersLine = idx
+			break
+		}
+	}
+	if containersLine < 0 {
+		return "", errors.New("containers block not found")
+	}
+	starts := []int{}
+	for idx := containersLine + 1; idx < len(lines); idx++ {
+		line := lines[idx]
+		if isTopLevelLine(line) {
+			break
+		}
+		if strings.HasPrefix(line, "  - ") {
+			starts = append(starts, idx)
+		}
+	}
+	if containerIndex >= len(starts) {
+		return "", errors.New("container index not found")
+	}
+	start := starts[containerIndex]
+	end := len(lines)
+	if containerIndex+1 < len(starts) {
+		end = starts[containerIndex+1]
+	} else {
+		for idx := start + 1; idx < len(lines); idx++ {
+			if isTopLevelLine(lines[idx]) {
+				end = idx
+				break
+			}
+		}
+	}
+
+	resStart := -1
+	resEnd := -1
+	for idx := start + 1; idx < end; idx++ {
+		if strings.HasPrefix(lines[idx], "    resources:") {
+			resStart = idx
+			resEnd = end
+			for j := idx + 1; j < end; j++ {
+				if strings.TrimSpace(lines[j]) != "" && leadingSpaces(lines[j]) <= 4 {
+					resEnd = j
+					break
+				}
+			}
+			break
+		}
+	}
+
+	replacement := renderResourcesBlock(resources)
+	insertAt := start + 1
+	if resStart >= 0 {
+		insertAt = resStart
+		lines = append(lines[:resStart], lines[resEnd:]...)
+	}
+	if len(replacement) > 0 {
+		updated := make([]string, 0, len(lines)+len(replacement))
+		updated = append(updated, lines[:insertAt]...)
+		updated = append(updated, replacement...)
+		updated = append(updated, lines[insertAt:]...)
+		lines = updated
+	}
+	out := strings.Join(lines, "\n")
+	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return out, nil
+}
+
+func renderResourcesBlock(resources ResourceUpdate) []string {
+	cpuRequest := strings.TrimSpace(resources.CPURequest)
+	cpuLimit := strings.TrimSpace(resources.CPULimit)
+	memRequest := strings.TrimSpace(resources.MemoryRequest)
+	memLimit := strings.TrimSpace(resources.MemoryLimit)
+	if cpuRequest == "" && cpuLimit == "" && memRequest == "" && memLimit == "" {
+		return nil
+	}
+	lines := []string{"    resources:"}
+	if cpuRequest != "" || cpuLimit != "" {
+		lines = append(lines, "      cpu:")
+		if cpuRequest != "" {
+			lines = append(lines, "        requests: "+strconv.Quote(cpuRequest))
+		}
+		if cpuLimit != "" {
+			lines = append(lines, "        limits: "+strconv.Quote(cpuLimit))
+		}
+	}
+	if memRequest != "" || memLimit != "" {
+		lines = append(lines, "      memory:")
+		if memRequest != "" {
+			lines = append(lines, "        requests: "+strconv.Quote(memRequest))
+		}
+		if memLimit != "" {
+			lines = append(lines, "        limits: "+strconv.Quote(memLimit))
+		}
+	}
+	return lines
+}
+
+func validateResourceUpdate(resources ResourceUpdate) error {
+	for label, value := range map[string]string{
+		"cpu_request":    resources.CPURequest,
+		"cpu_limit":      resources.CPULimit,
+		"memory_request": resources.MemoryRequest,
+		"memory_limit":   resources.MemoryLimit,
+	} {
+		if strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("%s contains unsupported newline", label)
+		}
+	}
+	return nil
+}
+
+func isTopLevelLine(line string) bool {
+	return strings.TrimSpace(line) != "" && leadingSpaces(line) == 0
 }
 
 func renderVarsBlock(items []VarItem) []string {

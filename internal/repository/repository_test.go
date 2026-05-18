@@ -445,6 +445,65 @@ func TestUpdateAppReplicasRejectsStaleContentHash(t *testing.T) {
 	}
 }
 
+func TestUpdateAppContainerResourcesWritesRequestsLimits(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    resources:
+      cpu:
+        from: "100m"
+        to: "500m"
+      memory:
+        from: "128Mi"
+        to: "512Mi"
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{CPURequest: "200m", CPULimit: "600m", MemoryRequest: "256Mi", MemoryLimit: "768Mi"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Resources.CPURequest == nil || *result.Resources.CPURequest != "200m" {
+		t.Fatalf("resources = %#v, want cpu request 200m", result.Resources)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`requests: "200m"`, `limits: "600m"`, `requests: "256Mi"`, `limits: "768Mi"`} {
+		if !contains(detail.Content, expected) {
+			t.Fatalf("content missing %q:\n%s", expected, detail.Content)
+		}
+	}
+	if contains(detail.Content, "from:") || contains(detail.Content, "to:") {
+		t.Fatalf("legacy from/to should be replaced:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppContainerResourcesInsertsMissingBlock(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n    image: api:1\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{CPURequest: "100m"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := repo.AppDetail("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(detail.Content, "  - name: api\n    resources:\n      cpu:\n        requests: \"100m\"\n    image: api:1") {
+		t.Fatalf("resources not inserted after container name:\n%s", detail.Content)
+	}
+}
+
 func TestAssetDetailSupportsSpecialRootAndRejectsEscapes(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "assets", "ui", "nginx.conf"), "server {}\n")

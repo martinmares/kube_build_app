@@ -69,6 +69,11 @@ async function init() {
     button.closest('tr')?.remove();
     syncAppVarsEmptyState();
   });
+  qs('#app-overview')?.addEventListener('click', (e) => {
+    const button = e.target.closest('[data-save-resources]');
+    if (!button || state.readOnly) return;
+    saveContainerResources(Number(button.dataset.saveResources));
+  });
   await loadAll();
 }
 async function loadAll() {
@@ -509,11 +514,48 @@ function renderContainerOverview(container) {
           ${chip('CPU lim', resources.cpu_limit || '-')}
           ${chip('Mem req', resources.memory_request || '-')}
           ${chip('Mem lim', resources.memory_limit || '-')}
-        </div></div>
+        </div>${renderResourcesEditor(container.index, resources)}</div>
         <div class="col-12 col-xl-4"><div class="overview-subtitle">Java runtime</div>${javaBlock}</div>
         <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div><div class="text-muted small">${esc(probeText)}</div></div>
       </div>
     </div>`;
+}
+function renderResourcesEditor(index, resources) {
+  const disabled = state.readOnly ? 'disabled' : '';
+  return `
+    <div class="resource-editor mt-2" data-resource-editor="${index}">
+      <div class="row g-2">
+        ${resourceInput(index, 'cpu-request', 'CPU req', resources.cpu_request || '')}
+        ${resourceInput(index, 'cpu-limit', 'CPU lim', resources.cpu_limit || '')}
+        ${resourceInput(index, 'memory-request', 'Mem req', resources.memory_request || '')}
+        ${resourceInput(index, 'memory-limit', 'Mem lim', resources.memory_limit || '')}
+      </div>
+      <div class="d-flex align-items-center justify-content-between gap-2 mt-2">
+        <div class="text-muted small">Saves as resources.cpu/memory requests/limits.</div>
+        <button class="btn btn-sm btn-primary" type="button" data-save-resources="${index}" ${disabled}><i class="ti ti-device-floppy me-1"></i>Save resources</button>
+      </div>
+    </div>`;
+}
+function resourceInput(index, field, label, value) {
+  const disabled = state.readOnly ? 'disabled' : '';
+  return `<div class="col-6"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" data-resource-field="${index}:${field}" value="${esc(value)}" ${disabled}></div>`;
+}
+async function saveContainerResources(index) {
+  if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
+  const value = (field) => qs(`[data-resource-field="${index}:${field}"]`)?.value?.trim() || '';
+  const resources = {
+    cpu_request: value('cpu-request'),
+    cpu_limit: value('cpu-limit'),
+    memory_request: value('memory-request'),
+    memory_limit: value('memory-limit'),
+  };
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/resources`, {resources, expected_hash: state.appContentHash});
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
 }
 function fact(label, value, icon) {
   return `<div class="overview-fact"><div class="text-muted small"><i class="ti ${icon} me-1"></i>${esc(label)}</div><div class="fw-semibold">${esc(value)}</div></div>`;

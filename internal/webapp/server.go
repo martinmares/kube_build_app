@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,6 +75,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVars)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVarsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/replicas", s.handleAppReplicasUpdate)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/resources", s.handleAppContainerResourcesUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/model", s.handleAppModel)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets", s.handleAssets)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/content/{asset_path...}", s.handleAssetContent)
@@ -310,6 +312,36 @@ func (s *Server) handleAppReplicasUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, replicas)
+}
+
+func (s *Server) handleAppContainerResourcesUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	containerIndex, err := strconv.Atoi(r.PathValue("container_index"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "container index must be an integer")
+		return
+	}
+	var payload struct {
+		ExpectedHash string                    `json:"expected_hash"`
+		Resources    repository.ResourceUpdate `json:"resources"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resources, err := s.repo.UpdateAppContainerResources(r.PathValue("env"), r.PathValue("app_file"), containerIndex, payload.Resources, payload.ExpectedHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resources)
 }
 
 func (s *Server) handleAppModel(w http.ResponseWriter, r *http.Request) {
