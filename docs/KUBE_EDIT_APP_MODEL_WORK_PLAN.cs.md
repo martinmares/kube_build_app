@@ -146,15 +146,24 @@ Kontrakt:
 
 Model: `gpt-5.5 medium`
 
+Stav: první verze hotová.
+
 Úkoly:
 
-- editovat `containers[].vars`
-- add/update/delete
-- per-container zobrazení
-- po uložení refresh detailu a diffu
-- testy na více containerů
+- editovat `containers[].vars` - hotovo
+- add/update/delete - hotovo
+- per-container zobrazení - hotovo
+- po uložení refresh detailu a diffu - hotovo
+- testy na více containerů - hotovo
+- write endpoint `PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/vars` - hotovo
+- read-only režim schovává write controls - hotovo
 
-Pozor: zde už je vyšší riziko kvůli per-container struktuře.
+Kontrakt:
+
+- app-level lokální proměnné jsou `vars:`
+- container-level lokální proměnné jsou `containers[].vars`
+- `_defaults.yml` používá `container_vars`
+- staré `env_vars` / `container_env_vars` nejsou preferovaný Go metamodel
 
 ### 7. Editor `probes`
 
