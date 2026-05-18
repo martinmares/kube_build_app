@@ -65,6 +65,7 @@ async function loadAll() {
     state.readOnly = !!info.read_only;
     setText('#app-version', `${info.version} / ${info.commit}`);
     qs('#read-only-badge').classList.toggle('hidden', !info.read_only);
+    qs('#read-only-hint')?.classList.toggle('hidden', !info.read_only);
     const [git, data] = await Promise.all([
       api('/api/v1/git/status'),
       api('/api/v1/envs'),
