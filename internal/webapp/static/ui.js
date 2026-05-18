@@ -34,7 +34,7 @@ function setupTheme() {
 async function init() {
   setupTheme();
   qsa('[data-nav]').forEach((x) => x.addEventListener('click', (e) => { e.preventDefault(); if (x.dataset.nav !== 'dashboard' && !state.env) return showError('Select environment first.'); setActive(x.dataset.nav); }));
-  qs('#refresh-btn')?.addEventListener('click', () => loadAll());
+  qs('#refresh-btn')?.addEventListener('click', () => refreshCurrentView());
   qs('#apps-filter')?.addEventListener('input', () => renderApps());
   qs('#assets-filter')?.addEventListener('input', () => renderAssets());
   qs('#build-validate-btn')?.addEventListener('click', () => runBuildValidate());
@@ -66,17 +66,33 @@ async function loadAll() {
     setText('#app-version', `${info.version} / ${info.commit}`);
     qs('#read-only-badge').classList.toggle('hidden', !info.read_only);
     qs('#read-only-hint')?.classList.toggle('hidden', !info.read_only);
-    const [git, data] = await Promise.all([
-      api('/api/v1/git/status'),
-      api('/api/v1/envs'),
-    ]);
-    state.git = git;
-    renderGitStatus();
-    state.envs = data.items || [];
-    setText('#repo-root', data.root || '-');
-    setText('#env-count', state.envs.length);
-    renderEnvs();
-    if (!state.env && state.envs.length) selectEnv(localStorage.getItem('activeEnv') || state.envs[0].name);
+    await refreshRepositorySnapshot();
+    if (state.envs.length) await selectEnv(state.env || localStorage.getItem('activeEnv') || state.envs[0].name);
+  } catch (e) { showError(e); }
+}
+async function refreshRepositorySnapshot() {
+  const [git, data] = await Promise.all([
+    api('/api/v1/git/status'),
+    api('/api/v1/envs'),
+  ]);
+  state.git = git;
+  renderGitStatus();
+  state.envs = data.items || [];
+  setText('#repo-root', data.root || '-');
+  setText('#env-count', state.envs.length);
+  renderEnvs();
+  renderEnvChanges();
+}
+async function refreshCurrentView() {
+  clearError();
+  try {
+    await refreshRepositorySnapshot();
+    if (state.env) {
+      await Promise.all([loadApps(), loadAssets()]);
+      if (state.active === 'apps' && state.appFile) await selectApp(state.appFile);
+      if (state.active === 'assets' && state.assetPath) await selectAsset(state.assetPath);
+      if (state.active === 'build') resetBuildView();
+    }
   } catch (e) { showError(e); }
 }
 function renderGitStatus() {
@@ -335,9 +351,7 @@ async function saveAppVars() {
   })).filter((item) => item.name !== '');
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/vars`, {items});
-    state.git = await api('/api/v1/git/status');
-    renderGitStatus();
-    renderEnvChanges();
+    await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);
   } catch (e) { showError(e); }
