@@ -11,6 +11,20 @@
 .app-list-name, .asset-list-name { line-height: 1.25; }
 .apps-list-card, .assets-list-card { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: hidden; }
 .apps-list-table, .assets-list-table { max-height: calc(100vh - 9rem); overflow: auto; }
+.asset-file-list { display: grid; }
+.asset-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .75rem; min-height: 3.1rem; padding: .45rem .75rem .45rem var(--asset-indent); border-top: 1px solid var(--tblr-border-color); }
+.asset-row:first-child { border-top: 0; }
+.asset-file { cursor: pointer; }
+.asset-file:hover { background-color: rgba(var(--tblr-primary-rgb, 32, 107, 196), .06); }
+.asset-file.selected-row { background-color: color-mix(in srgb, var(--tblr-primary) 16%, transparent); }
+.asset-main { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+.asset-icon { flex: 0 0 auto; color: var(--tblr-muted); font-size: 1.35rem !important; }
+.asset-icon.folder { color: var(--tblr-warning); }
+.asset-name { color: var(--tblr-body-color); line-height: 1.25; }
+.asset-subtitle { max-width: 100%; }
+.asset-meta { display: flex; align-items: center; gap: .7rem; font-family: var(--tblr-font-monospace); font-size: .8125rem; white-space: nowrap; }
+.asset-dir .asset-meta { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+.asset-empty { padding: 1rem; }
 .env-card { border: 1px solid color-mix(in srgb, var(--tblr-border-color) 72%, transparent); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
 .env-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--tblr-primary) 58%, var(--tblr-border-color)); box-shadow: 0 .5rem 1.1rem rgba(32, 107, 196, .18); }
 .code-block { max-height: 56vh; margin: 0; overflow: auto; padding: 1rem; border: 1px solid var(--tblr-border-color); border-radius: 8px; background: var(--tblr-bg-surface-secondary); color: var(--tblr-body-color); white-space: pre-wrap; word-break: break-word; font-size: .8125rem; }

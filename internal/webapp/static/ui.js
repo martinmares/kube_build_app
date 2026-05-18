@@ -334,25 +334,90 @@ async function loadAssets() {
   renderAssets();
 }
 function renderAssets() {
-  const body = qs('#assets-table tbody');
+  const host = qs('#assets-list');
   const dirtyAssets = state.assets.filter((a) => gitFile(assetGitPath(a.relative_path)));
   const dirtyBadgeEl = qs('#assets-dirty-count');
   if (dirtyBadgeEl) {
     dirtyBadgeEl.classList.toggle('hidden', dirtyAssets.length === 0);
     dirtyBadgeEl.textContent = dirtyAssets.length ? `${dirtyAssets.length} changed` : '';
   }
-  body.innerHTML = state.assets.map((a) => `
-    <tr class="row-link ${state.assetPath === a.relative_path ? 'selected-row' : ''}" data-asset="${esc(a.relative_path)}">
-      <td>
-        <div class="fw-semibold asset-list-name font-monospace">${esc(a.relative_path)}${dirtyBadge(gitFile(assetGitPath(a.relative_path)))}</div>
-        <div class="text-muted small">${esc(a.driver)} · ${a.size_bytes ?? 0} bytes</div>
-      </td>
-      <td class="text-end">
-        <div class="badge bg-cyan-lt">${esc(a.driver)}</div>
-        <div class="text-muted small mt-1">${a.size_bytes ?? 0} B</div>
-      </td>
-    </tr>`).join('') || '<tr><td colspan="2" class="text-muted">No assets.</td></tr>';
+  if (!host) return;
+  host.innerHTML = renderAssetTree(state.assets);
   qsa('[data-asset]').forEach((x) => x.addEventListener('click', () => selectAsset(x.dataset.asset)));
+}
+function renderAssetTree(assets) {
+  if (!assets.length) return '<div class="asset-empty text-muted">No assets.</div>';
+  const root = { dirs: new Map(), files: [] };
+  for (const asset of assets) addAssetTreeNode(root, asset);
+  return renderAssetTreeNode(root, 0);
+}
+function addAssetTreeNode(root, asset) {
+  const parts = asset.relative_path.split('/').filter(Boolean);
+  if (parts.length <= 1) {
+    root.files.push(asset);
+    return;
+  }
+  let node = root;
+  for (const part of parts.slice(0, -1)) {
+    if (!node.dirs.has(part)) node.dirs.set(part, { name: part, dirs: new Map(), files: [] });
+    node = node.dirs.get(part);
+  }
+  node.files.push(asset);
+}
+function renderAssetTreeNode(node, depth) {
+  const dirs = Array.from(node.dirs.values()).sort((a, b) => a.name.localeCompare(b.name));
+  const files = node.files.slice().sort((a, b) => a.relative_path.localeCompare(b.relative_path));
+  return [
+    ...dirs.map((dir) => renderAssetDirectory(dir, depth) + renderAssetTreeNode(dir, depth + 1)),
+    ...files.map((asset) => renderAssetFile(asset, depth)),
+  ].join('');
+}
+function renderAssetDirectory(dir, depth) {
+  const padding = 12 + depth * 18;
+  return `
+    <div class="asset-row asset-dir" style="--asset-indent:${padding}px">
+      <div class="asset-main">
+        <i class="ti ti-folder asset-icon folder"></i>
+        <span class="asset-name font-monospace">${esc(dir.name)}</span>
+      </div>
+      <div class="asset-meta text-muted">dir</div>
+    </div>`;
+}
+function renderAssetFile(asset, depth) {
+  const padding = 12 + depth * 18;
+  const dirty = gitFile(assetGitPath(asset.relative_path));
+  return `
+    <div class="asset-row asset-file ${state.assetPath === asset.relative_path ? 'selected-row' : ''}" style="--asset-indent:${padding}px" data-asset="${esc(asset.relative_path)}">
+      <div class="asset-main">
+        <i class="ti ${assetIcon(asset)} asset-icon"></i>
+        <div class="min-w-0">
+          <div class="asset-name font-monospace text-truncate">${esc(assetFileName(asset.relative_path))}${dirtyBadge(dirty)}</div>
+          <div class="asset-subtitle text-muted small font-monospace text-truncate">${esc(asset.relative_path)}</div>
+        </div>
+      </div>
+      <div class="asset-meta text-muted">
+        <span>${esc(formatBytes(asset.size_bytes ?? 0))}</span>
+        <span>${esc(asset.driver)}</span>
+      </div>
+    </div>`;
+}
+function assetFileName(path) {
+  const parts = path.split('/').filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+function assetIcon(asset) {
+  if (asset.driver === 'special') return 'ti-lock-square-rounded';
+  const name = asset.relative_path.toLowerCase();
+  if (name.endsWith('.yml') || name.endsWith('.yaml')) return 'ti-file-type-yml';
+  if (name.endsWith('.json')) return 'ti-file-type-json';
+  if (name.endsWith('.conf') || name.endsWith('.tpl')) return 'ti-file-settings';
+  return 'ti-file';
+}
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
 }
 function assetGitPath(relativePath) {
   return isSpecial(relativePath) ? `${state.env}/${relativePath}` : `${state.env}/assets/${relativePath}`;
