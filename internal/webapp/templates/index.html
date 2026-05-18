@@ -201,6 +201,26 @@
       </div>
     </div>
   </div>
+  <div class="modal modal-blur fade" id="value-edit-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <h3 class="modal-title" id="value-edit-modal-title">Edit value</h3>
+            <div class="text-muted small">Use the larger text area for long or multi-line values.</div>
+          </div>
+          <button type="button" class="btn-close" data-modal-close aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <textarea class="form-control font-monospace" id="value-edit-textarea" rows="12" spellcheck="false"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" type="button" data-modal-close>Cancel</button>
+          <button class="btn btn-primary" type="button" id="value-edit-apply"><i class="ti ti-check me-1"></i>Apply value</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/js/tabler.min.js"></script>
   <script src="/static/ui.js"></script>
 </body>

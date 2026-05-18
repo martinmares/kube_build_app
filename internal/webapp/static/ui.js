@@ -1,7 +1,8 @@
-const state = { envs: [], env: null, apps: [], assets: [], inventory: null, buildPreview: null, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard' };
+const state = { envs: [], env: null, apps: [], assets: [], inventory: null, buildPreview: null, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const compactTextValue = (s) => String(s ?? '').replace(/\r?\n/g, '\\n');
 async function apiErrorMessage(response) {
   const body = await response.text();
   try {
@@ -180,9 +181,11 @@ async function init() {
     }
   });
   qs('#asset-structured')?.addEventListener('click', (e) => handleAssetStructuredClick(e));
+  qs('#asset-structured')?.addEventListener('input', (e) => handleAssetStructuredInput(e));
   qs('#ports-edit-modal')?.addEventListener('click', (e) => handlePortsModalClick(e));
   qs('#edit-modal')?.addEventListener('click', (e) => handleEditModalClick(e));
   qs('#edit-modal')?.addEventListener('input', (e) => handleEditModalInput(e));
+  qs('#value-edit-apply')?.addEventListener('click', () => applySpecialValueDialog());
   await loadAll();
 }
 async function loadAll() {
@@ -1017,6 +1020,7 @@ function openEditPanel(panel, index) {
   setText('#edit-modal-title', title);
   setText('#edit-modal-subtitle', subtitle);
   setHTML('#edit-modal-body', body);
+  modal.classList.remove('modal-wide');
   syncAutoscalingEditor();
   state.editModalClose = openModalElement(modal);
 }
@@ -1069,15 +1073,24 @@ function handleEditModalClick(e) {
   if (removeEnv && !state.readOnly) return removeEnv.closest('tr')?.remove();
   if (e.target.closest('[data-save-special-entries]') && !state.readOnly) return saveSpecialEntries();
   if (e.target.closest('[data-add-special-entry]') && !state.readOnly) return addSpecialEntryRow();
-  const removeSpecialEntry = e.target.closest('[data-remove-special-entry]');
-  if (removeSpecialEntry && !state.readOnly) {
-    removeSpecialEntry.closest('[data-special-entry-row]')?.remove();
-    syncSpecialEntriesFilterCount();
-  }
+  const specialValue = e.target.closest('[data-edit-special-value]');
+  if (specialValue && !state.readOnly) return openSpecialValueDialog(specialValue.closest('[data-special-entry-row]'));
+  const specialAction = e.target.closest('[data-special-entry-action]');
+  if (specialAction && !state.readOnly) return handleSpecialEntryAction(specialAction);
 }
 function handleEditModalInput(e) {
   const filter = e.target.closest('[data-special-entry-filter]');
   if (filter) filterSpecialEntryRows(filter.value || '');
+  const compactValue = e.target.closest('.special-entry-value-input');
+  if (compactValue) {
+    const row = compactValue.closest('[data-special-entry-row]');
+    const value = row?.querySelector('.special-entry-value');
+    if (value) value.value = compactValue.value;
+  }
+}
+function handleAssetStructuredInput(e) {
+  const filter = e.target.closest('[data-special-preview-filter]');
+  if (filter) filterSpecialPreviewRows(filter.value || '');
 }
 function handlePortsModalClick(e) {
   const savePorts = e.target.closest('[data-save-ports]');
@@ -1107,13 +1120,14 @@ function handlePortsModalClick(e) {
     syncExternalEmptyState(index);
   }
 }
-function openEditorModal(title, subtitle, body) {
+function openEditorModal(title, subtitle, body, options = {}) {
   const modal = qs('#edit-modal');
   if (!modal || !body) return;
   setText('#edit-modal-title', title);
   setText('#edit-modal-subtitle', subtitle);
   setHTML('#edit-modal-body', body);
-  state.editModalClose = openModalElement(modal);
+  modal.classList.toggle('modal-wide', !!options.wide);
+  state.editModalClose = openModalElement(modal, null, () => modal.classList.remove('modal-wide'));
 }
 function openDefaultsVarsEditor() {
   openEditorModal('Edit defaults vars', 'Top-level vars in apps/_defaults.yml used by {{var:NAME}} placeholders.', renderDefaultsVarsEditor(state.defaults?.vars || []));
@@ -1243,7 +1257,7 @@ async function saveDefaultsContainerEnvs() {
   } catch (e) { showError(e); }
 }
 function openSpecialEntriesEditor() {
-  openEditorModal('Edit env.unsecured.json', 'Environment values with explicit JSON value type.', renderSpecialEntriesEditor(state.specialEntries?.entries || []));
+  openEditorModal('Edit env.unsecured.json', 'Environment values with explicit JSON value type.', renderSpecialEntriesEditor(state.specialEntries?.entries || []), {wide: true});
 }
 function renderSpecialEntriesEditor(entries) {
   const rows = (entries || []).map((entry) => renderSpecialEntryRow(entry)).join('');
@@ -1258,31 +1272,115 @@ function renderSpecialEntriesEditor(entries) {
         <input class="form-control" data-special-entry-filter placeholder="Filter key, value or type...">
       </div>
       <div class="text-muted small mb-2" data-special-entry-count>${entries?.length || 0} entries</div>
-      <div class="special-entry-editor-list" data-special-entries>${rows || renderSpecialEntriesEmpty()}</div>
+      <div class="special-entry-editor-list">
+        <table class="table table-sm special-entry-editor-table" data-special-entries>
+          <thead>
+            <tr>
+              <th class="special-entry-key-col">Variable name</th>
+              <th>Value</th>
+              <th class="special-entry-type-col">Type</th>
+              <th class="special-entry-actions-col">Actions</th>
+            </tr>
+          </thead>
+          <tbody>${rows || renderSpecialEntriesEmpty()}</tbody>
+        </table>
+      </div>
       <div class="text-end mt-3"><button class="btn btn-primary" type="button" data-save-special-entries><i class="ti ti-device-floppy me-1"></i>Save entries</button></div>
     </div>`;
 }
 function renderSpecialEntryRow(entry = {}) {
   return `
-    <div class="special-entry-editor-row" data-special-entry-row>
-      <div class="special-entry-editor-head">
-        <input class="form-control form-control-sm font-monospace special-entry-key" placeholder="KEY" value="${esc(entry.key || '')}">
-        <select class="form-select form-select-sm special-entry-type">${['string','number','bool','null','json'].map((type) => `<option value="${type}" ${entry.value_type === type ? 'selected' : ''}>${type}</option>`).join('')}</select>
-        <button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-special-entry title="Remove entry"><i class="ti ti-trash"></i></button>
-      </div>
-      <textarea class="form-control form-control-sm font-monospace special-entry-value" rows="2" placeholder="value">${esc(entry.value_text || '')}</textarea>
-    </div>`;
+    <tr data-special-entry-row>
+      <td><input class="form-control form-control-sm font-monospace special-entry-key" placeholder="KEY" value="${esc(entry.key || '')}" spellcheck="false"></td>
+      <td>
+        <div class="input-group input-group-sm special-entry-value-group">
+          <input class="form-control font-monospace special-entry-value-input" placeholder="value" value="${esc(compactTextValue(entry.value_text || ''))}" spellcheck="false">
+          <button class="btn btn-outline-secondary btn-icon" type="button" data-edit-special-value title="Edit value in large textarea"><i class="ti ti-arrows-maximize"></i></button>
+        </div>
+        <textarea class="special-entry-value hidden">${esc(entry.value_text || '')}</textarea>
+      </td>
+      <td><select class="form-select form-select-sm special-entry-type">${['string','number','bool','null','json'].map((type) => `<option value="${type}" ${entry.value_type === type ? 'selected' : ''}>${type}</option>`).join('')}</select></td>
+      <td class="special-entry-actions-col">
+        <div class="btn-list justify-content-end flex-nowrap">
+          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-special-entry-action="add-above" title="Add entry above"><i class="ti ti-row-insert-top"></i></button>
+          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-special-entry-action="add-below" title="Add entry below"><i class="ti ti-row-insert-bottom"></i></button>
+          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-special-entry-action="duplicate-above" title="Duplicate above"><i class="ti ti-copy-plus"></i></button>
+          <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" data-special-entry-action="duplicate-below" title="Duplicate below"><i class="ti ti-copy"></i></button>
+          <button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-special-entry-action="delete" title="Delete entry"><i class="ti ti-trash"></i></button>
+        </div>
+      </td>
+    </tr>`;
 }
 function renderSpecialEntriesEmpty() {
-  return `<div data-special-entries-empty>${emptyState('ti-json', 'No entries', 'Use Add entry to create the first one.')}</div>`;
+  return `<tr data-special-entries-empty><td colspan="4">${emptyState('ti-json', 'No entries', 'Use Add entry to create the first one.')}</td></tr>`;
 }
 function addSpecialEntryRow() {
-  const body = qs('[data-special-entries]');
+  const body = qs('[data-special-entries] tbody');
   if (!body) return;
   body.querySelector('[data-special-entries-empty]')?.remove();
   body.insertAdjacentHTML('beforeend', renderSpecialEntryRow({value_type: 'string'}));
   body.querySelector('[data-special-entry-row]:last-child .special-entry-key')?.focus();
   filterSpecialEntryRows(qs('[data-special-entry-filter]')?.value || '');
+}
+function handleSpecialEntryAction(button) {
+  const row = button.closest('[data-special-entry-row]');
+  const body = qs('[data-special-entries] tbody');
+  if (!row || !body) return;
+  const action = button.dataset.specialEntryAction;
+  if (action === 'delete') {
+    row.remove();
+    if (!body.querySelector('[data-special-entry-row]')) body.innerHTML = renderSpecialEntriesEmpty();
+    return syncSpecialEntriesFilterCount();
+  }
+  if (action === 'add-above') return insertSpecialEntryRow(row, {value_type: 'string'}, 'beforebegin');
+  if (action === 'add-below') return insertSpecialEntryRow(row, {value_type: 'string'}, 'afterend');
+  if (action === 'duplicate-above') return insertSpecialEntryRow(row, specialEntryFromRow(row, true), 'beforebegin');
+  if (action === 'duplicate-below') return insertSpecialEntryRow(row, specialEntryFromRow(row, true), 'afterend');
+}
+function insertSpecialEntryRow(targetRow, entry, position) {
+  targetRow.insertAdjacentHTML(position, renderSpecialEntryRow(entry));
+  const newRow = position === 'beforebegin' ? targetRow.previousElementSibling : targetRow.nextElementSibling;
+  newRow?.querySelector('.special-entry-key')?.focus();
+  filterSpecialEntryRows(qs('[data-special-entry-filter]')?.value || '');
+}
+function specialEntryFromRow(row, duplicate = false) {
+  const key = row.querySelector('.special-entry-key')?.value?.trim() || '';
+  return {
+    key: duplicate ? nextSpecialEntryName(key) : key,
+    value_type: row.querySelector('.special-entry-type')?.value || 'string',
+    value_text: row.querySelector('.special-entry-value')?.value || '',
+  };
+}
+function nextSpecialEntryName(key) {
+  const base = key || 'NEW_ENTRY';
+  const names = new Set(qsa('[data-special-entry-row] .special-entry-key').map((input) => input.value.trim()).filter(Boolean));
+  let counter = 2;
+  let candidate = `${base}_${counter}`;
+  while (names.has(candidate)) {
+    counter += 1;
+    candidate = `${base}_${counter}`;
+  }
+  return candidate;
+}
+function openSpecialValueDialog(row) {
+  if (!row) return;
+  state.specialValueRow = row;
+  setText('#value-edit-modal-title', `Edit value: ${row.querySelector('.special-entry-key')?.value || 'entry'}`);
+  const textarea = qs('#value-edit-textarea');
+  if (textarea) textarea.value = row.querySelector('.special-entry-value')?.value || '';
+  state.specialValueModalClose = openModalElement(qs('#value-edit-modal'), textarea, () => {
+    state.specialValueRow = null;
+    state.specialValueModalClose = null;
+  });
+}
+function applySpecialValueDialog() {
+  const row = state.specialValueRow;
+  const value = row?.querySelector('.special-entry-value');
+  const input = row?.querySelector('.special-entry-value-input');
+  const textarea = qs('#value-edit-textarea');
+  if (value && textarea) value.value = textarea.value;
+  if (input && textarea) input.value = compactTextValue(textarea.value);
+  state.specialValueModalClose?.();
 }
 async function saveSpecialEntries() {
   if (!state.env || !state.assetPath || state.readOnly) return;
@@ -1754,18 +1852,33 @@ function renderSpecialEntriesPreview(entries) {
         ${edit}
       </div>
       ${entries.warning ? `<div class="alert alert-warning py-2">${esc(entries.warning)}</div>` : ''}
-      ${items.length ? `<div class="special-entry-preview-list">${items.map(renderSpecialEntryPreview).join('')}</div>` : emptyState('ti-json', 'No entries', 'No entries in this special file.')}
+      ${items.length ? `
+        <div class="input-icon mb-2">
+          <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+          <input class="form-control form-control-sm" data-special-preview-filter placeholder="Filter key, value or type...">
+        </div>
+        <div class="text-muted small mb-2" data-special-preview-count>${items.length} entries</div>
+        <div class="special-entry-preview-list">${items.map(renderSpecialEntryPreview).join('')}</div>` : emptyState('ti-json', 'No entries', 'No entries in this special file.')}
     </div>`;
 }
 function renderSpecialEntryPreview(item) {
   return `
-    <div class="special-entry-card">
+    <div class="special-entry-card" data-special-preview-card>
       <div class="special-entry-card-head">
         <div class="font-monospace fw-semibold text-break">${esc(item.key)}</div>
         <span class="badge bg-blue-lt">${esc(item.value_type)}</span>
       </div>
       <div class="special-entry-preview-value font-monospace">${esc(item.value_text)}</div>
     </div>`;
+}
+function filterSpecialPreviewRows(query) {
+  const needle = String(query || '').trim().toLowerCase();
+  const cards = qsa('[data-special-preview-card]');
+  cards.forEach((card) => {
+    card.classList.toggle('hidden', !!needle && !card.textContent.toLowerCase().includes(needle));
+  });
+  const visible = cards.filter((card) => !card.classList.contains('hidden')).length;
+  setText('[data-special-preview-count]', cards.length ? `${visible}/${cards.length} visible` : '0 entries');
 }
 function handleAssetStructuredClick(e) {
   if (state.readOnly) return;
