@@ -142,18 +142,39 @@ function renderEnvChanges() {
   const files = gitFilesForEnv(state.env);
   if (navItem) navItem.classList.toggle('hidden', files.length === 0);
   if (count) count.textContent = String(files.length);
-  list.innerHTML = files.length ? files.map((file) => {
-    const target = dirtyNavigationTarget(file.path);
-    return `
-      <a href="#" class="list-group-item list-group-item-action d-flex align-items-center justify-content-between gap-3 ${target ? '' : 'disabled'}" data-dirty-path="${esc(file.path)}">
-        <span class="font-monospace text-break">${esc(file.path)}</span>
-        <span class="badge bg-yellow-lt">${esc(gitCodeLabel(file.code))}</span>
-      </a>`;
-  }).join('') : '<div class="list-group-item text-muted">No changed files in selected environment.</div>';
+  list.innerHTML = files.length ? renderChangedFileGroups(files) : '<div class="list-group-item text-muted">No changed files in selected environment.</div>';
   qsa('[data-dirty-path]').forEach((item) => item.addEventListener('click', (event) => {
     event.preventDefault();
     openDirtyPath(item.dataset.dirtyPath);
   }));
+}
+function renderChangedFileGroups(files) {
+  const groups = [
+    { label: 'Apps', icon: 'ti-apps', items: [] },
+    { label: 'Assets', icon: 'ti-folders', items: [] },
+    { label: 'Env files', icon: 'ti-file-settings', items: [] },
+    { label: 'Other', icon: 'ti-dots', items: [] },
+  ];
+  for (const file of files) groups[changedFileGroupIndex(file.path)].items.push(file);
+  return groups.filter((group) => group.items.length).map((group) => `
+    <div class="list-group-header"><i class="ti ${group.icon} me-2"></i>${esc(group.label)} · ${group.items.length}</div>
+    ${group.items.map(renderChangedFileRow).join('')}`).join('');
+}
+function changedFileGroupIndex(path) {
+  if (!state.env || !path.startsWith(`${state.env}/`)) return 3;
+  const rest = path.slice(state.env.length + 1);
+  if (rest.startsWith('apps/')) return 0;
+  if (rest.startsWith('assets/') || rest.startsWith('assets.')) return 1;
+  if (rest.startsWith('env.')) return 2;
+  return 3;
+}
+function renderChangedFileRow(file) {
+  const target = dirtyNavigationTarget(file.path);
+  return `
+    <a href="#" class="list-group-item list-group-item-action d-flex align-items-center justify-content-between gap-3 ${target ? '' : 'disabled'}" data-dirty-path="${esc(file.path)}">
+      <span class="font-monospace text-break">${esc(file.path)}</span>
+      <span class="badge bg-yellow-lt">${esc(gitCodeLabel(file.code))}</span>
+    </a>`;
 }
 function dirtyNavigationTarget(path) {
   if (!state.env || !path.startsWith(`${state.env}/`)) return null;
