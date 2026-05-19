@@ -60,6 +60,9 @@ func LoadFile(path string) (Config, error) {
 	if err := yaml.Unmarshal(content, &cfg); err != nil {
 		return Config{}, err
 	}
+	if err := validateShape(content); err != nil {
+		return Config{}, err
+	}
 	cfg.applyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -86,6 +89,9 @@ func (c *Config) applyDefaults() {
 }
 
 func (c Config) Validate() error {
+	if len(c.Environments) == 0 {
+		return errors.New("at least one environment is required; define top-level environments, not server.environments")
+	}
 	seen := map[string]bool{}
 	for idx, env := range c.Environments {
 		name := strings.TrimSpace(env.Name)
@@ -99,8 +105,45 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(env.EnvName) == "" {
 			return fmt.Errorf("environment %q env_name is required", name)
 		}
+		if strings.TrimSpace(env.Namespace) == "" {
+			return fmt.Errorf("environment %q namespace is required", name)
+		}
 		if strings.TrimSpace(env.RootPath) == "" {
 			return fmt.Errorf("environment %q root_path is required", name)
+		}
+	}
+	return nil
+}
+
+func validateShape(content []byte) error {
+	var root yaml.Node
+	if err := yaml.Unmarshal(content, &root); err != nil {
+		return err
+	}
+	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return errors.New("config root must be a YAML mapping")
+	}
+	doc := root.Content[0]
+	if mappingHasKey(doc, "environments") {
+		return nil
+	}
+	if server := mappingValue(doc, "server"); server != nil && server.Kind == yaml.MappingNode && mappingHasKey(server, "environments") {
+		return errors.New("environments must be defined at top level; move server.environments to top-level environments")
+	}
+	return nil
+}
+
+func mappingHasKey(node *yaml.Node, key string) bool {
+	return mappingValue(node, key) != nil
+}
+
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
 		}
 	}
 	return nil

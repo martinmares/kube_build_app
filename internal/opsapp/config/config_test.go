@@ -43,6 +43,46 @@ func TestLoadFileRejectsDuplicateEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadFileRejectsMissingEnvironments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	writeFile(t, path, `server:
+  http:
+    listen: ":8185"
+`)
+
+	if _, err := LoadFile(path); err == nil {
+		t.Fatal("LoadFile error = nil, want missing environments error")
+	}
+}
+
+func TestLoadFileRejectsNestedServerEnvironments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	writeFile(t, path, `server:
+  http:
+    listen: ":8185"
+  environments:
+    - name: test
+      namespace: kube-ops-test
+      root_path: test
+`)
+
+	if _, err := LoadFile(path); err == nil {
+		t.Fatal("LoadFile error = nil, want nested environments error")
+	}
+}
+
+func TestLoadFileRejectsMissingNamespace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	writeFile(t, path, `environments:
+  - name: test
+    root_path: test
+`)
+
+	if _, err := LoadFile(path); err == nil {
+		t.Fatal("LoadFile error = nil, want missing namespace error")
+	}
+}
+
 func writeFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
