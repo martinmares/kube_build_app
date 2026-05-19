@@ -898,6 +898,35 @@ func (r *Repository) UpdateSpecialEntries(envName string, specialFile string, en
 	return r.SpecialEntries(envName, specialFile)
 }
 
+func (r *Repository) UpdateSecuredSpecialEntriesEncrypted(envName string, specialFile string, entries []SpecialEntry, expectedHash string) (SpecialEntries, error) {
+	kind, ok := specialFileKind(specialFile)
+	if !ok {
+		return SpecialEntries{}, errors.New("unsupported special file")
+	}
+	if !kind.secured {
+		return SpecialEntries{}, errors.New("special file is not secured")
+	}
+	path, _, err := r.AssetPath(envName, specialFile)
+	if err != nil {
+		return SpecialEntries{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return SpecialEntries{}, err
+	}
+	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
+		return SpecialEntries{}, NewConflictError("special file changed before save; refresh and apply the edit again")
+	}
+	updated, err := PatchSpecialEntriesContent(string(contentBytes), kind.rootKey, entries)
+	if err != nil {
+		return SpecialEntries{}, err
+	}
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return SpecialEntries{}, err
+	}
+	return r.SpecialEntries(envName, specialFile)
+}
+
 func (r *Repository) AppPath(envName string, appFile string) (string, error) {
 	envDir, err := r.envDir(envName)
 	if err != nil {
@@ -1082,6 +1111,10 @@ func specialEntryValue(entry SpecialEntry) (any, error) {
 }
 
 func replaceSpecialEntries(content string, rootKey string, entries []SpecialEntry) (string, error) {
+	return PatchSpecialEntriesContent(content, rootKey, entries)
+}
+
+func PatchSpecialEntriesContent(content string, rootKey string, entries []SpecialEntry) (string, error) {
 	if rootKey == "environment" {
 		return patchEnvironmentSpecialEntries(content, rootKey, entries)
 	}

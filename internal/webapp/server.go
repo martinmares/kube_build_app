@@ -728,12 +728,48 @@ func (s *Server) handleSpecialEntriesUpdate(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if r.PathValue("special_file") == "env.secured.json" {
+		entries, err := s.updateSecuredEnvEntries(r.PathValue("env"), payload.Entries, payload.ExpectedHash)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, entries)
+		return
+	}
 	entries, err := s.repo.UpdateSpecialEntries(r.PathValue("env"), r.PathValue("special_file"), payload.Entries, payload.ExpectedHash)
 	if err != nil {
 		writeError(w, statusForError(err), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, entries)
+}
+
+func (s *Server) updateSecuredEnvEntries(env string, entries []repository.SpecialEntry, expectedHash string) (repository.SpecialEntries, error) {
+	detail, err := s.repo.AssetDetail(env, "env.secured.json")
+	if err != nil {
+		return repository.SpecialEntries{}, err
+	}
+	if expectedHash != "" && expectedHash != detail.ContentHash {
+		return repository.SpecialEntries{}, repository.NewConflictError("special file changed before save; refresh and apply the edit again")
+	}
+	decrypted, err := s.decryptSpecialFile(detail.Path, detail.Content)
+	if err != nil {
+		return repository.SpecialEntries{}, err
+	}
+	updatedPlain, err := repository.PatchSpecialEntriesContent(string(decrypted), "environment", entries)
+	if err != nil {
+		return repository.SpecialEntries{}, err
+	}
+	encrypted, err := s.encryptSpecialFile(detail.Path, detail.Content, updatedPlain)
+	if err != nil {
+		return repository.SpecialEntries{}, err
+	}
+	encryptedEntries, err := specialEntriesFromContent(env, "env.secured.json", detail.ContentHash, detail.IsDirty, string(encrypted), false)
+	if err != nil {
+		return repository.SpecialEntries{}, err
+	}
+	return s.repo.UpdateSecuredSpecialEntriesEncrypted(env, "env.secured.json", encryptedEntries.Entries, expectedHash)
 }
 
 func (s *Server) handleSpecialPreflight(w http.ResponseWriter, r *http.Request) {
@@ -975,6 +1011,46 @@ func (s *Server) decryptSpecialFile(path string, content string) ([]byte, error)
 		return nil, fmt.Errorf("EncJson decrypt failed: %w", err)
 	}
 	return out, nil
+}
+
+func (s *Server) encryptSpecialFile(path string, originalContent string, plainContent string) ([]byte, error) {
+	mode := detectEncjsonMode(originalContent)
+	bin := s.encjsonBinForMode(mode)
+	if bin == "" {
+		if mode == "legacy" {
+			return nil, errors.New("missing ENCJSON_LEGACY_PATH or --encjson-legacy-path")
+		}
+		return nil, errors.New("missing ENCJSON_PATH or --encjson-path")
+	}
+	tempDir, err := os.MkdirTemp("", "kube-edit-encjson-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tempDir)
+	tempPath := filepath.Join(tempDir, filepath.Base(path))
+	if err := os.WriteFile(tempPath, []byte(plainContent), 0o600); err != nil {
+		return nil, err
+	}
+	args := []string{"encrypt"}
+	if keydir := strings.TrimSpace(s.options.EncjsonKeydir); keydir != "" {
+		args = append(args, "-k", keydir)
+	}
+	args = append(args, "-f", tempPath)
+	cmd := exec.Command(bin, args...)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			if stderr != "" {
+				return nil, fmt.Errorf("EncJson encrypt failed: %w: %s", err, stderr)
+			}
+		}
+		return nil, fmt.Errorf("EncJson encrypt failed: %w", err)
+	}
+	if len(strings.TrimSpace(string(out))) > 0 {
+		return out, nil
+	}
+	return os.ReadFile(tempPath)
 }
 
 func (s *Server) encjsonBinForMode(mode string) string {

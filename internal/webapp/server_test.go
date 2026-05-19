@@ -853,3 +853,94 @@ func TestSpecialEntriesUpdateEndpoint(t *testing.T) {
 		t.Fatalf("unexpected response:\n%s", response.Body.String())
 	}
 }
+
+func TestSecuredSpecialEntriesUpdateEndpointPatchesEncryptedValuesOnly(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "test", "env.secured.json")
+	writeFile(t, path, `{
+  "_public_key": "keep",
+  "environment": {
+    "SECRET_B": "EncJson[@api=2.0:@box=<b>]",
+    "SECRET_A": "EncJson[@api=2.0:@box=<a>]",
+    "SECRET_COUNT": "EncJson[@api=2.0:@box=<count>]"
+  },
+  "other": true
+}
+`)
+	fakeEncjson := filepath.Join(root, "fake-encjson")
+	writeFile(t, fakeEncjson, `#!/bin/sh
+cmd="$1"
+shift
+file=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-f" ]; then
+    file="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+if [ "$cmd" = "decrypt" ]; then
+  cat <<'JSON'
+{
+  "_public_key": "keep",
+  "environment": {
+    "SECRET_B": "plain-b",
+    "SECRET_A": "plain-a",
+    "SECRET_COUNT": 2
+  },
+  "other": true
+}
+JSON
+  exit 0
+fi
+grep -q '"SECRET_A": "changed"' "$file" || exit 9
+cat <<'JSON'
+{
+  "_public_key": "keep",
+  "environment": {
+    "SECRET_B": "EncJson[@api=2.0:@box=<b>]",
+    "SECRET_A": "EncJson[@api=2.0:@box=<changed>]",
+    "SECRET_COUNT": "EncJson[@api=2.0:@box=<count>]"
+  },
+  "other": true
+}
+JSON
+`)
+	if err := os.Chmod(fakeEncjson, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := repo.SpecialEntries("test", "env.secured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false, EncjsonPath: fakeEncjson})
+	body := `{"expected_hash":"` + entries.ContentHash + `","entries":[{"key":"SECRET_B","value_type":"string","value_text":"plain-b"},{"key":"SECRET_A","value_type":"string","value_text":"changed"},{"key":"SECRET_COUNT","value_type":"number","value_text":"2"}]}`
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/assets/special/env.secured.json/entries", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	gotBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{
+  "_public_key": "keep",
+  "environment": {
+    "SECRET_B": "EncJson[@api=2.0:@box=<b>]",
+    "SECRET_A": "EncJson[@api=2.0:@box=<changed>]",
+    "SECRET_COUNT": "EncJson[@api=2.0:@box=<count>]"
+  },
+  "other": true
+}
+`
+	if string(gotBytes) != want {
+		t.Fatalf("content changed unexpectedly:\n%s", string(gotBytes))
+	}
+}
