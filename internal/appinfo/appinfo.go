@@ -3,6 +3,7 @@ package appinfo
 const (
 	BuildAppName = "kube-build-app"
 	EditAppName  = "kube-edit-app"
+	OpsAppName   = "kube-ops-app"
 )
 
 var (

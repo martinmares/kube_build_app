@@ -1,6 +1,6 @@
 # kube-ops-app plan
 
-> Stav: **návrh zafixován pro další implementaci**. Žádný kód zatím neexistuje.
+> Stav: **implementace zahájena**. Existuje první CLI/config/render-digest skeleton bez DB, Git checkoutu, cluster klienta a UI.
 
 `kube-ops-app` není klon ArgoCD. Cílem je doménový OpenShift/Kubernetes operations portal nad prostředími generovanými přes `kube-build-app`.
 
@@ -718,6 +718,32 @@ Mimo MVP:
 - komplexní workflow approvals,
 - multi-cluster orchestrace,
 - vlastní plný health engine.
+
+## Aktuální implementační stav
+
+První úzký krok je záměrně bez cluster apply:
+
+```text
+server config -> lokální environment root -> kube-build-app render -> manifest digest
+```
+
+Hotové:
+
+- `cmd/kube-ops-app`
+- config loader pro server bootstrap config
+- `kube-ops-app env list`
+- `kube-ops-app env render-digest ENV`
+- stabilní SHA-256 digest nad vyrenderovanými soubory
+
+Ještě není hotové:
+
+- Git fetch/checkout target revision
+- DB storage
+- sync runs / audit log
+- Kubernetes dynamic client
+- server-side apply
+- runtime status
+- web UI
 
 ---
 

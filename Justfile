@@ -33,12 +33,14 @@ build:
     mkdir -p .tmp/go-build-cache
     GOCACHE="$PWD/.tmp/go-build-cache" go build -o dist/kube-build-app ./cmd/kube-build-app
     GOCACHE="$PWD/.tmp/go-build-cache" go build -o dist/kube-edit-app ./cmd/kube-edit-app
+    GOCACHE="$PWD/.tmp/go-build-cache" go build -o dist/kube-ops-app ./cmd/kube-ops-app
 
 [windows]
 build:
     New-Item -ItemType Directory -Force dist, .tmp/go-build-cache | Out-Null
     $env:GOCACHE = "$PWD\.tmp\go-build-cache"; go build -o dist/kube-build-app.exe ./cmd/kube-build-app
     $env:GOCACHE = "$PWD\.tmp\go-build-cache"; go build -o dist/kube-edit-app.exe ./cmd/kube-edit-app
+    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; go build -o dist/kube-ops-app.exe ./cmd/kube-ops-app
 
 [unix]
 build-versioned version:
@@ -47,7 +49,8 @@ build-versioned version:
     date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
     ldflags="-X kube-env/internal/appinfo.Version={{version}} -X kube-env/internal/appinfo.Commit=$commit -X kube-env/internal/appinfo.Date=$date"; \
     GOCACHE="$PWD/.tmp/go-build-cache" go build -ldflags "$ldflags" -o dist/kube-build-app ./cmd/kube-build-app; \
-    GOCACHE="$PWD/.tmp/go-build-cache" go build -ldflags "$ldflags" -o dist/kube-edit-app ./cmd/kube-edit-app
+    GOCACHE="$PWD/.tmp/go-build-cache" go build -ldflags "$ldflags" -o dist/kube-edit-app ./cmd/kube-edit-app; \
+    GOCACHE="$PWD/.tmp/go-build-cache" go build -ldflags "$ldflags" -o dist/kube-ops-app ./cmd/kube-ops-app
 
 [windows]
 build-versioned version:

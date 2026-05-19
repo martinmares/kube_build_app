@@ -9,9 +9,11 @@ Repozitář teď obsahuje dvě související binárky:
 ```text
 kube-build-app = build/render Kubernetes manifestů
 kube-edit-app  = webový editor environment repozitářů
+kube-ops-app   = prototyp operations/sync runneru nad vyrenderovanými manifesty
 ```
 
 `kube-edit-app` je cílový Go přepis Rust aplikace `kube-environments-ui`. Viz `docs/KUBE_EDIT_APP_PLAN.md`.
+`kube-ops-app` je raný prototyp operations portálu/sync runneru. Začíná načítáním configu, výpočtem render digestu a CLI inspection příkazy. Viz `docs/KUBE_OPS_APP_PLAN.md`.
 
 ## kube-edit-app Workflow
 
