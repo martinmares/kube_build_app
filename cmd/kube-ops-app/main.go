@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"kube-env/internal/appinfo"
 	opsconfig "kube-env/internal/opsapp/config"
+	opsdiff "kube-env/internal/opsapp/diff"
 	"kube-env/internal/opsapp/render"
 	"kube-env/internal/opsapp/state"
 	opsstatus "kube-env/internal/opsapp/status"
@@ -132,13 +134,30 @@ func newEnvCommand(opts *cliOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := render.RenderDigestByName(cfg, args[0])
+			env, ok := cfg.Environment(args[0])
+			if !ok {
+				return fmt.Errorf("environment %q not found", args[0])
+			}
+			store := state.NewStore(opts.statePath)
+			snapshotPath, err := store.SnapshotDir(env.Name)
 			if err != nil {
 				return err
 			}
-			if err := state.NewStore(opts.statePath).SaveEnvironment(result.Environment, state.EnvironmentState{
+			if !filepath.IsAbs(env.RootPath) {
+				abs, err := filepath.Abs(env.RootPath)
+				if err != nil {
+					return err
+				}
+				env.RootPath = abs
+			}
+			result, err := render.RenderDigestTo(env, snapshotPath)
+			if err != nil {
+				return err
+			}
+			if err := store.SaveEnvironment(result.Environment, state.EnvironmentState{
 				AppliedRevision: result.TargetRevision,
 				AppliedDigest:   result.Digest,
+				SnapshotPath:    snapshotPath,
 				AppliedAt:       time.Now().UTC(),
 				AppliedBy:       "kube-ops-app mark-applied",
 			}); err != nil {
@@ -148,6 +167,67 @@ func newEnvCommand(opts *cliOptions) *cobra.Command {
 				return printJSON(cmd, map[string]any{"environment": result.Environment, "applied_revision": result.TargetRevision, "applied_digest": result.Digest})
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s\tmarked applied\t%s\n", result.Environment, result.Digest)
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "diff ENV",
+		Short: "Render desired manifests and diff them against the applied snapshot",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(opts.statePath) == "" {
+				return errors.New("--state is required for diff")
+			}
+			cfg, err := loadConfig(opts)
+			if err != nil {
+				return err
+			}
+			env, ok := cfg.Environment(args[0])
+			if !ok {
+				return fmt.Errorf("environment %q not found", args[0])
+			}
+			store := state.NewStore(opts.statePath)
+			applied, found, err := store.Environment(env.Name)
+			if err != nil {
+				return err
+			}
+			if !found || applied.SnapshotPath == "" {
+				return fmt.Errorf("environment %q has no applied snapshot; run mark-applied first", env.Name)
+			}
+			desiredDir, err := os.MkdirTemp("", "kube-ops-desired-*")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(desiredDir)
+			if !filepath.IsAbs(env.RootPath) {
+				abs, err := filepath.Abs(env.RootPath)
+				if err != nil {
+					return err
+				}
+				env.RootPath = abs
+			}
+			desired, err := render.RenderDigestTo(env, desiredDir)
+			if err != nil {
+				return err
+			}
+			result, err := opsdiff.Directories(applied.SnapshotPath, desiredDir)
+			if err != nil {
+				return err
+			}
+			if opts.output == "json" {
+				return printJSON(cmd, map[string]any{"environment": env.Name, "applied_digest": applied.AppliedDigest, "desired_digest": desired.Digest, "diff": result})
+			}
+			if !result.Changed {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\tNoDiff\t%s\n", env.Name, desired.Digest)
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\tDiff\tapplied=%s\tdesired=%s\n", env.Name, applied.AppliedDigest, desired.Digest)
+			for _, file := range result.Files {
+				fmt.Fprintf(cmd.OutOrStdout(), "file\t%s\t%s\n", file.Status, file.Path)
+				for _, line := range file.Unified {
+					fmt.Fprintln(cmd.OutOrStdout(), line)
+				}
+			}
 			return nil
 		},
 	})

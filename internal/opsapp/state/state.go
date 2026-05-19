@@ -20,12 +20,20 @@ type File struct {
 type EnvironmentState struct {
 	AppliedRevision string    `json:"applied_revision,omitempty"`
 	AppliedDigest   string    `json:"applied_digest,omitempty"`
+	SnapshotPath    string    `json:"snapshot_path,omitempty"`
 	AppliedAt       time.Time `json:"applied_at,omitempty"`
 	AppliedBy       string    `json:"applied_by,omitempty"`
 }
 
 func NewStore(path string) Store {
 	return Store{Path: path}
+}
+
+func (s Store) SnapshotDir(environment string) (string, error) {
+	if strings.TrimSpace(s.Path) == "" {
+		return "", errors.New("state path is required")
+	}
+	return filepath.Join(filepath.Dir(s.Path), "snapshots", environment), nil
 }
 
 func (s Store) Load() (File, error) {

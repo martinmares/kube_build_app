@@ -29,6 +29,29 @@ containers:
 	}
 }
 
+func TestRenderDigestToReplacesTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	writeFile(t, filepath.Join(target, "stale.yml"), "stale\n")
+	writeFile(t, filepath.Join(root, "test", "env.unsecured.json"), `{"environment":{"NAMESPACE":"ops-test","TSM_REGISTRY_URL":"registry.local","TSM_RELEASE_ID":"1"}}`)
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    image: "{{env:TSM_REGISTRY_URL}}/api:{{env:TSM_RELEASE_ID}}"
+`)
+
+	result, err := RenderDigestTo(config.EnvironmentConfig{Name: "test", EnvName: "test", RootPath: root}, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Files == 0 {
+		t.Fatalf("result = %#v, want rendered files", result)
+	}
+	if _, err := os.Stat(filepath.Join(target, "stale.yml")); !os.IsNotExist(err) {
+		t.Fatalf("stale file still exists or unexpected stat error: %v", err)
+	}
+}
+
 func writeFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

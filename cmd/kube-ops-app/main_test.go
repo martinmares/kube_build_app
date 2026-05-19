@@ -95,6 +95,36 @@ func TestEnvStatusCommandUnknownAndMarkApplied(t *testing.T) {
 	}
 }
 
+func TestEnvDiffCommand(t *testing.T) {
+	root, configPath := writeOpsFixture(t)
+	statePath := filepath.Join(root, "state.json")
+
+	if _, err := executeCommand("--config", configPath, "--state", statePath, "env", "mark-applied", "test"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := executeCommand("--config", configPath, "--state", statePath, "env", "diff", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "test\tNoDiff\tsha256:") {
+		t.Fatalf("no-diff output = %q", out)
+	}
+
+	writeFile(t, filepath.Join(root, "envs", "test", "apps", "api.yml"), `name: api
+replicas: 2
+containers:
+  - name: api
+    image: "{{env:TSM_REGISTRY_URL}}/api:{{env:TSM_RELEASE_ID}}"
+`)
+	out, err = executeCommand("--config", configPath, "--state", statePath, "env", "diff", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "test\tDiff\tapplied=sha256:") || !strings.Contains(out, "file\tmodified\tdeployments/api-deployment.yml") {
+		t.Fatalf("diff output = %q", out)
+	}
+}
+
 func executeCommand(args ...string) (string, error) {
 	cmd := newRootCommand(appinfo.For(appinfo.OpsAppName), &cliOptions{})
 	var out bytes.Buffer

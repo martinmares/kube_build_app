@@ -735,15 +735,16 @@ Hotové:
 - `kube-ops-app env render-digest ENV`
 - `kube-ops-app env status ENV`
 - `kube-ops-app env mark-applied ENV` pro lokální prototyp applied stavu
+- `kube-ops-app env diff ENV` pro diff desired renderu proti uloženému applied snapshotu
 - stabilní SHA-256 digest nad vyrenderovanými soubory
 - file-backed prototype state přes `--state` / `KUBE_OPS_STATE`
 
-Poznámka: lokální JSON state je jen vývojová náhrada budoucí DB, aby šlo ověřit `Unknown` / `InSync` / `OutOfSync` status bez PostgreSQL a clusteru.
+Poznámka: lokální JSON state a snapshot adresář jsou jen vývojová náhrada budoucí DB/object storage, aby šlo ověřit `Unknown` / `InSync` / `OutOfSync` status a diff bez PostgreSQL a clusteru.
 
 Ještě není hotové:
 
 - Git fetch/checkout target revision
-- DB storage
+- DB storage místo lokálního JSON state/snapshotu
 - sync runs / audit log
 - Kubernetes dynamic client
 - server-side apply

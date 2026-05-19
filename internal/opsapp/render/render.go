@@ -38,6 +38,16 @@ func RenderDigest(env config.EnvironmentConfig) (DigestResult, error) {
 	}
 	defer os.RemoveAll(target)
 
+	return RenderDigestTo(env, target)
+}
+
+func RenderDigestTo(env config.EnvironmentConfig, target string) (DigestResult, error) {
+	if err := os.RemoveAll(target); err != nil {
+		return DigestResult{}, err
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return DigestResult{}, err
+	}
 	build, err := buildapp.Build(buildapp.Options{Environment: env.EnvName, Root: env.RootPath, Target: target})
 	if err != nil {
 		return DigestResult{}, fmt.Errorf("render %q: %w", env.Name, err)
