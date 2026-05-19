@@ -860,11 +860,11 @@ async function saveAppVars() {
 async function saveAppReplicas() {
   if (!state.env || !state.appFile || state.readOnly) return;
   const input = qs('#app-replicas-input');
-  const raw = input?.value ?? '';
+  const raw = input?.value?.trim() ?? '';
   const replicas = Number(raw);
-  if (!Number.isInteger(replicas) || replicas < 0) {
-    showError(new Error('Replicas must be an integer greater than or equal to 0.'));
-    return;
+  clearInvalidInputs('#edit-modal');
+  if (!raw || !/^[0-9]+$/.test(raw) || !Number.isInteger(replicas) || replicas < 0) {
+    return showError(invalidInput(input, 'Replicas must be an integer greater than or equal to 0.').message);
   }
   clearError();
   try {
@@ -1052,6 +1052,8 @@ async function saveAppAutoscaling() {
     memory_average_utilization: value('memory-average-utilization'),
   };
   clearError();
+  const validation = validateAutoscalingForm(autoscaling);
+  if (!validation.ok) return showError(validation.message);
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/autoscaling`, {autoscaling, expected_hash: state.appContentHash});
     state.editModalClose?.();
@@ -1060,6 +1062,45 @@ async function saveAppAutoscaling() {
     await loadApps();
     await selectApp(state.appFile);
   } catch (e) { showError(e); }
+}
+function validateAutoscalingForm(autoscaling) {
+  clearInvalidInputs('[data-autoscaling-editor]');
+  const integer = (field, label, options = {}) => {
+    const input = qs(`[data-autoscaling-field="${field}"]`);
+    const raw = input?.value?.trim() || '';
+    if (!raw) {
+      if (options.required) return invalidInput(input, `${label} is required.`);
+      return {ok: true, value: 0, empty: true};
+    }
+    const value = Number(raw);
+    if (!/^[0-9]+$/.test(raw) || !Number.isInteger(value)) return invalidInput(input, `${label} must be an integer.`);
+    if (options.min !== undefined && value < options.min) return invalidInput(input, `${label} must be greater than or equal to ${options.min}.`);
+    if (options.max !== undefined && value > options.max) return invalidInput(input, `${label} must be less than or equal to ${options.max}.`);
+    return {ok: true, value, empty: false};
+  };
+  if (!autoscaling.enabled) {
+    for (const [field, label] of [
+      ['min-replicas', 'Min replicas'],
+      ['max-replicas', 'Max replicas'],
+      ['cpu-average-utilization', 'CPU average utilization'],
+      ['memory-average-utilization', 'Memory average utilization'],
+    ]) {
+      const validation = integer(field, label, {min: 0});
+      if (!validation.ok) return validation;
+    }
+    return {ok: true};
+  }
+  const min = integer('min-replicas', 'Min replicas', {required: true, min: 1});
+  if (!min.ok) return min;
+  const max = integer('max-replicas', 'Max replicas', {required: true, min: 1});
+  if (!max.ok) return max;
+  if (max.value < min.value) return invalidInput(qs('[data-autoscaling-field="max-replicas"]'), 'Max replicas must be greater than or equal to min replicas.');
+  const cpu = integer('cpu-average-utilization', 'CPU average utilization', {min: 1, max: 100});
+  if (!cpu.ok) return cpu;
+  const memory = integer('memory-average-utilization', 'Memory average utilization', {min: 1, max: 100});
+  if (!memory.ok) return memory;
+  if (cpu.empty && memory.empty) return invalidInput(qs('[data-autoscaling-field="cpu-average-utilization"]'), 'Autoscaling requires CPU or memory average utilization.');
+  return {ok: true};
 }
 function renderProbePreview(index, probes) {
   if (!probes?.enabled) return '<div class="text-muted small">Not configured.</div>';
@@ -1154,6 +1195,8 @@ async function saveContainerResources(index) {
     memory_limit: value('memory-limit'),
   };
   clearError();
+  const validation = validateResourcesForm(index);
+  if (!validation.ok) return showError(validation.message);
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/resources`, {resources, expected_hash: state.appContentHash});
     state.editModalClose?.();
@@ -1162,6 +1205,31 @@ async function saveContainerResources(index) {
     await loadApps();
     await selectApp(state.appFile);
   } catch (e) { showError(e); }
+}
+const cpuQuantityRe = /^([0-9]+(\.[0-9]+)?|\.[0-9]+)m?$/;
+const memoryQuantityRe = /^([0-9]+(\.[0-9]+)?|\.[0-9]+)(Ki|Mi|Gi|Ti|Pi|Ei|K|M|G|T|P|E)?$/;
+function validateResourcesForm(index) {
+  clearInvalidInputs(`[data-resource-editor="${index}"]`);
+  const checks = [
+    ['cpu-request', 'CPU request', cpuQuantityRe, 'Use values like 100m, 0.5 or 1.'],
+    ['cpu-limit', 'CPU limit', cpuQuantityRe, 'Use values like 100m, 0.5 or 1.'],
+    ['memory-request', 'Memory request', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+    ['memory-limit', 'Memory limit', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+  ];
+  for (const [field, label, pattern, hint] of checks) {
+    const input = qs(`[data-resource-field="${index}:${field}"]`);
+    const value = input?.value?.trim() || '';
+    if (value && !pattern.test(value)) return invalidInput(input, `${label} is invalid. ${hint}`);
+  }
+  return {ok: true};
+}
+function clearInvalidInputs(scopeSelector) {
+  qsa(`${scopeSelector} .is-invalid`).forEach((input) => input.classList.remove('is-invalid'));
+}
+function invalidInput(input, message) {
+  input?.classList.add('is-invalid');
+  input?.focus();
+  return {ok: false, message};
 }
 async function saveContainerRuntime(index) {
   if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
@@ -1192,6 +1260,8 @@ async function saveContainerProbes(index) {
     path: value('path'),
   };
   clearError();
+  const validation = validateProbeForm(index);
+  if (!validation.ok) return showError(validation.message);
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/probes`, {probes, expected_hash: state.appContentHash});
     state.editModalClose?.();
@@ -1200,6 +1270,13 @@ async function saveContainerProbes(index) {
     await loadApps();
     await selectApp(state.appFile);
   } catch (e) { showError(e); }
+}
+function validateProbeForm(index) {
+  clearInvalidInputs(`[data-probe-editor="${index}"]`);
+  const portInput = qs(`[data-probe-field="${index}:port"]`);
+  const port = portInput?.value?.trim() || '';
+  if (port) return validatePortValue(portInput, 'Probe port');
+  return {ok: true};
 }
 async function fixContainerLegacyProbes(index) {
   if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
@@ -1876,6 +1953,8 @@ async function saveContainerPorts(index) {
     })),
   })).filter((port) => port.name || port.port);
   clearError();
+  const validation = validatePortsForm(index);
+  if (!validation.ok) return showError(validation.message);
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/ports`, {ports, expected_hash: state.appContentHash});
     state.portsModalClose?.();
@@ -1884,6 +1963,55 @@ async function saveContainerPorts(index) {
     await loadApps();
     await selectApp(state.appFile);
   } catch (e) { showError(e); }
+}
+function validatePortsForm(index) {
+  clearInvalidInputs('#ports-edit-modal');
+  const seenPorts = new Set();
+  for (const portRow of qsa(`[data-port-row="${index}"]`)) {
+    const nameInput = portRow.querySelector(`[data-port-field="${index}:name"]`);
+    const portInputEl = portRow.querySelector(`[data-port-field="${index}:port"]`);
+    const name = nameInput?.value?.trim() || '';
+    const port = portInputEl?.value?.trim() || '';
+    if (!name) return invalidInput(nameInput, 'Port name is required.');
+    if (/[\\r\\n:]/.test(name)) return invalidInput(nameInput, 'Port name cannot contain colon or newline.');
+    if (seenPorts.has(name)) return invalidInput(nameInput, `Duplicate port name "${name}".`);
+    seenPorts.add(name);
+    const portValidation = validatePortValue(portInputEl, 'Container port');
+    if (!portValidation.ok) return portValidation;
+    const seenServices = new Set();
+    for (const exposeRow of portRow.querySelectorAll(`[data-expose-row="${index}"]`)) {
+      const serviceInput = exposeRow.querySelector(`[data-expose-field="${index}:service-name"]`);
+      const servicePortInput = exposeRow.querySelector(`[data-expose-field="${index}:port"]`);
+      const serviceName = serviceInput?.value?.trim() || '';
+      if (!serviceName) return invalidInput(serviceInput, 'Service DNS name is required.');
+      if (/[\\r\\n:]/.test(serviceName)) return invalidInput(serviceInput, 'Service DNS name cannot contain colon or newline.');
+      if (seenServices.has(serviceName)) return invalidInput(serviceInput, `Duplicate service DNS name "${serviceName}".`);
+      seenServices.add(serviceName);
+      const servicePortValidation = validatePortValue(servicePortInput, 'Service port');
+      if (!servicePortValidation.ok) return servicePortValidation;
+      const seenExternals = new Set();
+      for (const externalRow of exposeRow.querySelectorAll(`[data-external-row="${index}"]`)) {
+        const externalNameInput = externalRow.querySelector(`[data-external-field="${index}:name"]`);
+        const externalName = externalNameInput?.value?.trim() || '';
+        if (!externalName) return invalidInput(externalNameInput, 'External name is required.');
+        if (/[\\r\\n:]/.test(externalName)) return invalidInput(externalNameInput, 'External name cannot contain colon or newline.');
+        if (seenExternals.has(externalName)) return invalidInput(externalNameInput, `Duplicate external name "${externalName}".`);
+        seenExternals.add(externalName);
+        const httpHost = externalRow.querySelector(`[data-external-field="${index}:http-hostname"]`)?.value?.trim() || '';
+        const httpsHost = externalRow.querySelector(`[data-external-field="${index}:https-hostname"]`)?.value?.trim() || '';
+        if (!httpHost && !httpsHost) return invalidInput(externalNameInput, `External "${externalName}" requires HTTP or HTTPS hostname.`);
+      }
+    }
+  }
+  return {ok: true};
+}
+function validatePortValue(input, label) {
+  const value = input?.value?.trim() || '';
+  const port = Number(value);
+  if (!/^[0-9]+$/.test(value) || !Number.isInteger(port) || port < 1 || port > 65535) {
+    return invalidInput(input, `${label} must be an integer between 1 and 65535.`);
+  }
+  return {ok: true};
 }
 function renderContainerEnvsEditor(index, vars) {
   if (state.readOnly) return '';

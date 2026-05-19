@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -2263,15 +2264,46 @@ func legacyHealthToProbesBlock(block []string) []string {
 }
 
 func validateResourceUpdate(resources ResourceUpdate) error {
-	for label, value := range map[string]string{
-		"cpu_request":    resources.CPURequest,
-		"cpu_limit":      resources.CPULimit,
-		"memory_request": resources.MemoryRequest,
-		"memory_limit":   resources.MemoryLimit,
-	} {
+	for label, value := range map[string]string{"cpu_request": resources.CPURequest, "cpu_limit": resources.CPULimit} {
 		if strings.ContainsAny(value, "\r\n") {
 			return fmt.Errorf("%s contains unsupported newline", label)
 		}
+		if err := validateCPUQuantity(label, value); err != nil {
+			return err
+		}
+	}
+	for label, value := range map[string]string{"memory_request": resources.MemoryRequest, "memory_limit": resources.MemoryLimit} {
+		if strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("%s contains unsupported newline", label)
+		}
+		if err := validateMemoryQuantity(label, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var cpuQuantityPattern = regexp.MustCompile(`^([0-9]+(\.[0-9]+)?|\.[0-9]+)m?$`)
+var memoryQuantityPattern = regexp.MustCompile(`^([0-9]+(\.[0-9]+)?|\.[0-9]+)(Ki|Mi|Gi|Ti|Pi|Ei|K|M|G|T|P|E)?$`)
+
+func validateCPUQuantity(label string, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if !cpuQuantityPattern.MatchString(value) {
+		return fmt.Errorf("%s must be a Kubernetes CPU quantity like 100m, 0.5 or 1", label)
+	}
+	return nil
+}
+
+func validateMemoryQuantity(label string, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if !memoryQuantityPattern.MatchString(value) {
+		return fmt.Errorf("%s must be a Kubernetes memory quantity like 256Mi, 1Gi or 512M", label)
 	}
 	return nil
 }
@@ -2287,8 +2319,8 @@ func validateProbeUpdate(probes ProbeUpdate) error {
 		}
 	}
 	if port := strings.TrimSpace(probes.Port); port != "" {
-		if _, err := strconv.Atoi(port); err != nil {
-			return errors.New("port must be an integer")
+		if err := validatePositivePort("port", port); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2321,6 +2353,9 @@ func validateAutoscalingUpdate(autoscaling AutoscalingUpdate) error {
 	maxReplicas, hasMax := values["max_replicas"]
 	if !hasMin || minReplicas < 1 {
 		return errors.New("min_replicas must be greater than 0 when autoscaling is enabled")
+	}
+	if hasMax && maxReplicas < 1 {
+		return errors.New("max_replicas must be greater than 0 when autoscaling is enabled")
 	}
 	if !hasMax || maxReplicas < minReplicas {
 		return errors.New("max_replicas must be greater than or equal to min_replicas when autoscaling is enabled")

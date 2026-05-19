@@ -478,6 +478,73 @@ func TestUpdateAppAutoscalingWritesBlock(t *testing.T) {
 	}
 }
 
+func TestUpdateAppAutoscalingRejectsInvalidRanges(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\nreplicas: 2\ncontainers:\n  - name: api\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name        string
+		autoscaling AutoscalingUpdate
+		want        string
+	}{
+		{
+			name: "enabled requires positive min",
+			autoscaling: AutoscalingUpdate{
+				Enabled:                  true,
+				MinReplicas:              "0",
+				MaxReplicas:              "2",
+				CPUAverageUtilization:    "75",
+				MemoryAverageUtilization: "",
+			},
+			want: "min_replicas",
+		},
+		{
+			name: "max must be at least min",
+			autoscaling: AutoscalingUpdate{
+				Enabled:                  true,
+				MinReplicas:              "3",
+				MaxReplicas:              "2",
+				CPUAverageUtilization:    "75",
+				MemoryAverageUtilization: "",
+			},
+			want: "max_replicas",
+		},
+		{
+			name: "utilization has upper bound",
+			autoscaling: AutoscalingUpdate{
+				Enabled:                  true,
+				MinReplicas:              "1",
+				MaxReplicas:              "2",
+				CPUAverageUtilization:    "101",
+				MemoryAverageUtilization: "",
+			},
+			want: "cpu_average_utilization",
+		},
+		{
+			name: "enabled requires metric",
+			autoscaling: AutoscalingUpdate{
+				Enabled:     true,
+				MinReplicas: "1",
+				MaxReplicas: "2",
+			},
+			want: "metric",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := repo.UpdateAppAutoscaling("test", "api.yml", tt.autoscaling, "")
+			if err == nil || !contains(err.Error(), tt.want) {
+				t.Fatalf("UpdateAppAutoscaling error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestUpdateAppContainerResourcesWritesRequestsLimits(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
@@ -514,6 +581,25 @@ containers:
 	}
 	if contains(detail.Content, "from:") || contains(detail.Content, "to:") {
 		t.Fatalf("legacy from/to should be replaced:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppContainerResourcesRejectsInvalidQuantities(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{CPURequest: "1000ABC"}, ""); err == nil || !contains(err.Error(), "cpu_request") {
+		t.Fatalf("CPU quantity error = %v, want cpu_request validation", err)
+	}
+	if _, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{MemoryRequest: "1000ABC"}, ""); err == nil || !contains(err.Error(), "memory_request") {
+		t.Fatalf("memory quantity error = %v, want memory_request validation", err)
+	}
+	if _, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{CPURequest: "500m", MemoryRequest: "1000Mi"}, ""); err != nil {
+		t.Fatalf("valid quantities rejected: %v", err)
 	}
 }
 
@@ -727,6 +813,25 @@ func TestUpdateAppContainerProbesWritesModernBlock(t *testing.T) {
 	}
 	if !contains(detail.Content, "  - name: api\n    probes:\n      preset: \"spring-actuator\"\n      port: \"8080\"\n      path: \"/actuator/health\"\n    image: api:1") {
 		t.Fatalf("probes not inserted after container name:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppContainerProbesRejectsInvalidPortRange(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, port := range []string{"0", "70000", "abc"} {
+		_, err := repo.UpdateAppContainerProbes("test", "api.yml", 0, ProbeUpdate{Preset: "spring-actuator", Port: port}, "")
+		if err == nil || !contains(err.Error(), "port") {
+			t.Fatalf("UpdateAppContainerProbes port %q error = %v, want port validation", port, err)
+		}
+	}
+	if _, err := repo.UpdateAppContainerProbes("test", "api.yml", 0, ProbeUpdate{Preset: "spring-actuator", Port: "8080"}, ""); err != nil {
+		t.Fatalf("valid probe port rejected: %v", err)
 	}
 }
 
