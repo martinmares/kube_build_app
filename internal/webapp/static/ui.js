@@ -127,6 +127,43 @@ function setActive(page) {
   setText('#page-title', page === 'dashboard' ? 'Select environment' : page === 'changes' ? 'Changed files' : page === 'apps' ? 'Inspect applications' : page === 'assets' ? 'Inspect assets' : 'Build preview');
   if (page === 'build') loadBuildData();
 }
+function routeHash({env = state.env, page = state.active, app = state.appFile, asset = state.assetPath} = {}) {
+  const params = new URLSearchParams();
+  if (env) params.set('env', env);
+  if (page) params.set('page', page);
+  if (page === 'apps' && app) params.set('app', app);
+  if (page === 'assets' && asset) params.set('asset', asset);
+  return `#${params.toString()}`;
+}
+function pushRoute(route = {}) {
+  const hash = routeHash(route);
+  if (window.location.hash !== hash) window.history.pushState(null, '', hash);
+}
+function replaceRoute(route = {}) {
+  const hash = routeHash(route);
+  if (window.location.hash !== hash) window.history.replaceState(null, '', hash);
+}
+function parseRouteHash() {
+  const raw = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : '';
+  const params = new URLSearchParams(raw);
+  return {
+    env: params.get('env') || '',
+    page: params.get('page') || '',
+    app: params.get('app') || '',
+    asset: params.get('asset') || '',
+  };
+}
+async function restoreRouteFromHash() {
+  if (!state.envs.length) return;
+  const route = parseRouteHash();
+  const env = state.envs.some((item) => item.name === route.env) ? route.env : (state.env || localStorage.getItem('activeEnv') || state.envs[0].name);
+  if (env !== state.env) await selectEnv(env, {updateRoute: false});
+  const page = ['dashboard', 'changes', 'apps', 'assets', 'build'].includes(route.page) ? route.page : state.active;
+  setActive(page || 'dashboard');
+  if (page === 'apps' && route.app) await selectApp(route.app, {updateRoute: false});
+  if (page === 'assets' && route.asset) await selectAsset(route.asset, {updateRoute: false});
+  replaceRoute({env: state.env, page: state.active, app: state.appFile, asset: state.assetPath});
+}
 function applyTheme(theme) {
   if (theme === 'auto') theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   document.documentElement.setAttribute('data-bs-theme', theme);
@@ -139,7 +176,13 @@ function setupTheme() {
 }
 async function init() {
   setupTheme();
-  qsa('[data-nav]').forEach((x) => x.addEventListener('click', (e) => { e.preventDefault(); if (x.dataset.nav !== 'dashboard' && !state.env) return showError('Select environment first.'); setActive(x.dataset.nav); }));
+  window.addEventListener('hashchange', () => restoreRouteFromHash());
+  qsa('[data-nav]').forEach((x) => x.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (x.dataset.nav !== 'dashboard' && !state.env) return showError('Select environment first.');
+    setActive(x.dataset.nav);
+    pushRoute({page: x.dataset.nav});
+  }));
   qs('#refresh-btn')?.addEventListener('click', () => refreshCurrentView());
   qs('#apps-filter')?.addEventListener('input', () => renderApps());
   qs('#assets-filter')?.addEventListener('input', () => renderAssets());
@@ -152,6 +195,7 @@ async function init() {
   qs('#build-preview-collapse-btn')?.addEventListener('click', () => collapseBuildPreviewTree());
   qs('#build-preview-copy-path')?.addEventListener('click', () => copyBuildPreviewPath());
   qs('#build-preview-copy-content')?.addEventListener('click', () => copyBuildPreviewContent());
+  qs('#accept-changes-confirm')?.addEventListener('click', () => acceptSelectedChanges());
   qs('#inventory-filter')?.addEventListener('input', () => renderInventory());
   qs('#inventory-path')?.addEventListener('input', () => renderInventory());
   qs('#inventory-clear-btn')?.addEventListener('click', () => {
@@ -219,7 +263,11 @@ async function loadAll() {
     qs('#write-mode-badge')?.classList.toggle('hidden', !!info.read_only);
     qs('#read-only-hint')?.classList.toggle('hidden', !info.read_only);
     await refreshRepositorySnapshot();
-    if (state.envs.length) await selectEnv(state.env || localStorage.getItem('activeEnv') || state.envs[0].name);
+    if (state.envs.length) {
+      const route = parseRouteHash();
+      if (route.env || route.page || route.app || route.asset) await restoreRouteFromHash();
+      else await selectEnv(state.env || localStorage.getItem('activeEnv') || state.envs[0].name);
+    }
   } catch (e) { showError(e); }
 }
 async function refreshRepositorySnapshot() {
@@ -285,7 +333,7 @@ function dirtyBadge(file) {
   if (!file) return '';
   return `<span class="badge bg-yellow-lt ms-2"><i class="ti ti-alert-triangle me-1"></i>${esc(gitCodeLabel(file.code))}</span>`;
 }
-async function selectEnv(env) {
+async function selectEnv(env, options = {}) {
   if (!state.envs.some((x) => x.name === env)) env = state.envs[0]?.name;
   if (!env) return;
   const changedEnv = state.env !== env;
@@ -296,6 +344,7 @@ async function selectEnv(env) {
   await Promise.all([loadApps(), loadAssets()]);
   const hasChanges = gitFilesForEnv(env).length > 0;
   setActive(state.active === 'dashboard' ? (hasChanges ? 'changes' : 'apps') : state.active);
+  if (options.updateRoute !== false) pushRoute({env, page: state.active});
 }
 function renderEnvs() {
   const host = qs('#env-list');
@@ -354,6 +403,7 @@ function renderEnvChanges() {
   qsa('[data-changed-expand-all]').forEach((item) => item.addEventListener('click', () => expandVisibleChangedDiffs()));
   qsa('[data-changed-collapse-all]').forEach((item) => item.addEventListener('click', () => collapseVisibleChangedDiffs()));
   qsa('[data-changed-toggle-diff]').forEach((item) => item.addEventListener('click', () => toggleChangedDiff(item.dataset.changedToggleDiff)));
+  qsa('[data-accept-selected]').forEach((item) => item.addEventListener('click', () => openAcceptChangesModal()));
   qsa('[data-restore-path]').forEach((item) => item.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -386,12 +436,13 @@ function renderChangedFilesReview(files) {
           <button class="btn btn-sm btn-outline-secondary" type="button" data-changed-clear-selection><i class="ti ti-x me-1"></i>Clear</button>
           <button class="btn btn-sm btn-outline-primary" type="button" data-changed-expand-all><i class="ti ti-arrows-maximize me-1"></i>Expand all diffs</button>
           <button class="btn btn-sm btn-outline-secondary" type="button" data-changed-collapse-all><i class="ti ti-arrows-minimize me-1"></i>Collapse all</button>
+          ${state.readOnly ? '' : '<button class="btn btn-sm btn-primary" type="button" data-accept-selected><i class="ti ti-git-commit me-1"></i>Accept selected</button>'}
         </div>
       </div>
       <div class="changed-summary">
         <span data-changed-selection-summary>0 selected</span>
         <span>${visible.length}/${files.length} visible</span>
-        <span class="text-muted">Review-only mode. Commit/accept flow will be added after this layout is verified.</span>
+        <span class="text-muted">Accept selected commits only checked files. Other dirty files remain untouched.</span>
       </div>
       <div class="changed-file-list">
         ${visible.length ? renderChangedFileGroups(visible) : emptyState('ti-filter-off', 'No matching changed files', 'Adjust group or status filters.')}
@@ -491,6 +542,72 @@ function selectVisibleChangedFiles(selected) {
 }
 function syncChangedSelectionSummary() {
   setText('[data-changed-selection-summary]', `${state.changedSelected.size} selected`);
+}
+function openAcceptChangesModal() {
+  if (state.readOnly) return;
+  const paths = selectedChangedPaths();
+  if (!paths.length) return showError('Select at least one changed file first.');
+  clearError();
+  const filesHost = qs('#accept-changes-files');
+  if (filesHost) filesHost.innerHTML = paths.map((path) => `<div>${esc(path)}</div>`).join('');
+  const message = qs('#accept-changes-message');
+  if (message) message.value = suggestedCommitMessage(paths);
+  const validate = qs('#accept-changes-validate');
+  if (validate) validate.checked = true;
+  const error = qs('#accept-changes-error');
+  if (error) {
+    error.textContent = '';
+    error.classList.add('hidden');
+  }
+  state.acceptChangesModalClose = openModalElement(qs('#accept-changes-modal'), message, () => {
+    state.acceptChangesModalClose = null;
+  });
+}
+function selectedChangedPaths() {
+  const dirty = new Set(gitFilesForEnv(state.env).map((file) => file.path));
+  return Array.from(state.changedSelected).filter((path) => dirty.has(path)).sort();
+}
+function suggestedCommitMessage(paths) {
+  if (paths.length === 1) return `Accept changes in ${paths[0].split('/').pop()}`;
+  return `Accept ${paths.length} selected changes`;
+}
+async function acceptSelectedChanges() {
+  const paths = selectedChangedPaths();
+  const message = qs('#accept-changes-message')?.value?.trim() || '';
+  const error = qs('#accept-changes-error');
+  const confirm = qs('#accept-changes-confirm');
+  const validate = qs('#accept-changes-validate')?.checked;
+  if (error) {
+    error.textContent = '';
+    error.classList.add('hidden');
+  }
+  if (!paths.length) return setAcceptChangesError('Select at least one changed file.');
+  if (!message) return setAcceptChangesError('Commit message is required.');
+  clearError();
+  if (confirm) confirm.disabled = true;
+  try {
+    if (validate) {
+      await apiPost(`/api/v1/envs/${encodeURIComponent(state.env)}/validate`);
+    }
+    const result = await apiPostJSON('/api/v1/git/commit', {paths, message});
+    state.git = result.status;
+    state.changedSelected.clear();
+    state.changedExpanded.clear();
+    state.changedDiffs.clear();
+    state.acceptChangesModalClose?.();
+    state.acceptChangesModalClose = null;
+    await refreshCurrentView();
+  } catch (e) {
+    setAcceptChangesError(String(e));
+  } finally {
+    if (confirm) confirm.disabled = false;
+  }
+}
+function setAcceptChangesError(message) {
+  const error = qs('#accept-changes-error');
+  if (!error) return showError(message);
+  error.textContent = message;
+  error.classList.remove('hidden');
 }
 async function toggleChangedDiff(path) {
   if (!path) return;
@@ -648,8 +765,12 @@ function renderApps() {
     </tr>`).join('') || `<tr><td colspan="2">${emptyState('ti-apps', query ? 'No matching apps' : 'No apps', query ? 'Try a different filter.' : 'No app YAML files were found.')}</td></tr>`;
   qsa('[data-app]').forEach((x) => x.addEventListener('click', () => selectApp(x.dataset.app)));
 }
-async function selectApp(file) {
+async function selectApp(file, options = {}) {
   state.appFile = file; renderApps(); clearError();
+  if (options.updateRoute !== false) {
+    setActive('apps');
+    pushRoute({page: 'apps', app: file});
+  }
   try {
     const [detail, rendered, vars, model] = await Promise.all([
       api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(file)}`),
@@ -1973,8 +2094,12 @@ function assetGitPath(relativePath) {
   if (isDefaultsAsset(relativePath)) return `${state.env}/apps/${relativePath}`;
   return isSpecial(relativePath) ? `${state.env}/${relativePath}` : `${state.env}/assets/${relativePath}`;
 }
-async function selectAsset(path) {
+async function selectAsset(path, options = {}) {
   state.assetPath = path; renderAssets(); clearError();
+  if (options.updateRoute !== false) {
+    setActive('assets');
+    pushRoute({page: 'assets', asset: path});
+  }
   try {
     const selectedAsset = state.assets.find((asset) => asset.relative_path === path);
     setText('#asset-detail-title', path);

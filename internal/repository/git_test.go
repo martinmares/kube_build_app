@@ -90,3 +90,71 @@ func TestGitRestoreUntrackedRequiresExplicitDelete(t *testing.T) {
 		t.Fatalf("untracked file still exists or unexpected stat error: %v", err)
 	}
 }
+
+func TestGitCommitSelectedCommitsOnlySelectedPaths(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	root := t.TempDir()
+	runGit(t, root, "init")
+	runGit(t, root, "config", "user.name", "Test")
+	runGit(t, root, "config", "user.email", "test@example.com")
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\n")
+	writeFile(t, filepath.Join(root, "test", "apps", "worker.yml"), "name: worker\n")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "initial")
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: changed-api\n")
+	writeFile(t, filepath.Join(root, "test", "apps", "worker.yml"), "name: changed-worker\n")
+	writeFile(t, filepath.Join(root, "test", "env.unsecured.json"), "{\"environment\":{}}\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repo.GitCommitSelected([]string{"test/apps/api.yml", "test/env.unsecured.json"}, "accept selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Committed || result.Commit == "" {
+		t.Fatalf("commit result = %#v, want committed with hash", result)
+	}
+	status := repo.GitStatus()
+	if len(status.Files) != 1 || status.Files[0].Path != "test/apps/worker.yml" {
+		t.Fatalf("status files after selected commit = %#v, want only worker dirty", status.Files)
+	}
+	show := gitShow(t, root, "--name-only", "--format=", "HEAD")
+	if !strings.Contains(show, "test/apps/api.yml") || !strings.Contains(show, "test/env.unsecured.json") || strings.Contains(show, "test/apps/worker.yml") {
+		t.Fatalf("selected commit files unexpected:\n%s", show)
+	}
+}
+
+func TestGitCommitSelectedRejectsCleanPath(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	root := t.TempDir()
+	runGit(t, root, "init")
+	runGit(t, root, "config", "user.name", "Test")
+	runGit(t, root, "config", "user.email", "test@example.com")
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\n")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "initial")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.GitCommitSelected([]string{"test/apps/api.yml"}, "should fail"); err == nil || !strings.Contains(err.Error(), "not dirty") {
+		t.Fatalf("commit clean path error = %v, want not dirty", err)
+	}
+}
+
+func gitShow(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir, "show"}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git show %v failed: %v\n%s", args, err, out)
+	}
+	return string(out)
+}

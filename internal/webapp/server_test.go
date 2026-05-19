@@ -171,6 +171,49 @@ func TestGitRestoreEndpointRequiresWriteMode(t *testing.T) {
 	}
 }
 
+func TestGitCommitEndpointRequiresWriteModeAndCommitsSelected(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	root := t.TempDir()
+	runGit(t, root, "init")
+	runGit(t, root, "config", "user.name", "Test")
+	runGit(t, root, "config", "user.email", "test@example.com")
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\n")
+	writeFile(t, filepath.Join(root, "test", "apps", "worker.yml"), "name: worker\n")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "initial")
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: changed-api\n")
+	writeFile(t, filepath.Join(root, "test", "apps", "worker.yml"), "name: changed-worker\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readOnlyServer := NewServer(appinfo.For(appinfo.EditAppName), repo)
+	readOnlyReq := httptest.NewRequest(http.MethodPost, "/api/v1/git/commit", strings.NewReader(`{"paths":["test/apps/api.yml"],"message":"accept api"}`))
+	readOnlyRes := httptest.NewRecorder()
+	readOnlyServer.Handler().ServeHTTP(readOnlyRes, readOnlyReq)
+	if readOnlyRes.Code != http.StatusForbidden {
+		t.Fatalf("read-only status = %d, want 403: %s", readOnlyRes.Code, readOnlyRes.Body.String())
+	}
+
+	writeServer := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	writeReq := httptest.NewRequest(http.MethodPost, "/api/v1/git/commit", strings.NewReader(`{"paths":["test/apps/api.yml"],"message":"accept api"}`))
+	writeRes := httptest.NewRecorder()
+	writeServer.Handler().ServeHTTP(writeRes, writeReq)
+	if writeRes.Code != http.StatusOK {
+		t.Fatalf("write status = %d, want 200: %s", writeRes.Code, writeRes.Body.String())
+	}
+	if !strings.Contains(writeRes.Body.String(), `"committed":true`) {
+		t.Fatalf("unexpected commit response:\n%s", writeRes.Body.String())
+	}
+	status := repo.GitStatus()
+	if len(status.Files) != 1 || status.Files[0].Path != "test/apps/worker.yml" {
+		t.Fatalf("status files after selected commit = %#v, want only worker dirty", status.Files)
+	}
+}
+
 func TestAppsEndpoint(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")

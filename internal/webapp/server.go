@@ -115,6 +115,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/git/status", s.handleGitStatus)
 	mux.HandleFunc("GET /api/v1/git/diff/{file_path...}", s.handleGitDiff)
 	mux.HandleFunc("POST /api/v1/git/restore/{file_path...}", s.handleGitRestore)
+	mux.HandleFunc("POST /api/v1/git/commit", s.handleGitCommit)
 	mux.HandleFunc("GET /api/v1/envs", s.handleEnvironments)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps", s.handleApps)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}", s.handleAppDetail)
@@ -227,6 +228,31 @@ func (s *Server) handleGitRestore(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	result, err := s.repo.GitRestore(r.PathValue("file_path"), payload.DeleteUntracked)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleGitCommit(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	var payload struct {
+		Paths   []string `json:"paths"`
+		Message string   `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := s.repo.GitCommitSelected(payload.Paths, payload.Message)
 	if err != nil {
 		writeError(w, statusForError(err), err.Error())
 		return

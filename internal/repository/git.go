@@ -38,6 +38,13 @@ type GitRestoreResult struct {
 	Status   GitStatus `json:"status"`
 }
 
+type GitCommitResult struct {
+	Committed bool      `json:"committed"`
+	Commit    string    `json:"commit,omitempty"`
+	Paths     []string  `json:"paths"`
+	Status    GitStatus `json:"status"`
+}
+
 func (r *Repository) GitStatus() GitStatus {
 	topLevel, err := gitOutput(r.root, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -137,6 +144,61 @@ func (r *Repository) GitRestore(relativePath string, deleteUntracked bool) (GitR
 		return GitRestoreResult{}, err
 	}
 	return GitRestoreResult{Restored: true, Path: rel, Status: r.GitStatus()}, nil
+}
+
+func (r *Repository) GitCommitSelected(relativePaths []string, message string) (GitCommitResult, error) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return GitCommitResult{}, errors.New("commit message is required")
+	}
+	if _, err := gitOutput(r.root, "rev-parse", "--show-toplevel"); err != nil {
+		return GitCommitResult{}, errors.New("repository root is not inside a Git work tree")
+	}
+	paths, err := r.validateDirtyPaths(relativePaths)
+	if err != nil {
+		return GitCommitResult{}, err
+	}
+	addArgs := append([]string{"add", "--"}, paths...)
+	if _, err := gitOutputRaw(r.root, addArgs...); err != nil {
+		return GitCommitResult{}, err
+	}
+	commitArgs := append([]string{"commit", "-m", message, "--"}, paths...)
+	if _, err := gitOutputRaw(r.root, commitArgs...); err != nil {
+		return GitCommitResult{}, err
+	}
+	commit, _ := gitOutput(r.root, "rev-parse", "--short", "HEAD")
+	return GitCommitResult{Committed: true, Commit: commit, Paths: paths, Status: r.GitStatus()}, nil
+}
+
+func (r *Repository) validateDirtyPaths(relativePaths []string) ([]string, error) {
+	seen := map[string]bool{}
+	var paths []string
+	status := r.GitStatus()
+	if !status.Available {
+		return nil, errors.New("repository root is not inside a Git work tree")
+	}
+	dirty := map[string]bool{}
+	for _, file := range status.Files {
+		dirty[file.Path] = true
+	}
+	for _, rawPath := range relativePaths {
+		path, err := validateRelativePath(rawPath)
+		if err != nil {
+			return nil, err
+		}
+		if seen[path] {
+			continue
+		}
+		if !dirty[path] {
+			return nil, errors.New("selected path is not dirty: " + path)
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("at least one changed file must be selected")
+	}
+	return paths, nil
 }
 
 func (r *Repository) dirtyPathSet() map[string]bool {

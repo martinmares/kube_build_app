@@ -207,6 +207,38 @@
       </div>
     </div>
   </div>
+  <div class="modal modal-blur fade" id="accept-changes-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <h3 class="modal-title">Accept selected changes</h3>
+            <div class="text-muted small">Commit only the selected files. Other dirty files remain untouched.</div>
+          </div>
+          <button type="button" class="btn-close" data-modal-close aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Selected files</label>
+            <div class="accept-file-list font-monospace small" id="accept-changes-files"></div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="accept-changes-message">Commit message</label>
+            <textarea class="form-control" id="accept-changes-message" rows="3" placeholder="Describe the accepted changes"></textarea>
+          </div>
+          <label class="form-check">
+            <input class="form-check-input" type="checkbox" id="accept-changes-validate" checked>
+            <span class="form-check-label">Run validation before commit</span>
+          </label>
+          <div class="alert alert-danger hidden mt-3 mb-0" id="accept-changes-error"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn" data-modal-close>Cancel</button>
+          <button type="button" class="btn btn-primary" id="accept-changes-confirm"><i class="ti ti-git-commit me-1"></i>Commit changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <div class="modal modal-blur fade" id="ports-edit-modal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable" role="document">
       <div class="modal-content">
