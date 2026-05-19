@@ -14,6 +14,7 @@ import (
 	"kube-env/internal/appinfo"
 	opsconfig "kube-env/internal/opsapp/config"
 	opsdiff "kube-env/internal/opsapp/diff"
+	opsgit "kube-env/internal/opsapp/git"
 	"kube-env/internal/opsapp/render"
 	"kube-env/internal/opsapp/state"
 	opsstatus "kube-env/internal/opsapp/status"
@@ -22,6 +23,7 @@ import (
 type cliOptions struct {
 	configPath  string
 	statePath   string
+	workDir     string
 	output      string
 	showVersion bool
 }
@@ -55,6 +57,7 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.PersistentFlags().BoolVar(&opts.showVersion, "version", false, "print version information as JSON")
 	root.PersistentFlags().StringVar(&opts.configPath, "config", os.Getenv("KUBE_OPS_CONFIG"), "kube-ops-app config file path")
 	root.PersistentFlags().StringVar(&opts.statePath, "state", os.Getenv("KUBE_OPS_STATE"), "optional local state JSON path for prototype applied status")
+	root.PersistentFlags().StringVar(&opts.workDir, "work-dir", os.Getenv("KUBE_OPS_WORK_DIR"), "Git checkout work directory for target revision resolution")
 	root.PersistentFlags().StringVarP(&opts.output, "output", "o", "text", "output format: text or json")
 	root.AddCommand(newEnvCommand(opts))
 	return root
@@ -76,6 +79,39 @@ func newEnvCommand(opts *cliOptions) *cobra.Command {
 			for _, env := range cfg.Environments {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\n", env.Name, env.EnvName, env.Namespace, env.TargetRevision)
 			}
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "resolve ENV",
+		Short: "Checkout an environment target revision and print resolved Git metadata",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig(opts)
+			if err != nil {
+				return err
+			}
+			env, ok := cfg.Environment(args[0])
+			if !ok {
+				return fmt.Errorf("environment %q not found", args[0])
+			}
+			repo := strings.TrimSpace(env.Repo)
+			if repo == "" {
+				repo = strings.TrimSpace(env.RootPath)
+			}
+			result, err := opsgit.Checkout(opsgit.CheckoutOptions{
+				Repo:     repo,
+				Revision: env.TargetRevision,
+				WorkDir:  opts.workDir,
+				Name:     env.Name,
+			})
+			if err != nil {
+				return err
+			}
+			if opts.output == "json" {
+				return printJSON(cmd, map[string]any{"environment": env.Name, "git": result})
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\n", env.Name, result.Revision, result.ResolvedCommit, result.WorktreePath)
 			return nil
 		},
 	})

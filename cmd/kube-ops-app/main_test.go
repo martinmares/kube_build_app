@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -125,6 +126,29 @@ containers:
 	}
 }
 
+func TestEnvResolveCommand(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	repo := writeGitRepo(t)
+	configPath := filepath.Join(root, "ops.yml")
+	workDir := filepath.Join(root, "work")
+	writeFile(t, configPath, `environments:
+  - name: test
+    namespace: ops-test
+    repo: `+filepath.ToSlash(repo)+`
+    root_path: .
+    target_revision: HEAD
+`)
+
+	out, err := executeCommand("--config", configPath, "--work-dir", workDir, "env", "resolve", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "test\tHEAD\t") || !strings.Contains(out, filepath.Join(workDir, "test")) {
+		t.Fatalf("resolve output = %q", out)
+	}
+}
+
 func executeCommand(args ...string) (string, error) {
 	cmd := newRootCommand(appinfo.For(appinfo.OpsAppName), &cliOptions{})
 	var out bytes.Buffer
@@ -133,6 +157,38 @@ func executeCommand(args ...string) (string, error) {
 	cmd.SetArgs(args)
 	err := cmd.Execute()
 	return out.String(), err
+}
+
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git executable not available")
+	}
+}
+
+func writeGitRepo(t *testing.T) string {
+	t.Helper()
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "test@example.invalid")
+	runGit(t, repo, "config", "user.name", "Test User")
+	writeFile(t, filepath.Join(repo, "README.md"), "hello\n")
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "initial")
+	return repo
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
+	}
 }
 
 func writeOpsFixture(t *testing.T) (string, string) {

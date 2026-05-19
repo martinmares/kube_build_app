@@ -1,6 +1,6 @@
 # kube-ops-app plan
 
-> Stav: **implementace zahájena**. Existuje první CLI/config/render-digest skeleton bez DB, Git checkoutu, cluster klienta a UI.
+> Stav: **implementace zahájena**. Existuje první CLI/config/render-digest/Git-resolve skeleton bez DB, cluster klienta a UI.
 
 `kube-ops-app` není klon ArgoCD. Cílem je doménový OpenShift/Kubernetes operations portal nad prostředími generovanými přes `kube-build-app`.
 
@@ -732,6 +732,7 @@ Hotové:
 - `cmd/kube-ops-app`
 - config loader pro server bootstrap config
 - `kube-ops-app env list`
+- `kube-ops-app env resolve ENV` pro checkout `target_revision` do pracovního adresáře a vypsání resolved commitu
 - `kube-ops-app env render-digest ENV`
 - `kube-ops-app env status ENV`
 - `kube-ops-app env mark-applied ENV` pro lokální prototyp applied stavu
@@ -739,11 +740,11 @@ Hotové:
 - stabilní SHA-256 digest nad vyrenderovanými soubory
 - file-backed prototype state přes `--state` / `KUBE_OPS_STATE`
 
-Poznámka: lokální JSON state a snapshot adresář jsou jen vývojová náhrada budoucí DB/object storage, aby šlo ověřit `Unknown` / `InSync` / `OutOfSync` status a diff bez PostgreSQL a clusteru.
+Poznámka: lokální JSON state, snapshot adresář a Git workdir jsou jen vývojová náhrada budoucí DB/object storage/persistent checkout managementu, aby šlo ověřit `Unknown` / `InSync` / `OutOfSync` status, diff a resolved commit bez PostgreSQL a clusteru.
 
 Ještě není hotové:
 
-- Git fetch/checkout target revision
+- napojení Git checkoutu na render/status/diff/sync flow
 - DB storage místo lokálního JSON state/snapshotu
 - sync runs / audit log
 - Kubernetes dynamic client
