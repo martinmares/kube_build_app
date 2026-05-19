@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -326,30 +326,100 @@ function renderEnvChanges() {
   const count = qs('#changes-count');
   if (!list || !state.env) return;
   const files = gitFilesForEnv(state.env);
+  const filePaths = new Set(files.map((file) => file.path));
+  state.changedSelected = new Set(Array.from(state.changedSelected).filter((path) => filePaths.has(path)));
+  state.changedExpanded = new Set(Array.from(state.changedExpanded).filter((path) => filePaths.has(path)));
   if (navItem) navItem.classList.toggle('hidden', files.length === 0);
   if (count) count.textContent = String(files.length);
-  list.innerHTML = files.length ? renderChangedFileGroups(files) : `<div class="list-group-item">${emptyState('ti-git-compare', 'No changed files', 'The selected environment matches the current Git working tree.')}</div>`;
+  list.innerHTML = files.length ? renderChangedFilesReview(files) : `<div class="list-group-item">${emptyState('ti-git-compare', 'No changed files', 'The selected environment matches the current Git working tree.')}</div>`;
   qsa('[data-dirty-path]').forEach((item) => item.addEventListener('click', (event) => {
     event.preventDefault();
     openDirtyPath(item.dataset.dirtyPath);
   }));
+  qsa('[data-changes-group]').forEach((item) => item.addEventListener('click', () => {
+    state.changedGroup = item.dataset.changesGroup || 'all';
+    renderEnvChanges();
+  }));
+  qsa('[data-changes-status]').forEach((item) => item.addEventListener('change', () => {
+    state.changedStatus = item.value || 'all';
+    renderEnvChanges();
+  }));
+  qsa('[data-changed-select]').forEach((item) => item.addEventListener('change', () => {
+    if (item.checked) state.changedSelected.add(item.dataset.changedSelect);
+    else state.changedSelected.delete(item.dataset.changedSelect);
+    syncChangedSelectionSummary();
+  }));
+  qsa('[data-changed-select-visible]').forEach((item) => item.addEventListener('click', () => selectVisibleChangedFiles(true)));
+  qsa('[data-changed-clear-selection]').forEach((item) => item.addEventListener('click', () => selectVisibleChangedFiles(false)));
+  qsa('[data-changed-expand-all]').forEach((item) => item.addEventListener('click', () => expandVisibleChangedDiffs()));
+  qsa('[data-changed-collapse-all]').forEach((item) => item.addEventListener('click', () => collapseVisibleChangedDiffs()));
+  qsa('[data-changed-toggle-diff]').forEach((item) => item.addEventListener('click', () => toggleChangedDiff(item.dataset.changedToggleDiff)));
   qsa('[data-restore-path]').forEach((item) => item.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
     restoreGitPath(item.dataset.restorePath, item.dataset.restoreCode);
   }));
+  syncChangedSelectionSummary();
+  state.changedExpanded.forEach((path) => loadChangedDiff(path));
 }
-function renderChangedFileGroups(files) {
+function renderChangedFilesReview(files) {
+  const groups = changedFileGroups(files);
+  const visible = filterChangedFiles(files);
+  const groupTabs = [{ label: 'All', key: 'all', icon: 'ti-list', count: files.length }, ...groups.map((group) => ({...group, count: group.items.length}))];
+  const statusCounts = changedStatusCounts(files);
+  return `
+    <div class="changed-review">
+      <div class="changed-toolbar">
+        <div class="changed-tabs" role="tablist">
+          ${groupTabs.map((tab) => `<button class="btn btn-sm ${state.changedGroup === tab.key ? 'btn-primary' : 'btn-outline-secondary'}" type="button" data-changes-group="${esc(tab.key)}"><i class="ti ${tab.icon} me-1"></i>${esc(tab.label)} <span class="badge ${state.changedGroup === tab.key ? 'bg-white text-primary' : 'bg-secondary-lt'} ms-1">${tab.count}</span></button>`).join('')}
+        </div>
+        <div class="changed-actions">
+          <select class="form-select form-select-sm changed-status-filter" data-changes-status>
+            ${[
+              ['all', `All statuses (${files.length})`],
+              ['changed', `Changed (${statusCounts.changed})`],
+              ['untracked', `Untracked (${statusCounts.untracked})`],
+              ['deleted', `Deleted (${statusCounts.deleted})`],
+            ].map(([value, label]) => `<option value="${value}" ${state.changedStatus === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+          </select>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-changed-select-visible><i class="ti ti-checks me-1"></i>Select visible</button>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-changed-clear-selection><i class="ti ti-x me-1"></i>Clear</button>
+          <button class="btn btn-sm btn-outline-primary" type="button" data-changed-expand-all><i class="ti ti-arrows-maximize me-1"></i>Expand all diffs</button>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-changed-collapse-all><i class="ti ti-arrows-minimize me-1"></i>Collapse all</button>
+        </div>
+      </div>
+      <div class="changed-summary">
+        <span data-changed-selection-summary>0 selected</span>
+        <span>${visible.length}/${files.length} visible</span>
+        <span class="text-muted">Review-only mode. Commit/accept flow will be added after this layout is verified.</span>
+      </div>
+      <div class="changed-file-list">
+        ${visible.length ? renderChangedFileGroups(visible) : emptyState('ti-filter-off', 'No matching changed files', 'Adjust group or status filters.')}
+      </div>
+    </div>`;
+}
+function changedFileGroups(files) {
   const groups = [
-    { label: 'Apps', icon: 'ti-apps', items: [] },
-    { label: 'Assets', icon: 'ti-folders', items: [] },
-    { label: 'Env files', icon: 'ti-file-settings', items: [] },
-    { label: 'Other', icon: 'ti-dots', items: [] },
+    { label: 'Apps', key: 'apps', icon: 'ti-apps', items: [] },
+    { label: 'Assets', key: 'assets', icon: 'ti-folders', items: [] },
+    { label: 'Env files', key: 'env', icon: 'ti-file-settings', items: [] },
+    { label: 'Other', key: 'other', icon: 'ti-dots', items: [] },
   ];
   for (const file of files) groups[changedFileGroupIndex(file.path)].items.push(file);
+  return groups;
+}
+function renderChangedFileGroups(files) {
+  const groups = changedFileGroups(files);
   return groups.filter((group) => group.items.length).map((group) => `
-    <div class="list-group-header"><i class="ti ${group.icon} me-2"></i>${esc(group.label)} · ${group.items.length}</div>
+    <div class="changed-group-header"><i class="ti ${group.icon} me-2"></i>${esc(group.label)} · ${group.items.length}</div>
     ${group.items.map(renderChangedFileRow).join('')}`).join('');
+}
+function filterChangedFiles(files) {
+  return files.filter((file) => {
+    if (state.changedGroup !== 'all' && changedFileGroupKey(file.path) !== state.changedGroup) return false;
+    if (state.changedStatus !== 'all' && changedStatusKey(file.code) !== state.changedStatus) return false;
+    return true;
+  });
 }
 function changedFileGroupIndex(path) {
   if (!state.env || !path.startsWith(`${state.env}/`)) return 3;
@@ -359,19 +429,100 @@ function changedFileGroupIndex(path) {
   if (rest.startsWith('env.')) return 2;
   return 3;
 }
+function changedFileGroupKey(path) {
+  return ['apps', 'assets', 'env', 'other'][changedFileGroupIndex(path)] || 'other';
+}
+function changedStatusKey(code) {
+  if (code === '??') return 'untracked';
+  if (String(code || '').includes('D')) return 'deleted';
+  return 'changed';
+}
+function changedStatusCounts(files) {
+  return files.reduce((counts, file) => {
+    counts[changedStatusKey(file.code)] += 1;
+    return counts;
+  }, {changed: 0, untracked: 0, deleted: 0});
+}
 function renderChangedFileRow(file) {
   const target = dirtyNavigationTarget(file.path);
   const restore = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-danger" type="button" data-restore-path="${esc(file.path)}" data-restore-code="${esc(file.code)}" title="Discard this change"><i class="ti ti-restore me-1"></i>Discard</button>`;
+  const expanded = state.changedExpanded.has(file.path);
+  const checked = state.changedSelected.has(file.path) ? 'checked' : '';
   return `
-    <div class="list-group-item d-flex align-items-center justify-content-between gap-3">
-      <a href="#" class="text-reset text-decoration-none flex-fill ${target ? '' : 'disabled'}" data-dirty-path="${esc(file.path)}">
-        <span class="font-monospace text-break">${esc(file.path)}</span>
-      </a>
-      <div class="d-flex align-items-center gap-2">
-        <span class="badge bg-yellow-lt">${esc(gitCodeLabel(file.code))}</span>
-        ${restore}
+    <div class="changed-file-card" data-changed-file="${esc(file.path)}">
+      <div class="changed-file-head">
+        <label class="form-check m-0 changed-file-check">
+          <input class="form-check-input" type="checkbox" data-changed-select="${esc(file.path)}" ${checked}>
+        </label>
+        <button class="btn btn-sm btn-ghost-secondary btn-icon changed-diff-toggle" type="button" data-changed-toggle-diff="${esc(file.path)}" title="${expanded ? 'Collapse diff' : 'Expand diff'}"><i class="ti ${expanded ? 'ti-chevron-down' : 'ti-chevron-right'}"></i></button>
+        <a href="#" class="text-reset text-decoration-none min-w-0 ${target ? '' : 'disabled'}" data-dirty-path="${esc(file.path)}">
+          <div class="font-monospace text-break fw-semibold">${esc(file.path)}</div>
+          <div class="text-muted small">${esc(changedFileGroupKey(file.path))} · ${esc(gitCodeLabel(file.code))}</div>
+        </a>
+        <div class="changed-file-actions">
+          <span class="badge ${changedStatusBadgeClass(file.code)}">${esc(gitCodeLabel(file.code))}</span>
+          ${restore}
+        </div>
       </div>
+      <div class="changed-diff ${expanded ? '' : 'hidden'}" data-changed-diff="${esc(file.path)}">${renderChangedDiffContent(file.path)}</div>
     </div>`;
+}
+function changedStatusBadgeClass(code) {
+  if (code === '??') return 'bg-cyan-lt';
+  if (String(code || '').includes('D')) return 'bg-red-lt';
+  return 'bg-yellow-lt';
+}
+function renderChangedDiffContent(path) {
+  const cached = state.changedDiffs.get(path);
+  if (cached?.loading) return `<div class="changed-diff-loading"><span class="spinner-border spinner-border-sm me-2"></span>Loading diff...</div>`;
+  if (cached?.error) return `<div class="alert alert-danger mb-0">${esc(cached.error)}</div>`;
+  if (cached?.content !== undefined) return `<pre class="code-block diff-block changed-diff-block">${renderDiff(cached.content || 'No textual diff available.')}</pre>`;
+  return `<div class="changed-diff-loading text-muted">Diff not loaded.</div>`;
+}
+function visibleChangedFiles() {
+  return filterChangedFiles(gitFilesForEnv(state.env));
+}
+function selectVisibleChangedFiles(selected) {
+  visibleChangedFiles().forEach((file) => {
+    if (selected) state.changedSelected.add(file.path);
+    else state.changedSelected.delete(file.path);
+  });
+  renderEnvChanges();
+}
+function syncChangedSelectionSummary() {
+  setText('[data-changed-selection-summary]', `${state.changedSelected.size} selected`);
+}
+async function toggleChangedDiff(path) {
+  if (!path) return;
+  if (state.changedExpanded.has(path)) state.changedExpanded.delete(path);
+  else state.changedExpanded.add(path);
+  renderEnvChanges();
+}
+async function expandVisibleChangedDiffs() {
+  visibleChangedFiles().forEach((file) => state.changedExpanded.add(file.path));
+  renderEnvChanges();
+}
+function collapseVisibleChangedDiffs() {
+  visibleChangedFiles().forEach((file) => state.changedExpanded.delete(file.path));
+  renderEnvChanges();
+}
+async function loadChangedDiff(path) {
+  if (!path || state.changedDiffs.has(path)) return;
+  state.changedDiffs.set(path, {loading: true});
+  const host = qs(`[data-changed-diff="${cssString(path)}"]`);
+  if (host) host.innerHTML = renderChangedDiffContent(path);
+  try {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    const diff = await api(`/api/v1/git/diff/${encoded}`);
+    state.changedDiffs.set(path, {content: diff.content || diff.error || 'No textual diff available.'});
+  } catch (e) {
+    state.changedDiffs.set(path, {error: String(e)});
+  }
+  const target = qs(`[data-changed-diff="${cssString(path)}"]`);
+  if (target) target.innerHTML = renderChangedDiffContent(path);
+}
+function cssString(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 function dirtyNavigationTarget(path) {
 	if (!state.env || !path.startsWith(`${state.env}/`)) return null;
@@ -1341,10 +1492,10 @@ function renderSpecialEntryRow(entry = {}) {
       <td><select class="form-select form-select-sm special-entry-type">${['string','number','bool','null','json'].map((type) => `<option value="${type}" ${entry.value_type === type ? 'selected' : ''}>${type}</option>`).join('')}</select></td>
       <td class="special-entry-actions-col">
         <div class="btn-list justify-content-end flex-nowrap">
-          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="add-above" title="Add entry above"><i class="ti ti-row-insert-top"></i></button>
-          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="add-below" title="Add entry below"><i class="ti ti-row-insert-bottom"></i></button>
-          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="duplicate-above" title="Duplicate above"><i class="ti ti-copy-plus"></i></button>
-          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="duplicate-below" title="Duplicate below"><i class="ti ti-copy-plus"></i></button>
+          <button class="btn btn-sm btn-ghost-secondary special-entry-action-btn" type="button" data-special-entry-action="add-above" title="Add empty entry above">Add ↑</button>
+          <button class="btn btn-sm btn-ghost-secondary special-entry-action-btn" type="button" data-special-entry-action="add-below" title="Add empty entry below">Add ↓</button>
+          <button class="btn btn-sm btn-ghost-secondary special-entry-action-btn" type="button" data-special-entry-action="duplicate-above" title="Duplicate this entry above">Copy ↑</button>
+          <button class="btn btn-sm btn-ghost-secondary special-entry-action-btn" type="button" data-special-entry-action="duplicate-below" title="Duplicate this entry below">Copy ↓</button>
           <button class="btn btn-sm btn-ghost-danger btn-icon special-entry-action-btn" type="button" data-special-entry-action="delete" title="Delete entry"><i class="ti ti-trash"></i></button>
         </div>
       </td>
