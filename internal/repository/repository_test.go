@@ -384,6 +384,22 @@ func TestUpdateAppVarsRejectsStaleContentHash(t *testing.T) {
 	}
 }
 
+func TestUpdateAppVarsRejectsInvalidNames(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"BAD-NAME", "1BAD", "BAD.NAME"} {
+		_, err := repo.UpdateAppVars("test", "api.yml", []VarItem{{Name: name, Value: "value"}}, "")
+		if err == nil || !contains(err.Error(), "invalid variable name") {
+			t.Fatalf("UpdateAppVars name %q error = %v, want invalid name", name, err)
+		}
+	}
+}
+
 func TestUpdateAppReplicasReplacesTopLevelReplicas(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\nreplicas: 1\ncontainers:\n  - name: api\n")
@@ -722,6 +738,22 @@ func TestUpdateAppContainerRuntimeWritesJavaRuntime(t *testing.T) {
 	}
 	if !contains(detail.Content, "  - name: api\n    runtime:\n      java:\n        xms: \"512m\"\n        xmx: \"1536m\"\n        opts:\n          - \"-XX:+UseG1GC\"\n          - \"-Dspring.profiles.active=prod\"\n        export:\n          env_name: APP_JAVA_OPTS\n    image: api:1") {
 		t.Fatalf("runtime block not inserted after container name:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppContainerRuntimeRejectsInvalidFields(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.UpdateAppContainerRuntime("test", "api.yml", 0, JavaRuntimeUpdate{Xms: "1000ABC"}, ""); err == nil || !contains(err.Error(), "xms") {
+		t.Fatalf("runtime xms error = %v, want xms validation", err)
+	}
+	if _, err := repo.UpdateAppContainerRuntime("test", "api.yml", 0, JavaRuntimeUpdate{ExportEnvName: "JAVA-OPTS"}, ""); err == nil || !contains(err.Error(), "export_env_name") {
+		t.Fatalf("runtime export_env_name error = %v, want export env validation", err)
 	}
 }
 
@@ -1073,6 +1105,24 @@ func TestUpdateSpecialEntriesUpdatesEnvUnsecuredJSON(t *testing.T) {
 	}
 	if !contains(detail.Content, `"A":"two"`) || !contains(detail.Content, `"COUNT":2`) || !contains(detail.Content, `"FLAG":true`) {
 		t.Fatalf("unexpected env.unsecured.json content:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateSpecialEntriesRejectsInvalidKeys(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "env.unsecured.json"), `{"environment":{}}`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := repo.SpecialEntries("test", "env.unsecured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = repo.UpdateSpecialEntries("test", "env.unsecured.json", []SpecialEntry{{Key: "BAD-NAME", ValueType: "string", ValueText: "value"}}, entries.ContentHash)
+	if err == nil || !contains(err.Error(), "invalid entry key") {
+		t.Fatalf("UpdateSpecialEntries error = %v, want invalid entry key", err)
 	}
 }
 

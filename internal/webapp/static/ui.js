@@ -882,6 +882,8 @@ async function saveAppVars() {
   if (!state.env || !state.appFile || state.readOnly) return;
   clearError();
   const body = qs('[data-app-vars-modal] tbody') || qs('#app-vars tbody');
+  const validation = validateNamedRows(body, '.app-var-name', 'Variable name');
+  if (!validation.ok) return showError(validation.message);
   const items = Array.from(body?.querySelectorAll('tr') || []).map((row) => ({
     name: row.querySelector('.app-var-name')?.value?.trim() || '',
     value: row.querySelector('.app-var-value')?.value || '',
@@ -1246,6 +1248,8 @@ async function saveContainerResources(index) {
 }
 const cpuQuantityRe = /^([0-9]+(\.[0-9]+)?|\.[0-9]+)m?$/;
 const memoryQuantityRe = /^([0-9]+(\.[0-9]+)?|\.[0-9]+)(Ki|Mi|Gi|Ti|Pi|Ei|K|M|G|T|P|E)?$/;
+const javaMemoryQuantityRe = /^[0-9]+[kKmMgGtT]?[bB]?$/;
+const variableNameRe = /^[A-Za-z_][A-Za-z0-9_]*$/;
 function validateResourcesForm(index) {
   clearInvalidInputs(`[data-resource-editor="${index}"]`);
   const checks = [
@@ -1264,10 +1268,26 @@ function validateResourcesForm(index) {
 function clearInvalidInputs(scopeSelector) {
   qsa(`${scopeSelector} .is-invalid`).forEach((input) => input.classList.remove('is-invalid'));
 }
+function clearInvalidInputsIn(scope) {
+  scope?.querySelectorAll?.('.is-invalid')?.forEach((input) => input.classList.remove('is-invalid'));
+}
 function invalidInput(input, message) {
   input?.classList.add('is-invalid');
   input?.focus();
   return {ok: false, message};
+}
+function validateNamedRows(scope, inputSelector, label) {
+  if (!scope) return {ok: true};
+  clearInvalidInputsIn(scope);
+  const seen = new Set();
+  for (const input of Array.from(scope.querySelectorAll(inputSelector))) {
+    const value = input.value.trim();
+    if (!value) continue;
+    if (!variableNameRe.test(value)) return invalidInput(input, `${label} must match [A-Za-z_][A-Za-z0-9_]*.`);
+    if (seen.has(value)) return invalidInput(input, `Duplicate ${label.toLowerCase()} "${value}".`);
+    seen.add(value);
+  }
+  return {ok: true};
 }
 async function saveContainerRuntime(index) {
   if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
@@ -1280,6 +1300,8 @@ async function saveContainerRuntime(index) {
     export_env_name: value('export-env-name'),
   };
   clearError();
+  const validation = validateRuntimeForm(index);
+  if (!validation.ok) return showError(validation.message);
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/runtime/java`, {runtime, expected_hash: state.appContentHash});
     state.editModalClose?.();
@@ -1288,6 +1310,18 @@ async function saveContainerRuntime(index) {
     await loadApps();
     await selectApp(state.appFile);
   } catch (e) { showError(e); }
+}
+function validateRuntimeForm(index) {
+  clearInvalidInputs(`[data-runtime-editor="${index}"]`);
+  for (const [field, label] of [['xms', 'Xms'], ['xmx', 'Xmx']]) {
+    const input = qs(`[data-runtime-field="${index}:${field}"]`);
+    const value = input?.value?.trim() || '';
+    if (value && !javaMemoryQuantityRe.test(value)) return invalidInput(input, `${label} must be a JVM memory quantity like 256m, 1g or 512M.`);
+  }
+  const exportInput = qs(`[data-runtime-field="${index}:export-env-name"]`);
+  const exportEnv = exportInput?.value?.trim() || '';
+  if (exportEnv && !variableNameRe.test(exportEnv)) return invalidInput(exportInput, 'Export env must match [A-Za-z_][A-Za-z0-9_]*.');
+  return {ok: true};
 }
 async function saveContainerProbes(index) {
   if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
@@ -1611,12 +1645,14 @@ function addDefaultsVarRow() {
 }
 async function saveDefaultsVars() {
   if (!state.env || state.readOnly) return;
+  clearError();
   const body = qs('[data-defaults-vars] tbody');
+  const validation = validateNamedRows(body, '.defaults-var-name', 'Variable name');
+  if (!validation.ok) return showError(validation.message);
   const items = Array.from(body?.querySelectorAll('tr') || []).map((row) => ({
     name: row.querySelector('.defaults-var-name')?.value?.trim() || '',
     value: row.querySelector('.defaults-var-value')?.value || '',
   })).filter((item) => item.name !== '');
-  clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults/vars`, {items, expected_hash: state.assetContentHash});
     state.editModalClose?.();
@@ -1681,6 +1717,11 @@ function addDefaultsEnvRow(groupEl) {
 }
 async function saveDefaultsContainerEnvs() {
   if (!state.env || state.readOnly) return;
+  clearError();
+  for (const groupEl of qsa('[data-defaults-env-group]')) {
+    const validation = validateNamedRows(groupEl, '.defaults-env-name', 'Environment variable name');
+    if (!validation.ok) return showError(validation.message);
+  }
   const groups = qsa('[data-defaults-env-group]').map((groupEl) => ({
     name: groupEl.querySelector('.defaults-env-group-name')?.value?.trim() || '',
     envs: Array.from(groupEl.querySelectorAll('tbody tr')).map((row) => ({
@@ -1688,7 +1729,6 @@ async function saveDefaultsContainerEnvs() {
       value: row.querySelector('.defaults-env-value')?.value || '',
     })).filter((item) => item.name !== ''),
   })).filter((group) => group.name !== '');
-  clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults/container-envs`, {groups, expected_hash: state.assetContentHash});
     state.editModalClose?.();
@@ -1829,12 +1869,14 @@ function applySpecialValueDialog() {
 }
 async function saveSpecialEntries() {
   if (!state.env || !state.assetPath || state.readOnly) return;
+  clearError();
+  const validation = validateSpecialEntriesForm();
+  if (!validation.ok) return showError(validation.message);
   const entries = qsa('[data-special-entry-row]').map((row) => ({
     key: row.querySelector('.special-entry-key')?.value?.trim() || '',
     value_type: row.querySelector('.special-entry-type')?.value || 'string',
     value_text: row.querySelector('.special-entry-value')?.value || '',
   })).filter((entry) => entry.key !== '');
-  clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/special/${encodeURIComponent(state.assetPath)}/entries`, {entries, expected_hash: state.assetContentHash});
     state.editModalClose?.();
@@ -1843,6 +1885,29 @@ async function saveSpecialEntries() {
     await loadAssets();
     await selectAsset(state.assetPath);
   } catch (e) { showError(e); }
+}
+function validateSpecialEntriesForm() {
+  const table = qs('[data-special-entries]');
+  clearInvalidInputsIn(table);
+  const keyValidation = validateNamedRows(table, '.special-entry-key', 'Entry key');
+  if (!keyValidation.ok) return keyValidation;
+  for (const row of qsa('[data-special-entry-row]')) {
+    const key = row.querySelector('.special-entry-key')?.value?.trim() || 'entry';
+    const type = row.querySelector('.special-entry-type')?.value || 'string';
+    const valueInput = row.querySelector('.special-entry-value-input');
+    const value = row.querySelector('.special-entry-value')?.value || '';
+    const trimmed = value.trim();
+    if (type === 'number' && (!trimmed || Number.isNaN(Number(trimmed)))) return invalidInput(valueInput, `Entry "${key}" number value is invalid.`);
+    if (type === 'bool' && !['true', 'false'].includes(trimmed.toLowerCase())) return invalidInput(valueInput, `Entry "${key}" bool value must be true or false.`);
+    if (type === 'json') {
+      try {
+        JSON.parse(value);
+      } catch (_) {
+        return invalidInput(valueInput, `Entry "${key}" JSON value is invalid.`);
+      }
+    }
+  }
+  return {ok: true};
 }
 function filterSpecialEntryRows(query) {
   const needle = String(query || '').trim().toLowerCase();
@@ -2134,11 +2199,13 @@ function addContainerEnvRow(index) {
 }
 async function saveContainerEnvs(index) {
   if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
+  clearError();
+  const validation = validateNamedRows(qs(`[data-container-env-body="${index}"]`), `[data-container-env-field="${index}:name"]`, 'Environment variable name');
+  if (!validation.ok) return showError(validation.message);
   const items = qsa(`[data-container-env-row="${index}"][data-env-editable="true"]`).map((row) => ({
     name: row.querySelector(`[data-container-env-field="${index}:name"]`)?.value?.trim() || '',
     value: row.querySelector(`[data-container-env-field="${index}:value"]`)?.value || '',
   })).filter((item) => item.name !== '');
-  clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/envs`, {items, expected_hash: state.appContentHash});
     state.editModalClose?.();

@@ -1240,7 +1240,7 @@ func encodeSpecialEntries(entries []SpecialEntry) ([]encodedSpecialEntry, error)
 		if key == "" {
 			return nil, errors.New("entry key is required")
 		}
-		if strings.ContainsAny(key, "\r\n") {
+		if !variableNamePattern.MatchString(key) {
 			return nil, fmt.Errorf("invalid entry key %q", key)
 		}
 		if seen[key] {
@@ -2285,6 +2285,8 @@ func validateResourceUpdate(resources ResourceUpdate) error {
 
 var cpuQuantityPattern = regexp.MustCompile(`^([0-9]+(\.[0-9]+)?|\.[0-9]+)m?$`)
 var memoryQuantityPattern = regexp.MustCompile(`^([0-9]+(\.[0-9]+)?|\.[0-9]+)(Ki|Mi|Gi|Ti|Pi|Ei|K|M|G|T|P|E)?$`)
+var javaMemoryQuantityPattern = regexp.MustCompile(`^[0-9]+[kKmMgGtT]?[bB]?$`)
+var variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func validateCPUQuantity(label string, value string) error {
 	value = strings.TrimSpace(value)
@@ -2304,6 +2306,17 @@ func validateMemoryQuantity(label string, value string) error {
 	}
 	if !memoryQuantityPattern.MatchString(value) {
 		return fmt.Errorf("%s must be a Kubernetes memory quantity like 256Mi, 1Gi or 512M", label)
+	}
+	return nil
+}
+
+func validateJavaMemoryQuantity(label string, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if !javaMemoryQuantityPattern.MatchString(value) {
+		return fmt.Errorf("%s must be a JVM memory quantity like 256m, 1g or 512M", label)
 	}
 	return nil
 }
@@ -2377,13 +2390,14 @@ func validateAutoscalingUpdate(autoscaling AutoscalingUpdate) error {
 }
 
 func validateJavaRuntimeUpdate(runtime JavaRuntimeUpdate) error {
-	for label, value := range map[string]string{
-		"xms":             runtime.Xms,
-		"xmx":             runtime.Xmx,
-		"export_env_name": runtime.ExportEnvName,
-	} {
+	for label, value := range map[string]string{"xms": runtime.Xms, "xmx": runtime.Xmx, "export_env_name": runtime.ExportEnvName} {
 		if strings.ContainsAny(value, "\r\n") {
 			return fmt.Errorf("%s contains unsupported newline", label)
+		}
+	}
+	for label, value := range map[string]string{"xms": runtime.Xms, "xmx": runtime.Xmx} {
+		if err := validateJavaMemoryQuantity(label, value); err != nil {
+			return err
 		}
 	}
 	for _, opt := range runtime.Opts {
@@ -2392,8 +2406,8 @@ func validateJavaRuntimeUpdate(runtime JavaRuntimeUpdate) error {
 		}
 	}
 	exportEnvName := strings.TrimSpace(runtime.ExportEnvName)
-	if strings.Contains(exportEnvName, ":") {
-		return errors.New("export_env_name contains unsupported colon")
+	if exportEnvName != "" && !variableNamePattern.MatchString(exportEnvName) {
+		return errors.New("export_env_name must be a valid environment variable name")
 	}
 	return nil
 }
@@ -2653,7 +2667,7 @@ func validateVarItems(items []VarItem) error {
 		if name == "" {
 			return errors.New("variable name is required")
 		}
-		if strings.ContainsAny(name, "\r\n:") {
+		if !variableNamePattern.MatchString(name) {
 			return fmt.Errorf("invalid variable name %q", name)
 		}
 		if seen[name] {
