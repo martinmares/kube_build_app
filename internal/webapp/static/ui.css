@@ -45,6 +45,8 @@
 .changed-diff-loading { padding: .75rem; border: 1px dashed color-mix(in srgb, var(--tblr-border-color) 74%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 70%, transparent); }
 .accept-file-list { max-height: 14rem; overflow: auto; padding: .65rem .75rem; border: 1px solid color-mix(in srgb, var(--tblr-border-color) 72%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 78%, transparent); }
 .accept-file-list div + div { margin-top: .25rem; }
+.accept-result-files { max-height: 8rem; overflow: auto; padding: .45rem .55rem; border-radius: 6px; background: color-mix(in srgb, var(--tblr-success) 8%, transparent); }
+.accept-result-files div + div { margin-top: .2rem; }
 .env-card { border: 1px solid color-mix(in srgb, var(--tblr-border-color) 72%, transparent); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
 .env-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--tblr-primary) 58%, var(--tblr-border-color)); box-shadow: 0 .5rem 1.1rem rgba(32, 107, 196, .18); }
 .code-block { max-height: 56vh; margin: 0; overflow: auto; padding: 1rem; border: 1px solid var(--tblr-border-color); border-radius: 8px; background: var(--tblr-bg-surface-secondary); color: var(--tblr-body-color); white-space: pre-wrap; word-break: break-word; font-size: .8125rem; }

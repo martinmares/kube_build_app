@@ -597,6 +597,7 @@ function openAcceptChangesModal() {
     error.textContent = '';
     error.classList.add('hidden');
   }
+  resetAcceptChangesResult();
   state.acceptChangesModalClose = openModalElement(qs('#accept-changes-modal'), message, () => {
     state.acceptChangesModalClose = null;
   });
@@ -632,14 +633,50 @@ async function acceptSelectedChanges() {
     state.changedSelected.clear();
     state.changedExpanded.clear();
     state.changedDiffs.clear();
-    state.acceptChangesModalClose?.();
-    state.acceptChangesModalClose = null;
+    renderAcceptChangesResult(result, message);
     await refreshCurrentView();
   } catch (e) {
     setAcceptChangesError(String(e));
   } finally {
-    if (confirm) confirm.disabled = false;
+    if (confirm && qs('#accept-changes-result')?.classList.contains('hidden')) confirm.disabled = false;
   }
+}
+function resetAcceptChangesResult() {
+  const result = qs('#accept-changes-result');
+  if (result) {
+    result.innerHTML = '';
+    result.classList.add('hidden');
+  }
+  const confirm = qs('#accept-changes-confirm');
+  if (confirm) {
+    confirm.disabled = false;
+    confirm.classList.remove('hidden');
+  }
+  const cancel = qs('#accept-changes-cancel');
+  if (cancel) cancel.textContent = 'Cancel';
+  qs('#accept-changes-message')?.removeAttribute('disabled');
+  qs('#accept-changes-validate')?.removeAttribute('disabled');
+}
+function renderAcceptChangesResult(result, message) {
+  const resultEl = qs('#accept-changes-result');
+  if (!resultEl) return;
+  const paths = result.paths || [];
+  resultEl.innerHTML = `
+    <div class="d-flex align-items-start gap-2">
+      <i class="ti ti-circle-check text-success mt-1"></i>
+      <div>
+        <div class="fw-semibold">Committed ${paths.length || 'selected'} file(s)</div>
+        <div class="small mt-1">Commit <span class="font-monospace">${esc(result.commit || 'unknown')}</span>${message ? ` · ${esc(message)}` : ''}</div>
+        <div class="accept-result-files font-monospace small mt-2">${paths.map((path) => `<div>${esc(path)}</div>`).join('')}</div>
+      </div>
+    </div>`;
+  resultEl.classList.remove('hidden');
+  const confirm = qs('#accept-changes-confirm');
+  if (confirm) confirm.classList.add('hidden');
+  const cancel = qs('#accept-changes-cancel');
+  if (cancel) cancel.textContent = 'Close';
+  qs('#accept-changes-message')?.setAttribute('disabled', 'disabled');
+  qs('#accept-changes-validate')?.setAttribute('disabled', 'disabled');
 }
 function setAcceptChangesError(message) {
   const error = qs('#accept-changes-error');
