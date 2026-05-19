@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"kube-env/internal/appinfo"
+	"kube-env/internal/opsapp/state"
 )
 
 func TestEnvListCommand(t *testing.T) {
@@ -149,6 +150,37 @@ func TestEnvResolveCommand(t *testing.T) {
 	}
 }
 
+func TestEnvMarkAppliedFromGitRecordsResolvedCommit(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	repo := writeEnvironmentGitRepo(t)
+	configPath := filepath.Join(root, "ops.yml")
+	statePath := filepath.Join(root, "state.json")
+	writeFile(t, configPath, `environments:
+  - name: test
+    namespace: ops-test
+    repo: `+filepath.ToSlash(repo)+`
+    root_path: envs
+    target_revision: HEAD
+`)
+
+	out, err := executeCommand("--config", configPath, "--state", statePath, "--work-dir", filepath.Join(root, "work"), "--from-git", "env", "mark-applied", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "test\tmarked applied\tsha256:") || !strings.Contains(out, "\tcommit=") {
+		t.Fatalf("mark-applied output = %q", out)
+	}
+	store := state.NewStore(statePath)
+	applied, ok, err := store.Environment("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || applied.AppliedRevision != "HEAD" || len(applied.AppliedCommit) != 40 || !strings.HasPrefix(applied.AppliedDigest, "sha256:") {
+		t.Fatalf("applied state = %#v", applied)
+	}
+}
+
 func executeCommand(args ...string) (string, error) {
 	cmd := newRootCommand(appinfo.For(appinfo.OpsAppName), &cliOptions{})
 	var out bytes.Buffer
@@ -177,6 +209,23 @@ func writeGitRepo(t *testing.T) string {
 	runGit(t, repo, "config", "user.name", "Test User")
 	writeFile(t, filepath.Join(repo, "README.md"), "hello\n")
 	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "initial")
+	return repo
+}
+
+func writeEnvironmentGitRepo(t *testing.T) string {
+	t.Helper()
+	repo := filepath.Join(t.TempDir(), "repo")
+	writeFile(t, filepath.Join(repo, "envs", "test", "env.unsecured.json"), `{"environment":{"NAMESPACE":"ops-test","TSM_REGISTRY_URL":"registry.local","TSM_RELEASE_ID":"1"}}`)
+	writeFile(t, filepath.Join(repo, "envs", "test", "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    image: "{{env:TSM_REGISTRY_URL}}/api:{{env:TSM_RELEASE_ID}}"
+`)
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "test@example.invalid")
+	runGit(t, repo, "config", "user.name", "Test User")
+	runGit(t, repo, "add", ".")
 	runGit(t, repo, "commit", "-m", "initial")
 	return repo
 }

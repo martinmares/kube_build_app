@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	opsdiff "kube-env/internal/opsapp/diff"
 	opsgit "kube-env/internal/opsapp/git"
 	"kube-env/internal/opsapp/render"
+	"kube-env/internal/opsapp/source"
 	"kube-env/internal/opsapp/state"
 	opsstatus "kube-env/internal/opsapp/status"
 )
@@ -25,6 +25,7 @@ type cliOptions struct {
 	statePath   string
 	workDir     string
 	output      string
+	fromGit     bool
 	showVersion bool
 }
 
@@ -59,6 +60,7 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.PersistentFlags().StringVar(&opts.statePath, "state", os.Getenv("KUBE_OPS_STATE"), "optional local state JSON path for prototype applied status")
 	root.PersistentFlags().StringVar(&opts.workDir, "work-dir", os.Getenv("KUBE_OPS_WORK_DIR"), "Git checkout work directory for target revision resolution")
 	root.PersistentFlags().StringVarP(&opts.output, "output", "o", "text", "output format: text or json")
+	root.PersistentFlags().BoolVar(&opts.fromGit, "from-git", false, "render/status/diff from checked out target revision instead of local root_path")
 	root.AddCommand(newEnvCommand(opts))
 	return root
 }
@@ -124,12 +126,20 @@ func newEnvCommand(opts *cliOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := render.RenderDigestByName(cfg, args[0])
+			env, err := preparedEnvironment(cfg, opts, args[0])
+			if err != nil {
+				return err
+			}
+			result, err := render.RenderDigest(env.Environment)
 			if err != nil {
 				return err
 			}
 			if opts.output == "json" {
 				return printJSON(cmd, result)
+			}
+			if result.ResolvedCommit != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\tcommit=%s\t%d files\t%d bytes\n", result.Environment, result.Digest, result.ResolvedCommit, result.Files, result.Bytes)
+				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%d files\t%d bytes\n", result.Environment, result.Digest, result.Files, result.Bytes)
 			return nil
@@ -144,14 +154,22 @@ func newEnvCommand(opts *cliOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := opsstatus.Compute(cfg, state.NewStore(opts.statePath), args[0])
+			env, err := preparedEnvironment(cfg, opts, args[0])
+			if err != nil {
+				return err
+			}
+			result, err := opsstatus.ComputeEnvironment(env.Environment, state.NewStore(opts.statePath))
 			if err != nil {
 				return err
 			}
 			if opts.output == "json" {
 				return printJSON(cmd, result)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\tdesired=%s\tapplied=%s\n", result.Environment, result.SyncStatus, result.DesiredDigest, emptyDash(result.AppliedDigest))
+			if result.ResolvedCommit != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\tdesired=%s\tapplied=%s\tcommit=%s\n", result.Environment, result.SyncStatus, result.DesiredDigest, emptyDash(result.AppliedDigest), result.ResolvedCommit)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\tdesired=%s\tapplied=%s\n", result.Environment, result.SyncStatus, result.DesiredDigest, emptyDash(result.AppliedDigest))
+			}
 			if result.Reason != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "reason\t%s\n", result.Reason)
 			}
@@ -170,28 +188,22 @@ func newEnvCommand(opts *cliOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			env, ok := cfg.Environment(args[0])
-			if !ok {
-				return fmt.Errorf("environment %q not found", args[0])
-			}
-			store := state.NewStore(opts.statePath)
-			snapshotPath, err := store.SnapshotDir(env.Name)
+			env, err := preparedEnvironment(cfg, opts, args[0])
 			if err != nil {
 				return err
 			}
-			if !filepath.IsAbs(env.RootPath) {
-				abs, err := filepath.Abs(env.RootPath)
-				if err != nil {
-					return err
-				}
-				env.RootPath = abs
+			store := state.NewStore(opts.statePath)
+			snapshotPath, err := store.SnapshotDir(env.Environment.Name)
+			if err != nil {
+				return err
 			}
-			result, err := render.RenderDigestTo(env, snapshotPath)
+			result, err := render.RenderDigestTo(env.Environment, snapshotPath)
 			if err != nil {
 				return err
 			}
 			if err := store.SaveEnvironment(result.Environment, state.EnvironmentState{
 				AppliedRevision: result.TargetRevision,
+				AppliedCommit:   result.ResolvedCommit,
 				AppliedDigest:   result.Digest,
 				SnapshotPath:    snapshotPath,
 				AppliedAt:       time.Now().UTC(),
@@ -200,7 +212,11 @@ func newEnvCommand(opts *cliOptions) *cobra.Command {
 				return err
 			}
 			if opts.output == "json" {
-				return printJSON(cmd, map[string]any{"environment": result.Environment, "applied_revision": result.TargetRevision, "applied_digest": result.Digest})
+				return printJSON(cmd, map[string]any{"environment": result.Environment, "applied_revision": result.TargetRevision, "applied_commit": result.ResolvedCommit, "applied_digest": result.Digest})
+			}
+			if result.ResolvedCommit != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\tmarked applied\t%s\tcommit=%s\n", result.Environment, result.Digest, result.ResolvedCommit)
+				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s\tmarked applied\t%s\n", result.Environment, result.Digest)
 			return nil
@@ -218,31 +234,24 @@ func newEnvCommand(opts *cliOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			env, ok := cfg.Environment(args[0])
-			if !ok {
-				return fmt.Errorf("environment %q not found", args[0])
+			env, err := preparedEnvironment(cfg, opts, args[0])
+			if err != nil {
+				return err
 			}
 			store := state.NewStore(opts.statePath)
-			applied, found, err := store.Environment(env.Name)
+			applied, found, err := store.Environment(env.Environment.Name)
 			if err != nil {
 				return err
 			}
 			if !found || applied.SnapshotPath == "" {
-				return fmt.Errorf("environment %q has no applied snapshot; run mark-applied first", env.Name)
+				return fmt.Errorf("environment %q has no applied snapshot; run mark-applied first", env.Environment.Name)
 			}
 			desiredDir, err := os.MkdirTemp("", "kube-ops-desired-*")
 			if err != nil {
 				return err
 			}
 			defer os.RemoveAll(desiredDir)
-			if !filepath.IsAbs(env.RootPath) {
-				abs, err := filepath.Abs(env.RootPath)
-				if err != nil {
-					return err
-				}
-				env.RootPath = abs
-			}
-			desired, err := render.RenderDigestTo(env, desiredDir)
+			desired, err := render.RenderDigestTo(env.Environment, desiredDir)
 			if err != nil {
 				return err
 			}
@@ -251,13 +260,13 @@ func newEnvCommand(opts *cliOptions) *cobra.Command {
 				return err
 			}
 			if opts.output == "json" {
-				return printJSON(cmd, map[string]any{"environment": env.Name, "applied_digest": applied.AppliedDigest, "desired_digest": desired.Digest, "diff": result})
+				return printJSON(cmd, map[string]any{"environment": env.Environment.Name, "applied_digest": applied.AppliedDigest, "desired_digest": desired.Digest, "diff": result})
 			}
 			if !result.Changed {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s\tNoDiff\t%s\n", env.Name, desired.Digest)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\tNoDiff\t%s\n", env.Environment.Name, desired.Digest)
 				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\tDiff\tapplied=%s\tdesired=%s\n", env.Name, applied.AppliedDigest, desired.Digest)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\tDiff\tapplied=%s\tdesired=%s\n", env.Environment.Name, applied.AppliedDigest, desired.Digest)
 			for _, file := range result.Files {
 				fmt.Fprintf(cmd.OutOrStdout(), "file\t%s\t%s\n", file.Status, file.Path)
 				for _, line := range file.Unified {
@@ -278,6 +287,14 @@ func loadConfig(opts *cliOptions) (opsconfig.Config, error) {
 		return opsconfig.Config{}, errors.New("--config is required or KUBE_OPS_CONFIG must be set")
 	}
 	return opsconfig.LoadFile(opts.configPath)
+}
+
+func preparedEnvironment(cfg opsconfig.Config, opts *cliOptions, name string) (source.Prepared, error) {
+	env, ok := cfg.Environment(name)
+	if !ok {
+		return source.Prepared{}, fmt.Errorf("environment %q not found", name)
+	}
+	return source.Prepare(env, source.Options{FromGit: opts.fromGit, WorkDir: opts.workDir})
 }
 
 func emptyDash(value string) string {

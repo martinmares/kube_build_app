@@ -15,6 +15,8 @@ kube-ops-app   = operations/sync runner prototype over rendered manifests
 `kube-edit-app` is the Go rewrite target for the Rust `kube-environments-ui` web application. See `docs/KUBE_EDIT_APP_PLAN.md`.
 `kube-ops-app` is the early operations portal/sync runner prototype. It starts with config loading, Git target revision resolution, render digest calculation, prototype desired/applied status, applied snapshot diffing and CLI inspection commands. See `docs/KUBE_OPS_APP_PLAN.md`.
 
+`kube-ops-app` commands use local `root_path` by default. Pass `--from-git --work-dir .tmp/kube-ops-work` to checkout `target_revision`, render from that checkout and record the resolved commit in applied state.
+
 ## kube-edit-app Workflow
 
 Start the web editor in safe read-only mode:

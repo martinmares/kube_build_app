@@ -19,6 +19,7 @@ type File struct {
 
 type EnvironmentState struct {
 	AppliedRevision string    `json:"applied_revision,omitempty"`
+	AppliedCommit   string    `json:"applied_commit,omitempty"`
 	AppliedDigest   string    `json:"applied_digest,omitempty"`
 	SnapshotPath    string    `json:"snapshot_path,omitempty"`
 	AppliedAt       time.Time `json:"applied_at,omitempty"`

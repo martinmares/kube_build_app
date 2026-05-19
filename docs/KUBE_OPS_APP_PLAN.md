@@ -737,6 +737,8 @@ Hotové:
 - `kube-ops-app env status ENV`
 - `kube-ops-app env mark-applied ENV` pro lokální prototyp applied stavu
 - `kube-ops-app env diff ENV` pro diff desired renderu proti uloženému applied snapshotu
+- `--from-git` režim pro render/status/diff/mark-applied z checkoutnutého `target_revision`
+- ukládání resolved commitu do applied state jako `applied_commit`
 - stabilní SHA-256 digest nad vyrenderovanými soubory
 - file-backed prototype state přes `--state` / `KUBE_OPS_STATE`
 
@@ -744,7 +746,7 @@ Poznámka: lokální JSON state, snapshot adresář a Git workdir jsou jen vývo
 
 Ještě není hotové:
 
-- napojení Git checkoutu na render/status/diff/sync flow
+- napojení Git checkoutu na budoucí sync flow
 - DB storage místo lokálního JSON state/snapshotu
 - sync runs / audit log
 - Kubernetes dynamic client

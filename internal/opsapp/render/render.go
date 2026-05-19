@@ -15,6 +15,7 @@ type DigestResult struct {
 	EnvName        string       `json:"env_name"`
 	Namespace      string       `json:"namespace,omitempty"`
 	TargetRevision string       `json:"target_revision,omitempty"`
+	ResolvedCommit string       `json:"resolved_commit,omitempty"`
 	Digest         string       `json:"digest"`
 	Files          int          `json:"files"`
 	Bytes          int64        `json:"bytes"`
@@ -61,6 +62,7 @@ func RenderDigestTo(env config.EnvironmentConfig, target string) (DigestResult, 
 		EnvName:        env.EnvName,
 		Namespace:      env.Namespace,
 		TargetRevision: env.TargetRevision,
+		ResolvedCommit: env.ResolvedCommit,
 		Digest:         d.Digest,
 		Files:          d.Files,
 		Bytes:          d.Bytes,

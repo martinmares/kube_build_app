@@ -18,7 +18,7 @@ func TestStoreLoadMissingReturnsEmpty(t *testing.T) {
 
 func TestStoreSaveAndLoadEnvironment(t *testing.T) {
 	store := NewStore(filepath.Join(t.TempDir(), "state.json"))
-	want := EnvironmentState{AppliedRevision: "abc123", AppliedDigest: "sha256:deadbeef", SnapshotPath: "/tmp/snapshots/test", AppliedBy: "test"}
+	want := EnvironmentState{AppliedRevision: "main", AppliedCommit: "abc123", AppliedDigest: "sha256:deadbeef", SnapshotPath: "/tmp/snapshots/test", AppliedBy: "test"}
 	if err := store.SaveEnvironment("test", want); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestStoreSaveAndLoadEnvironment(t *testing.T) {
 	if !ok {
 		t.Fatal("environment state not found")
 	}
-	if got.AppliedRevision != want.AppliedRevision || got.AppliedDigest != want.AppliedDigest || got.SnapshotPath != want.SnapshotPath || got.AppliedBy != want.AppliedBy {
+	if got.AppliedRevision != want.AppliedRevision || got.AppliedCommit != want.AppliedCommit || got.AppliedDigest != want.AppliedDigest || got.SnapshotPath != want.SnapshotPath || got.AppliedBy != want.AppliedBy {
 		t.Fatalf("state = %#v, want %#v", got, want)
 	}
 }

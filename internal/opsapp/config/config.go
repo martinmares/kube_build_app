@@ -44,6 +44,7 @@ type EnvironmentConfig struct {
 	RootPath       string `yaml:"root_path" json:"root_path"`
 	EnvName        string `yaml:"env_name" json:"env_name"`
 	TargetRevision string `yaml:"target_revision" json:"target_revision"`
+	ResolvedCommit string `yaml:"-" json:"resolved_commit,omitempty"`
 	AutoSync       bool   `yaml:"auto_sync" json:"auto_sync"`
 }
 

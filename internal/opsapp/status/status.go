@@ -19,8 +19,10 @@ type EnvironmentStatus struct {
 	EnvName         string                  `json:"env_name"`
 	Namespace       string                  `json:"namespace,omitempty"`
 	TargetRevision  string                  `json:"target_revision,omitempty"`
+	ResolvedCommit  string                  `json:"resolved_commit,omitempty"`
 	DesiredDigest   string                  `json:"desired_digest"`
 	AppliedRevision string                  `json:"applied_revision,omitempty"`
+	AppliedCommit   string                  `json:"applied_commit,omitempty"`
 	AppliedDigest   string                  `json:"applied_digest,omitempty"`
 	SyncStatus      string                  `json:"sync_status"`
 	Reason          string                  `json:"reason,omitempty"`
@@ -33,7 +35,11 @@ func Compute(cfg config.Config, store state.Store, name string) (EnvironmentStat
 	if !ok {
 		return EnvironmentStatus{}, fmt.Errorf("environment %q not found", name)
 	}
-	desired, err := render.RenderDigestByName(cfg, name)
+	return ComputeEnvironment(env, store)
+}
+
+func ComputeEnvironment(env config.EnvironmentConfig, store state.Store) (EnvironmentStatus, error) {
+	desired, err := render.RenderDigest(env)
 	if err != nil {
 		return EnvironmentStatus{}, err
 	}
@@ -46,6 +52,7 @@ func Compute(cfg config.Config, store state.Store, name string) (EnvironmentStat
 		EnvName:        env.EnvName,
 		Namespace:      env.Namespace,
 		TargetRevision: env.TargetRevision,
+		ResolvedCommit: env.ResolvedCommit,
 		DesiredDigest:  desired.Digest,
 		SyncStatus:     SyncUnknown,
 		Reason:         "no applied state recorded",
@@ -55,6 +62,7 @@ func Compute(cfg config.Config, store state.Store, name string) (EnvironmentStat
 		return result, nil
 	}
 	result.AppliedRevision = applied.AppliedRevision
+	result.AppliedCommit = applied.AppliedCommit
 	result.AppliedDigest = applied.AppliedDigest
 	result.AppliedState = &applied
 	if applied.AppliedDigest == desired.Digest {
