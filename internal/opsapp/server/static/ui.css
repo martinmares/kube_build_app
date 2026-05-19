@@ -1,0 +1,138 @@
+:root {
+  --ops-border: #2f4057;
+  --ops-muted: #8b98ac;
+}
+
+body {
+  background: #101722;
+}
+
+.hidden { display: none !important; }
+
+.navbar, .card {
+  border-color: var(--ops-border);
+}
+
+.nav-item.disabled .nav-link {
+  opacity: .45;
+  pointer-events: none;
+}
+
+.env-list-card .list-group {
+  max-height: calc(100vh - 17rem);
+  overflow: auto;
+}
+
+.env-item {
+  cursor: pointer;
+  text-align: left;
+  border-left: 0;
+  border-right: 0;
+}
+
+.env-item.active {
+  background: rgba(32, 107, 196, .16);
+}
+
+.env-name {
+  font-weight: 700;
+}
+
+.env-meta {
+  color: var(--ops-muted);
+  font-size: .78rem;
+}
+
+.summary-tile {
+  height: 100%;
+}
+
+.summary-label {
+  color: var(--ops-muted);
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.summary-value {
+  margin-top: .25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.status-panel {
+  height: 100%;
+  min-height: 11rem;
+  border: 1px solid var(--ops-border);
+  border-radius: .75rem;
+  padding: 1rem;
+  background: rgba(18, 27, 40, .7);
+}
+
+.status-label {
+  color: var(--ops-muted);
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.status-value {
+  margin-top: .35rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.status-reason {
+  margin-top: .5rem;
+  color: var(--ops-muted);
+}
+
+.status-panel.status-insync {
+  border-color: rgba(47, 179, 68, .45);
+  background: rgba(47, 179, 68, .08);
+}
+
+.status-panel.status-outofsync {
+  border-color: rgba(214, 57, 57, .45);
+  background: rgba(214, 57, 57, .08);
+}
+
+.status-panel.status-unknown {
+  border-color: rgba(245, 159, 0, .45);
+  background: rgba(245, 159, 0, .08);
+}
+
+.release-table-wrap {
+  border: 1px solid var(--ops-border);
+  border-radius: .75rem;
+  overflow: hidden;
+}
+
+.release-table th {
+  width: 12rem;
+  color: var(--ops-muted);
+  font-weight: 500;
+}
+
+.release-table td {
+  overflow-wrap: anywhere;
+}
+
+.code-block {
+  min-height: 24rem;
+  max-height: 42rem;
+  overflow: auto;
+  white-space: pre;
+  border: 1px solid var(--ops-border);
+  background: #080d15;
+  color: #dce4f2;
+  border-radius: .5rem;
+  padding: 1rem;
+  font-size: .82rem;
+}
+
+@media (max-width: 1200px) {
+  .env-list-card .list-group {
+    max-height: 22rem;
+  }
+}

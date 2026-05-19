@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.AppName}}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.30.0/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/ui.css">
+</head>
+<body>
+  <div class="page">
+    <header class="navbar navbar-expand-md navbar-dark d-print-none">
+      <div class="container-xl">
+        <h1 class="navbar-brand navbar-brand-autodark pe-0 pe-md-3">
+          <a href="/"><i class="ti ti-control-pause me-2"></i>{{.AppName}}</a>
+        </h1>
+        <div class="navbar-nav flex-row order-md-last align-items-center gap-2">
+          <span class="badge bg-blue-lt" id="from-git-badge">local source</span>
+          <span class="badge bg-secondary-lt font-monospace" id="version-badge">-</span>
+          <button class="btn btn-outline-secondary btn-icon" id="refresh-btn" type="button" title="Refresh"><i class="ti ti-refresh"></i></button>
+        </div>
+      </div>
+    </header>
+
+    <header class="navbar-expand-md">
+      <div class="navbar">
+        <div class="container-xl">
+          <ul class="navbar-nav">
+            <li class="nav-item active"><a class="nav-link active" href="#"><span class="nav-link-icon"><i class="ti ti-dashboard"></i></span><span class="nav-link-title">Environments</span></a></li>
+            <li class="nav-item disabled"><a class="nav-link" href="#"><span class="nav-link-icon"><i class="ti ti-history"></i></span><span class="nav-link-title">Sync runs</span></a></li>
+            <li class="nav-item disabled"><a class="nav-link" href="#"><span class="nav-link-icon"><i class="ti ti-server"></i></span><span class="nav-link-title">Cluster</span></a></li>
+          </ul>
+        </div>
+      </div>
+    </header>
+
+    <div class="page-wrapper">
+      <div class="page-header d-print-none">
+        <div class="container-xl">
+          <div class="row g-2 align-items-center">
+            <div class="col">
+              <div class="page-pretitle">Operations preview</div>
+              <h2 class="page-title" id="detail-title">Select environment</h2>
+              <div class="text-muted small font-monospace text-break" id="detail-subtitle">-</div>
+            </div>
+            <div class="col-auto ms-auto d-print-none">
+              <div class="btn-list">
+                <button class="btn btn-outline-secondary" id="resolve-btn" type="button"><i class="ti ti-git-branch me-2"></i>Resolve</button>
+                <button class="btn btn-primary" id="status-btn" type="button"><i class="ti ti-heartbeat me-2"></i>Status</button>
+                <button class="btn btn-outline-secondary" id="diff-btn" type="button"><i class="ti ti-diff me-2"></i>Diff</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="container-xl"><div class="alert alert-danger hidden mb-0" id="ui-error"></div></div>
+
+      <div class="page-body">
+        <div class="container-xl">
+          <div class="row g-3">
+            <div class="col-12 col-xl-3">
+              <div class="card env-list-card">
+                <div class="card-header">
+                  <div class="w-100">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                      <h3 class="card-title mb-0"><i class="ti ti-stack-2 me-2"></i>Environments</h3>
+                      <span class="badge bg-secondary-lt" id="env-count">0</span>
+                    </div>
+                    <div class="input-icon">
+                      <span class="input-icon-addon"><i class="ti ti-search"></i></span>
+                      <input class="form-control" id="env-filter" placeholder="Filter environments...">
+                    </div>
+                  </div>
+                </div>
+                <div class="list-group list-group-flush" id="env-list"></div>
+              </div>
+            </div>
+
+            <div class="col-12 col-xl-9">
+              <div class="row g-3 mb-3" id="summary-cards"></div>
+
+              <div class="card mb-3">
+                <div class="card-header">
+                  <div>
+                    <h3 class="card-title">Release state</h3>
+                    <div class="text-muted small">Target revision, resolved commit, rendered manifest digest and applied snapshot state.</div>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="row g-3 align-items-stretch">
+                    <div class="col-12 col-lg-4">
+                      <div class="status-panel" id="status-panel">
+                        <div class="status-label">Sync status</div>
+                        <div class="status-value" id="status-title">Not loaded</div>
+                        <div class="status-reason" id="status-reason">Load status to compare desired render with the applied snapshot.</div>
+                      </div>
+                    </div>
+                    <div class="col-12 col-lg-8">
+                      <div class="release-table-wrap">
+                        <table class="table table-vcenter mb-0 release-table">
+                          <tbody>
+                            <tr><th>Target revision</th><td class="font-monospace" id="target-revision">-</td></tr>
+                            <tr><th>Resolved commit</th><td class="font-monospace" id="resolved-commit">-</td></tr>
+                            <tr><th>Manifest digest</th><td class="font-monospace" id="desired-digest">-</td></tr>
+                            <tr><th>Applied revision</th><td class="font-monospace" id="applied-revision">-</td></tr>
+                            <tr><th>Applied digest</th><td class="font-monospace" id="applied-digest">-</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="row g-3">
+                <div class="col-12 col-lg-6">
+                  <div class="card h-100">
+                    <div class="card-header"><div><h3 class="card-title">Telemetry packet</h3><div class="text-muted small">Raw API response for the selected operation.</div></div></div>
+                    <div class="card-body"><pre class="code-block" id="metadata-output">No data loaded.</pre></div>
+                  </div>
+                </div>
+                <div class="col-12 col-lg-6">
+                  <div class="card h-100">
+                    <div class="card-header"><div><h3 class="card-title">Drift diff</h3><div class="text-muted small">Desired render compared with the last applied snapshot.</div></div></div>
+                    <div class="card-body"><pre class="code-block diff-block" id="diff-output">No diff loaded.</pre></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/static/ui.js"></script>
+</body>
+</html>

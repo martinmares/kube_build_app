@@ -15,6 +15,7 @@ import (
 	opsdiff "kube-env/internal/opsapp/diff"
 	opsgit "kube-env/internal/opsapp/git"
 	"kube-env/internal/opsapp/render"
+	opsserver "kube-env/internal/opsapp/server"
 	"kube-env/internal/opsapp/source"
 	"kube-env/internal/opsapp/state"
 	opsstatus "kube-env/internal/opsapp/status"
@@ -62,7 +63,35 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.PersistentFlags().StringVarP(&opts.output, "output", "o", "text", "output format: text or json")
 	root.PersistentFlags().BoolVar(&opts.fromGit, "from-git", false, "render/status/diff from checked out target revision instead of local root_path")
 	root.AddCommand(newEnvCommand(opts))
+	root.AddCommand(newServerCommand(info, opts))
 	return root
+}
+
+func newServerCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
+	var listen string
+	cmd := &cobra.Command{
+		Use:   "server",
+		Short: "Start read-only kube-ops-app web UI",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig(opts)
+			if err != nil {
+				return err
+			}
+			addr := strings.TrimSpace(listen)
+			if addr == "" {
+				addr = cfg.Server.HTTP.Listen
+			}
+			return opsserver.New(opsserver.Options{
+				Info:      info,
+				Config:    cfg,
+				StatePath: opts.statePath,
+				WorkDir:   opts.workDir,
+				FromGit:   opts.fromGit,
+			}).ListenAndServe(addr)
+		},
+	}
+	cmd.Flags().StringVar(&listen, "listen", "", "HTTP listen address; defaults to config server.http.listen")
+	return cmd
 }
 
 func newEnvCommand(opts *cliOptions) *cobra.Command {

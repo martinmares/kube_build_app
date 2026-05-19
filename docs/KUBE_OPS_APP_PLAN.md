@@ -737,6 +737,7 @@ Hotové:
 - `kube-ops-app env status ENV`
 - `kube-ops-app env mark-applied ENV` pro lokální prototyp applied stavu
 - `kube-ops-app env diff ENV` pro diff desired renderu proti uloženému applied snapshotu
+- `kube-ops-app server` s prvním read-only web UI
 - `--from-git` režim pro render/status/diff/mark-applied z checkoutnutého `target_revision`
 - ukládání resolved commitu do applied state jako `applied_commit`
 - stabilní SHA-256 digest nad vyrenderovanými soubory
@@ -752,7 +753,7 @@ Ještě není hotové:
 - Kubernetes dynamic client
 - server-side apply
 - runtime status
-- web UI
+- produkční web UI workflow nad sync/apply/auditem
 
 ---
 

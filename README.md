@@ -17,6 +17,12 @@ kube-ops-app   = operations/sync runner prototype over rendered manifests
 
 `kube-ops-app` commands use local `root_path` by default. Pass `--from-git --work-dir .tmp/kube-ops-work` to checkout `target_revision`, render from that checkout and record the resolved commit in applied state.
 
+Start the early read-only operations UI:
+
+```bash
+kube-ops-app --config ./ops.yml --state .tmp/kube-ops-state/state.json --work-dir .tmp/kube-ops-work --from-git server
+```
+
 ## kube-edit-app Workflow
 
 Start the web editor in safe read-only mode:
