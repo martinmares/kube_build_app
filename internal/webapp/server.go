@@ -989,6 +989,15 @@ func specialEntriesFromContent(env string, specialFile string, contentHash strin
 	if specialFile == "assets.secured.json" || specialFile == "assets.unsecured.json" {
 		rootKey = "assets"
 	}
+	out := repository.SpecialEntries{Env: env, SpecialFile: specialFile, ContentHash: contentHash, Editable: editable, IsDirty: isDirty}
+	if rootKey == "environment" {
+		entries, err := environmentEntriesFromContent(content)
+		if err != nil {
+			return repository.SpecialEntries{}, err
+		}
+		out.Entries = entries
+		return out, nil
+	}
 	var root map[string]any
 	if err := json.Unmarshal([]byte(content), &root); err != nil {
 		return repository.SpecialEntries{}, err
@@ -997,7 +1006,6 @@ func specialEntriesFromContent(env string, specialFile string, contentHash strin
 	if !ok {
 		return repository.SpecialEntries{}, fmt.Errorf("missing object at .%s", rootKey)
 	}
-	out := repository.SpecialEntries{Env: env, SpecialFile: specialFile, ContentHash: contentHash, Editable: editable, IsDirty: isDirty}
 	keys := make([]string, 0, len(rawSection))
 	for key := range rawSection {
 		keys = append(keys, key)
@@ -1007,6 +1015,62 @@ func specialEntriesFromContent(env string, specialFile string, contentHash strin
 		out.Entries = append(out.Entries, specialEntryFromValue(key, rawSection[key], rootKey))
 	}
 	return out, nil
+}
+
+func environmentEntriesFromContent(content string) ([]repository.SpecialEntry, error) {
+	decoder := json.NewDecoder(strings.NewReader(content))
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if delim, ok := token.(json.Delim); !ok || delim != '{' {
+		return nil, errors.New("expected JSON object")
+	}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return nil, errors.New("expected JSON object key")
+		}
+		if key != "environment" {
+			var ignored any
+			if err := decoder.Decode(&ignored); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		token, err = decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		if delim, ok := token.(json.Delim); !ok || delim != '{' {
+			return nil, errors.New("missing object at .environment")
+		}
+		var entries []repository.SpecialEntry
+		for decoder.More() {
+			token, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			entryKey, ok := token.(string)
+			if !ok {
+				return nil, errors.New("expected environment key")
+			}
+			var value any
+			if err := decoder.Decode(&value); err != nil {
+				return nil, err
+			}
+			entries = append(entries, specialEntryFromValue(entryKey, value, "environment"))
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return entries, nil
+	}
+	return nil, errors.New("missing object at .environment")
 }
 
 func specialEntryFromValue(key string, value any, rootKey string) repository.SpecialEntry {

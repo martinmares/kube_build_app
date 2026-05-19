@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1221,13 +1222,23 @@ func encodeSpecialEntries(entries []SpecialEntry) ([]encodedSpecialEntry, error)
 		if err != nil {
 			return nil, err
 		}
-		valueBytes, err := json.Marshal(value)
+		valueBytes, err := marshalJSONValue(value)
 		if err != nil {
 			return nil, err
 		}
 		encoded = append(encoded, encodedSpecialEntry{key: key, valueJSON: string(valueBytes)})
 	}
 	return encoded, nil
+}
+
+func marshalJSONValue(value any) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 func findJSONObjectMember(content string, objectStart int, key string) (jsonObjectMember, error) {

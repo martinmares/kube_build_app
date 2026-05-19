@@ -1096,3 +1096,71 @@ func TestUpdateSpecialEntriesAppendsAndDeletesEnvUnsecuredJSONWithoutReordering(
 		t.Fatalf("content changed unexpectedly:\n%s", string(gotBytes))
 	}
 }
+
+func TestPatchEnvSecuredJSONKeepsExistingOrderForFutureEncryptedWrite(t *testing.T) {
+	content := `{
+  "_public_key": "keep",
+  "environment": {
+    "SECRET_B": "EncJson[@api=2.0:@box=<b>]",
+    "SECRET_A": "EncJson[@api=2.0:@box=<a>]",
+    "SECRET_COUNT": "EncJson[@api=2.0:@box=<count>]"
+  },
+  "other": true
+}
+`
+
+	got, err := replaceSpecialEntries(content, "environment", []SpecialEntry{
+		{Key: "SECRET_B", ValueType: "string", ValueText: "EncJson[@api=2.0:@box=<b>]"},
+		{Key: "SECRET_A", ValueType: "string", ValueText: "EncJson[@api=2.0:@box=<changed>]"},
+		{Key: "SECRET_COUNT", ValueType: "string", ValueText: "EncJson[@api=2.0:@box=<count>]"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{
+  "_public_key": "keep",
+  "environment": {
+    "SECRET_B": "EncJson[@api=2.0:@box=<b>]",
+    "SECRET_A": "EncJson[@api=2.0:@box=<changed>]",
+    "SECRET_COUNT": "EncJson[@api=2.0:@box=<count>]"
+  },
+  "other": true
+}
+`
+	if got != want {
+		t.Fatalf("content changed unexpectedly:\n%s", got)
+	}
+}
+
+func TestPatchEnvSecuredJSONAppendsAndDeletesForFutureEncryptedWrite(t *testing.T) {
+	content := `{
+  "environment": {
+    "SECRET_B": "EncJson[@api=2.0:@box=<b>]",
+    "SECRET_A": "EncJson[@api=2.0:@box=<a>]",
+    "SECRET_COUNT": "EncJson[@api=2.0:@box=<count>]"
+  },
+  "other": true
+}
+`
+
+	got, err := replaceSpecialEntries(content, "environment", []SpecialEntry{
+		{Key: "SECRET_B", ValueType: "string", ValueText: "EncJson[@api=2.0:@box=<b>]"},
+		{Key: "SECRET_COUNT", ValueType: "string", ValueText: "EncJson[@api=2.0:@box=<count>]"},
+		{Key: "SECRET_NEW", ValueType: "string", ValueText: "EncJson[@api=2.0:@box=<new>]"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{
+  "environment": {
+    "SECRET_B": "EncJson[@api=2.0:@box=<b>]",
+    "SECRET_COUNT": "EncJson[@api=2.0:@box=<count>]",
+    "SECRET_NEW": "EncJson[@api=2.0:@box=<new>]"
+  },
+  "other": true
+}
+`
+	if got != want {
+		t.Fatalf("content changed unexpectedly:\n%s", got)
+	}
+}

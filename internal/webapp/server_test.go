@@ -734,6 +734,42 @@ func TestSecuredSpecialPreflightAndDecryptedEntries(t *testing.T) {
 	}
 }
 
+func TestSecuredSpecialDecryptedEntriesPreserveEnvironmentOrder(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "env.secured.json"), `{
+  "environment": {
+    "SECRET_B": "EncJson[@api=2.0:@box=<b>]",
+    "SECRET_A": "EncJson[@api=2.0:@box=<a>]",
+    "SECRET_COUNT": "EncJson[@api=2.0:@box=<count>]"
+  }
+}
+`)
+	fakeEncjson := filepath.Join(root, "fake-encjson")
+	writeFile(t, fakeEncjson, "#!/bin/sh\ncat <<'JSON'\n{\"environment\":{\"SECRET_B\":\"plain-b\",\"SECRET_A\":\"plain-a\",\"SECRET_COUNT\":2}}\nJSON\n")
+	if err := os.Chmod(fakeEncjson, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{EncjsonPath: fakeEncjson})
+
+	entriesReq := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/assets/special/env.secured.json/decrypted-entries", nil)
+	entriesRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(entriesRes, entriesReq)
+	if entriesRes.Code != http.StatusOK {
+		t.Fatalf("decrypted entries status = %d, want 200: %s", entriesRes.Code, entriesRes.Body.String())
+	}
+	body := entriesRes.Body.String()
+	bIdx := strings.Index(body, `"key":"SECRET_B"`)
+	aIdx := strings.Index(body, `"key":"SECRET_A"`)
+	countIdx := strings.Index(body, `"key":"SECRET_COUNT"`)
+	if bIdx < 0 || aIdx < 0 || countIdx < 0 || !(bIdx < aIdx && aIdx < countIdx) {
+		t.Fatalf("decrypted entries order not preserved:\n%s", body)
+	}
+}
+
 func writeBuildFixture(t *testing.T, root string) {
 	t.Helper()
 	envDir := filepath.Join(root, "test")
