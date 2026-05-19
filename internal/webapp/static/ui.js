@@ -35,6 +35,7 @@ async function copyTextToClipboard(text) {
 }
 function openModalElement(modalEl, focusEl, onClosed = null) {
   if (!modalEl) return () => {};
+  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop fade show';
   const openDepth = qsa('.modal.show').length;
@@ -43,25 +44,32 @@ function openModalElement(modalEl, focusEl, onClosed = null) {
   backdrop.style.zIndex = String(backdropZIndex);
   modalEl.style.zIndex = String(modalZIndex);
   const closeButtons = Array.from(modalEl.querySelectorAll('[data-modal-close], [data-bs-dismiss="modal"], .btn-close'));
+  let closed = false;
   const close = () => {
+    if (closed) return;
+    closed = true;
     modalEl.classList.remove('show');
     modalEl.style.display = 'none';
     modalEl.style.removeProperty('z-index');
     modalEl.setAttribute('aria-hidden', 'true');
-    backdrop.remove();
     if (!qs('.modal.show')) {
       document.body.classList.remove('modal-open');
       document.body.style.removeProperty('overflow');
     }
-    backdrop.removeEventListener('click', close);
+    backdrop.removeEventListener('click', onBackdropClick);
     document.removeEventListener('keydown', onKeydown);
     closeButtons.forEach((button) => button.removeEventListener('click', close));
+    backdrop.remove();
     onClosed?.();
+    if (previouslyFocused?.isConnected) previouslyFocused.focus();
   };
   const onKeydown = (e) => {
     if (e.key === 'Escape' && isTopModal(modalEl)) close();
   };
-  backdrop.addEventListener('click', close);
+  const onBackdropClick = () => {
+    if (isTopModal(modalEl)) close();
+  };
+  backdrop.addEventListener('click', onBackdropClick);
   document.addEventListener('keydown', onKeydown);
   closeButtons.forEach((button) => button.addEventListener('click', close));
   document.body.appendChild(backdrop);
@@ -86,7 +94,7 @@ function confirmAction({title, body, subject = '', confirmLabel = 'Confirm', con
   setText('#confirm-modal-subject', subject);
   qs('#confirm-modal-subject')?.classList.toggle('hidden', !subject);
   const iconEl = qs('#confirm-modal-icon');
-  if (iconEl) iconEl.className = `ti ${icon} icon mb-2 text-warning icon-lg`;
+  if (iconEl) iconEl.className = `ti ${icon} icon mb-2 ${modalToneClass(confirmClass)} icon-lg`;
   const statusEl = modalEl.querySelector('.modal-status');
   if (statusEl) statusEl.className = `modal-status ${statusClass}`;
   const confirm = qs('#confirm-modal-confirm');
@@ -110,6 +118,36 @@ function confirmAction({title, body, subject = '', confirmLabel = 'Confirm', con
     };
     confirm?.addEventListener('click', onConfirm);
     closeModal = openModalElement(modalEl, confirm, finish);
+  });
+}
+function modalToneClass(buttonClass) {
+  if (String(buttonClass || '').includes('danger')) return 'text-danger';
+  if (String(buttonClass || '').includes('primary')) return 'text-primary';
+  if (String(buttonClass || '').includes('success')) return 'text-success';
+  return 'text-warning';
+}
+function openContentModal({
+  modal,
+  titleSelector,
+  subtitleSelector,
+  bodySelector,
+  title,
+  subtitle = '',
+  body,
+  focusSelector = 'button, input, textarea, select',
+  wide = false,
+  onClosed = null,
+} = {}) {
+  if (!modal || body === undefined || body === null) return () => {};
+  setText(titleSelector, title || '');
+  setText(subtitleSelector, subtitle || '');
+  const subtitleEl = qs(subtitleSelector);
+  subtitleEl?.classList.toggle('hidden', !subtitle);
+  setHTML(bodySelector, body);
+  modal.classList.toggle('modal-wide', !!wide);
+  return openModalElement(modal, modal.querySelector(focusSelector), () => {
+    modal.classList.remove('modal-wide');
+    onClosed?.();
   });
 }
 function emptyState(icon, title, text = '') {
@@ -1359,10 +1397,18 @@ function openPortsEditorModal(index) {
   if (state.readOnly || !state.model || !Number.isInteger(index)) return;
   const container = (state.model.containers || []).find((item) => item.index === index);
   if (!container) return;
-  setText('#ports-edit-modal-title', `Edit ports: ${container.name || `container-${index + 1}`}`);
-  setHTML('#ports-edit-modal-body', renderPortsEditor(index, container.ports || []));
   const modal = qs('#ports-edit-modal');
-  state.portsModalClose = openModalElement(modal, modal?.querySelector('[data-add-port], [data-save-ports]'));
+  state.portsModalClose = openContentModal({
+    modal,
+    titleSelector: '#ports-edit-modal-title',
+    subtitleSelector: '#ports-edit-modal-subtitle',
+    bodySelector: '#ports-edit-modal-body',
+    title: `Edit ports: ${container.name || `container-${index + 1}`}`,
+    subtitle: 'Container ports, services and external exposure.',
+    body: renderPortsEditor(index, container.ports || []),
+    focusSelector: '[data-add-port], [data-save-ports], button, input, textarea, select',
+    onClosed: () => { state.portsModalClose = null; },
+  });
 }
 function openEditPanel(panel, index) {
   if (state.readOnly || !state.model) return;
@@ -1402,12 +1448,17 @@ function openEditPanel(panel, index) {
     body = renderAppVarsEditorModal(state.appVars || []);
   }
   if (!body) return;
-  setText('#edit-modal-title', title);
-  setText('#edit-modal-subtitle', subtitle);
-  setHTML('#edit-modal-body', body);
-  modal.classList.remove('modal-wide');
+  state.editModalClose = openContentModal({
+    modal,
+    titleSelector: '#edit-modal-title',
+    subtitleSelector: '#edit-modal-subtitle',
+    bodySelector: '#edit-modal-body',
+    title,
+    subtitle,
+    body,
+    onClosed: () => { state.editModalClose = null; },
+  });
   syncAutoscalingEditor();
-  state.editModalClose = openModalElement(modal);
 }
 function handleEditModalClick(e) {
   const saveResources = e.target.closest('[data-save-resources]');
@@ -1508,11 +1559,17 @@ function handlePortsModalClick(e) {
 function openEditorModal(title, subtitle, body, options = {}) {
   const modal = qs('#edit-modal');
   if (!modal || !body) return;
-  setText('#edit-modal-title', title);
-  setText('#edit-modal-subtitle', subtitle);
-  setHTML('#edit-modal-body', body);
-  modal.classList.toggle('modal-wide', !!options.wide);
-  state.editModalClose = openModalElement(modal, null, () => modal.classList.remove('modal-wide'));
+  state.editModalClose = openContentModal({
+    modal,
+    titleSelector: '#edit-modal-title',
+    subtitleSelector: '#edit-modal-subtitle',
+    bodySelector: '#edit-modal-body',
+    title,
+    subtitle,
+    body,
+    wide: !!options.wide,
+    onClosed: () => { state.editModalClose = null; },
+  });
 }
 function openDefaultsVarsEditor() {
   openEditorModal('Edit defaults vars', 'Top-level vars in apps/_defaults.yml used by {{var:NAME}} placeholders.', renderDefaultsVarsEditor(state.defaults?.vars || []));
