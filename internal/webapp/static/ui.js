@@ -1266,15 +1266,38 @@ function validateResourcesForm(index) {
   return {ok: true};
 }
 function clearInvalidInputs(scopeSelector) {
-  qsa(`${scopeSelector} .is-invalid`).forEach((input) => input.classList.remove('is-invalid'));
+  clearInvalidInputsIn(qs(scopeSelector));
 }
 function clearInvalidInputsIn(scope) {
-  scope?.querySelectorAll?.('.is-invalid')?.forEach((input) => input.classList.remove('is-invalid'));
+  scope?.querySelectorAll?.('.is-invalid')?.forEach((input) => {
+    input.classList.remove('is-invalid');
+    input.removeAttribute('aria-invalid');
+    input.removeAttribute('aria-describedby');
+  });
+  scope?.querySelectorAll?.('[data-validation-feedback]')?.forEach((feedback) => feedback.remove());
 }
 function invalidInput(input, message) {
   input?.classList.add('is-invalid');
+  input?.setAttribute('aria-invalid', 'true');
+  renderValidationFeedback(input, message);
   input?.focus();
   return {ok: false, message};
+}
+function renderValidationFeedback(input, message) {
+  if (!input) return;
+  const host = validationFeedbackHost(input);
+  if (host.nextElementSibling?.hasAttribute('data-validation-feedback')) host.nextElementSibling.remove();
+  const feedback = document.createElement('div');
+  const feedbackId = `validation-feedback-${Math.random().toString(36).slice(2)}`;
+  feedback.id = feedbackId;
+  feedback.className = 'invalid-feedback validation-feedback d-block';
+  feedback.dataset.validationFeedback = 'true';
+  feedback.textContent = message;
+  host.insertAdjacentElement('afterend', feedback);
+  input.setAttribute('aria-describedby', feedbackId);
+}
+function validationFeedbackHost(input) {
+  return input.closest('.input-group') || input;
 }
 function validateNamedRows(scope, inputSelector, label) {
   if (!scope) return {ok: true};

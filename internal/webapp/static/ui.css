@@ -94,6 +94,8 @@
 .container-stack { display: grid; gap: .75rem; }
 .container-card { padding: .85rem; border: 1px solid var(--tblr-border-color); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface) 88%, var(--tblr-primary) 12%); }
 .resource-editor { padding: .65rem; border: 1px solid color-mix(in srgb, var(--tblr-border-color) 78%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 82%, transparent); }
+.validation-feedback { margin-top: .25rem; font-size: .75rem; line-height: 1.25; }
+td > .validation-feedback { white-space: normal; min-width: 12rem; }
 .compact-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .ports-preview { display: grid; gap: .45rem; }
 .ports-preview-item { padding: .6rem .7rem; border: 1px solid color-mix(in srgb, var(--tblr-border-color) 76%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--tblr-bg-surface-secondary) 72%, transparent); }
