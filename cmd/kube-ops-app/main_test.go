@@ -66,6 +66,35 @@ containers:
 	}
 }
 
+func TestEnvStatusCommandUnknownAndMarkApplied(t *testing.T) {
+	root, configPath := writeOpsFixture(t)
+	statePath := filepath.Join(root, "state.json")
+
+	out, err := executeCommand("--config", configPath, "--state", statePath, "env", "status", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "test\tUnknown\tdesired=sha256:") || !strings.Contains(out, "applied=-") {
+		t.Fatalf("unknown status output = %q", out)
+	}
+
+	out, err = executeCommand("--config", configPath, "--state", statePath, "env", "mark-applied", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "test\tmarked applied\tsha256:") {
+		t.Fatalf("mark-applied output = %q", out)
+	}
+
+	out, err = executeCommand("--config", configPath, "--state", statePath, "env", "status", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "test\tInSync\tdesired=sha256:") {
+		t.Fatalf("in-sync status output = %q", out)
+	}
+}
+
 func executeCommand(args ...string) (string, error) {
 	cmd := newRootCommand(appinfo.For(appinfo.OpsAppName), &cliOptions{})
 	var out bytes.Buffer
@@ -74,6 +103,25 @@ func executeCommand(args ...string) (string, error) {
 	cmd.SetArgs(args)
 	err := cmd.Execute()
 	return out.String(), err
+}
+
+func writeOpsFixture(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "envs", "test", "env.unsecured.json"), `{"environment":{"NAMESPACE":"ops-test","TSM_REGISTRY_URL":"registry.local","TSM_RELEASE_ID":"1"}}`)
+	writeFile(t, filepath.Join(root, "envs", "test", "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    image: "{{env:TSM_REGISTRY_URL}}/api:{{env:TSM_RELEASE_ID}}"
+`)
+	configPath := filepath.Join(root, "ops.yml")
+	writeFile(t, configPath, `environments:
+  - name: test
+    namespace: ops-test
+    root_path: `+filepath.ToSlash(filepath.Join(root, "envs"))+`
+    branch: main
+`)
+	return root, configPath
 }
 
 func writeFile(t *testing.T, path string, content string) {

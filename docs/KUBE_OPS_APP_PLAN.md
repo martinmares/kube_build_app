@@ -733,7 +733,12 @@ Hotové:
 - config loader pro server bootstrap config
 - `kube-ops-app env list`
 - `kube-ops-app env render-digest ENV`
+- `kube-ops-app env status ENV`
+- `kube-ops-app env mark-applied ENV` pro lokální prototyp applied stavu
 - stabilní SHA-256 digest nad vyrenderovanými soubory
+- file-backed prototype state přes `--state` / `KUBE_OPS_STATE`
+
+Poznámka: lokální JSON state je jen vývojová náhrada budoucí DB, aby šlo ověřit `Unknown` / `InSync` / `OutOfSync` status bez PostgreSQL a clusteru.
 
 Ještě není hotové:
 
