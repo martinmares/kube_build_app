@@ -1210,13 +1210,11 @@ func patchEnvironmentSpecialEntries(content string, rootKey string, entries []Sp
 		existing[member.key] = member
 	}
 	seen := map[string]bool{}
-	var additions []encodedSpecialEntry
 	var edits []textEdit
 	for _, entry := range encoded {
 		seen[entry.key] = true
 		member, ok := existing[entry.key]
 		if !ok {
-			additions = append(additions, entry)
 			continue
 		}
 		if content[member.valueStart:member.valueEnd] != entry.valueJSON {
@@ -1229,10 +1227,7 @@ func patchEnvironmentSpecialEntries(content string, rootKey string, entries []Sp
 			edits = append(edits, textEdit{start: start, end: end})
 		}
 	}
-	if len(additions) > 0 {
-		insertionPoint := environmentInsertionPoint(content, rootMember.valueStart, objectEnd)
-		edits = append(edits, textEdit{start: insertionPoint, end: insertionPoint, replacement: environmentInsertion(content, rootMember.valueStart, objectEnd, members, additions)})
-	}
+	edits = append(edits, environmentAdditionEdits(content, rootMember.valueStart, objectEnd, members, existing, encoded)...)
 	return applyTextEdits(content, edits), nil
 }
 
@@ -1461,13 +1456,70 @@ func memberRemovalRange(members []jsonObjectMember, idx int) (int, int) {
 	return member.memberStart, member.valueEnd
 }
 
+func environmentAdditionEdits(content string, objectStart int, objectEnd int, members []jsonObjectMember, existing map[string]jsonObjectMember, entries []encodedSpecialEntry) []textEdit {
+	retainedCount := 0
+	for _, entry := range entries {
+		if _, ok := existing[entry.key]; ok {
+			retainedCount++
+		}
+	}
+	var edits []textEdit
+	for idx := 0; idx < len(entries); {
+		if _, ok := existing[entries[idx].key]; ok {
+			idx++
+			continue
+		}
+		startIdx := idx
+		for idx < len(entries) {
+			if _, ok := existing[entries[idx].key]; ok {
+				break
+			}
+			idx++
+		}
+		run := entries[startIdx:idx]
+		next, hasNext := nextExistingMember(entries, existing, idx)
+		if hasNext {
+			edits = append(edits, textEdit{start: next.keyStart, end: next.keyStart, replacement: environmentInsertionBefore(content, next, run)})
+			continue
+		}
+		insertionPoint := environmentInsertionPoint(content, objectStart, objectEnd)
+		edits = append(edits, textEdit{start: insertionPoint, end: insertionPoint, replacement: environmentInsertionAppend(content, objectStart, objectEnd, members, run, retainedCount)})
+	}
+	return edits
+}
+
+func nextExistingMember(entries []encodedSpecialEntry, existing map[string]jsonObjectMember, start int) (jsonObjectMember, bool) {
+	for idx := start; idx < len(entries); idx++ {
+		if member, ok := existing[entries[idx].key]; ok {
+			return member, true
+		}
+	}
+	return jsonObjectMember{}, false
+}
+
+func environmentInsertionBefore(content string, next jsonObjectMember, additions []encodedSpecialEntry) string {
+	memberIndent, _ := environmentIndents(content, 0, next.valueEnd, []jsonObjectMember{next})
+	lines := make([]string, 0, len(additions))
+	for idx, entry := range additions {
+		keyBytes, _ := json.Marshal(entry.key)
+		indent := memberIndent
+		if idx == 0 {
+			indent = ""
+		}
+		lines = append(lines, indent+string(keyBytes)+": "+entry.valueJSON+",")
+	}
+	return strings.Join(lines, "\n") + "\n" + memberIndent
+}
+
+func environmentInsertionAppend(content string, objectStart int, objectEnd int, members []jsonObjectMember, additions []encodedSpecialEntry, retainedCount int) string {
+	if retainedCount == 0 {
+		return environmentInsertion(content, objectStart, objectEnd, nil, additions)
+	}
+	return environmentInsertion(content, objectStart, objectEnd, members, additions)
+}
+
 func environmentInsertion(content string, objectStart int, objectEnd int, members []jsonObjectMember, additions []encodedSpecialEntry) string {
 	memberIndent, closeIndent := environmentIndents(content, objectStart, objectEnd, members)
-	lines := make([]string, 0, len(additions))
-	for _, entry := range additions {
-		keyBytes, _ := json.Marshal(entry.key)
-		lines = append(lines, memberIndent+string(keyBytes)+": "+entry.valueJSON)
-	}
 	if memberIndent == "" && closeIndent == "" {
 		inline := make([]string, 0, len(additions))
 		for _, entry := range additions {
@@ -1479,10 +1531,24 @@ func environmentInsertion(content string, objectStart int, objectEnd int, member
 		}
 		return "," + strings.Join(inline, ",")
 	}
+	lines := environmentEntryLines(memberIndent, additions, false)
 	if len(members) == 0 {
 		return "\n" + strings.Join(lines, ",\n") + "\n" + closeIndent
 	}
 	return ",\n" + strings.Join(lines, ",\n")
+}
+
+func environmentEntryLines(memberIndent string, additions []encodedSpecialEntry, trailingComma bool) []string {
+	lines := make([]string, 0, len(additions))
+	for idx, entry := range additions {
+		keyBytes, _ := json.Marshal(entry.key)
+		line := memberIndent + string(keyBytes) + ": " + entry.valueJSON
+		if trailingComma || idx < len(additions)-1 {
+			line += ","
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func environmentInsertionPoint(content string, objectStart int, objectEnd int) int {

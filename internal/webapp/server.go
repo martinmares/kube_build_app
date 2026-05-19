@@ -761,19 +761,54 @@ func (s *Server) updateSecuredEnvEntries(env string, entries []repository.Specia
 	if err != nil {
 		return repository.SpecialEntries{}, err
 	}
-	updatedPlain, err := repository.PatchSpecialEntriesContent(string(decrypted), "environment", entries)
+	decryptedEntries, err := specialEntriesFromContent(env, "env.secured.json", detail.ContentHash, detail.IsDirty, string(decrypted), true)
 	if err != nil {
 		return repository.SpecialEntries{}, err
 	}
-	encrypted, err := s.encryptSpecialFile(detail.Path, detail.Content, updatedPlain)
+	encryptedEntries, err := specialEntriesFromContent(env, "env.secured.json", detail.ContentHash, detail.IsDirty, detail.Content, false)
 	if err != nil {
 		return repository.SpecialEntries{}, err
 	}
-	encryptedEntries, err := specialEntriesFromContent(env, "env.secured.json", detail.ContentHash, detail.IsDirty, string(encrypted), false)
+	mixedEntries := securedMixedEntries(entries, decryptedEntries.Entries, encryptedEntries.Entries)
+	mixedContent, err := repository.PatchSpecialEntriesContent(detail.Content, "environment", mixedEntries)
 	if err != nil {
 		return repository.SpecialEntries{}, err
 	}
-	return s.repo.UpdateSecuredSpecialEntriesEncrypted(env, "env.secured.json", encryptedEntries.Entries, expectedHash)
+	encrypted, err := s.encryptSpecialFile(detail.Path, detail.Content, mixedContent)
+	if err != nil {
+		return repository.SpecialEntries{}, err
+	}
+	finalEntries, err := specialEntriesFromContent(env, "env.secured.json", detail.ContentHash, detail.IsDirty, string(encrypted), false)
+	if err != nil {
+		return repository.SpecialEntries{}, err
+	}
+	return s.repo.UpdateSecuredSpecialEntriesEncrypted(env, "env.secured.json", finalEntries.Entries, expectedHash)
+}
+
+func securedMixedEntries(submitted []repository.SpecialEntry, decrypted []repository.SpecialEntry, encrypted []repository.SpecialEntry) []repository.SpecialEntry {
+	decryptedByKey := map[string]repository.SpecialEntry{}
+	for _, entry := range decrypted {
+		decryptedByKey[entry.Key] = entry
+	}
+	encryptedByKey := map[string]repository.SpecialEntry{}
+	for _, entry := range encrypted {
+		encryptedByKey[entry.Key] = entry
+	}
+	mixed := make([]repository.SpecialEntry, 0, len(submitted))
+	for _, entry := range submitted {
+		if decryptedEntry, ok := decryptedByKey[entry.Key]; ok && specialEntriesEqual(entry, decryptedEntry) {
+			if encryptedEntry, ok := encryptedByKey[entry.Key]; ok {
+				mixed = append(mixed, encryptedEntry)
+				continue
+			}
+		}
+		mixed = append(mixed, entry)
+	}
+	return mixed
+}
+
+func specialEntriesEqual(a repository.SpecialEntry, b repository.SpecialEntry) bool {
+	return strings.TrimSpace(a.ValueType) == strings.TrimSpace(b.ValueType) && a.ValueText == b.ValueText
 }
 
 func (s *Server) handleSpecialPreflight(w http.ResponseWriter, r *http.Request) {

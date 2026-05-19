@@ -1344,7 +1344,7 @@ function renderSpecialEntryRow(entry = {}) {
           <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="add-above" title="Add entry above"><i class="ti ti-row-insert-top"></i></button>
           <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="add-below" title="Add entry below"><i class="ti ti-row-insert-bottom"></i></button>
           <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="duplicate-above" title="Duplicate above"><i class="ti ti-copy-plus"></i></button>
-          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="duplicate-below" title="Duplicate below"><i class="ti ti-copy"></i></button>
+          <button class="btn btn-sm btn-ghost-secondary btn-icon special-entry-action-btn" type="button" data-special-entry-action="duplicate-below" title="Duplicate below"><i class="ti ti-copy-plus"></i></button>
           <button class="btn btn-sm btn-ghost-danger btn-icon special-entry-action-btn" type="button" data-special-entry-action="delete" title="Delete entry"><i class="ti ti-trash"></i></button>
         </div>
       </td>

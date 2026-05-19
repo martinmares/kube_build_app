@@ -1164,3 +1164,38 @@ func TestPatchEnvSecuredJSONAppendsAndDeletesForFutureEncryptedWrite(t *testing.
 		t.Fatalf("content changed unexpectedly:\n%s", got)
 	}
 }
+
+func TestPatchEnvSecuredJSONInsertsNewEntryAtSubmittedPosition(t *testing.T) {
+	content := `{
+  "environment": {
+    "SECRET_B": "EncJson[@api=2.0:@box=<b>]",
+    "SECRET_A": "EncJson[@api=2.0:@box=<a>]",
+    "SECRET_COUNT": "EncJson[@api=2.0:@box=<count>]"
+  },
+  "other": true
+}
+`
+
+	got, err := replaceSpecialEntries(content, "environment", []SpecialEntry{
+		{Key: "SECRET_B", ValueType: "string", ValueText: "EncJson[@api=2.0:@box=<b>]"},
+		{Key: "SECRET_B_2", ValueType: "string", ValueText: "plain-new"},
+		{Key: "SECRET_A", ValueType: "string", ValueText: "EncJson[@api=2.0:@box=<a>]"},
+		{Key: "SECRET_COUNT", ValueType: "string", ValueText: "EncJson[@api=2.0:@box=<count>]"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{
+  "environment": {
+    "SECRET_B": "EncJson[@api=2.0:@box=<b>]",
+    "SECRET_B_2": "plain-new",
+    "SECRET_A": "EncJson[@api=2.0:@box=<a>]",
+    "SECRET_COUNT": "EncJson[@api=2.0:@box=<count>]"
+  },
+  "other": true
+}
+`
+	if got != want {
+		t.Fatalf("content changed unexpectedly:\n%s", got)
+	}
+}
