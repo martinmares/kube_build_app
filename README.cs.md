@@ -30,13 +30,16 @@ kube-edit-app serve --root ./environments --allow-write
 Doporučený postup editace:
 
 1. Vybrat environment.
-2. Otevřít `Apps`, `Assets` nebo `Changed files`.
-3. Provést strukturovanou editaci.
-4. Zkontrolovat barevný `Git diff`.
-5. Spustit validaci v `Build`.
-6. Změnu v environment repozitáři commitnout přes Git.
+2. Otevřít `Apps` pro app model nebo `Assets` pro environment JSON/defaults/assets.
+3. Ve write režimu provést strukturovanou editaci. Aktuální editory pokrývají local vars, defaults vars/container envs, replicas, autoscaling, resources, Java runtime, probes, ports/services/ingress, container envs a special env JSON entries.
+4. Opravit případné chyby podle inline validačních hlášek přímo u polí.
+5. Otevřít `Build`, spustit validaci a případně vykreslit build preview file tree.
+6. Otevřít `Changed files`, rozbalit inline diffy a vybrat soubory k přijetí.
+7. Použít `Accept selected`, které commitne jen vybrané dirty soubory. UI zobrazí výsledný commit hash a commitnuté cesty.
 
-Read-only režim stále zobrazuje strukturované inputy, preview a diffy, ale save tlačítka jsou vypnutá. Je to preferovaný režim pro review, L2 kontrolu a dashboardy. `--allow-write` používejte jen pro záměrné editace repozitáře.
+Read-only režim stále zobrazuje strukturované preview, build checks, generated file preview a diffy, ale mutační prvky jsou schované nebo vypnuté a mutační API endpointy vrací `403`. Je to preferovaný režim pro review, L2 kontrolu a dashboardy. `--allow-write` používejte jen pro záměrné editace repozitáře.
+
+`env.secured.json` lze editovat přes EncJson flow, pokud je `kube-edit-app` spuštěný s nakonfigurovanými EncJson cestami. Existující encrypted hodnoty se zachovají; nově přidané plaintext hodnoty zůstávají pro zašifrování nástrojem EncJson.
 
 ## Cíl Metamodelu
 

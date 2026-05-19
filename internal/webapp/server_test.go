@@ -214,6 +214,48 @@ func TestGitCommitEndpointRequiresWriteModeAndCommitsSelected(t *testing.T) {
 	}
 }
 
+func TestMutatingEndpointsRequireWriteMode(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), "vars: []\n")
+	writeFile(t, filepath.Join(root, "test", "env.unsecured.json"), `{"environment":{}}`)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo)
+
+	for _, item := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, "/api/v1/git/restore/test/apps/api.yml", `{}`},
+		{http.MethodPost, "/api/v1/git/commit", `{"paths":["test/apps/api.yml"],"message":"test"}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/vars", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/defaults/vars", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/defaults/container-envs", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/replicas", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/autoscaling", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/resources", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/envs", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/runtime/java", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/ports", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/probes", `{}`},
+		{http.MethodPost, "/api/v1/envs/test/apps/api.yml/containers/0/probes/fix-legacy", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/assets/special/env.unsecured.json/entries", `{}`},
+	} {
+		t.Run(item.method+" "+item.path, func(t *testing.T) {
+			request := httptest.NewRequest(item.method, item.path, strings.NewReader(item.body))
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestAppsEndpoint(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")

@@ -30,13 +30,16 @@ kube-edit-app serve --root ./environments --allow-write
 Recommended editing flow:
 
 1. Select an environment.
-2. Open `Apps`, `Assets` or `Changed files`.
-3. Make a structured edit.
-4. Review the colored `Git diff`.
-5. Run `Build` validation.
-6. Commit the environment repository change with Git.
+2. Open `Apps` for app model edits or `Assets` for environment JSON/defaults/assets.
+3. Make a structured edit in write mode. Current editors cover local vars, defaults vars/container envs, replicas, autoscaling, resources, Java runtime, probes, ports/services/ingress, container envs and special env JSON entries.
+4. Use inline validation feedback to fix invalid values before saving.
+5. Open `Build`, run validation and optionally render the build preview file tree.
+6. Open `Changed files`, expand inline diffs and select the files to accept.
+7. Use `Accept selected` to commit only the selected dirty files. The UI shows the resulting commit hash and committed paths.
 
-Read-only mode still renders structured inputs, previews and diffs, but save buttons are disabled. This is the preferred mode for review, L2 inspection and dashboards. Use `--allow-write` only for intentional repository edits.
+Read-only mode still renders structured previews, build checks, generated file preview and diffs, but mutating controls are hidden or disabled and mutating API endpoints return `403`. This is the preferred mode for review, L2 inspection and dashboards. Use `--allow-write` only for intentional repository edits.
+
+`env.secured.json` can be edited through the EncJson flow when `kube-edit-app` is started with configured EncJson paths. Existing encrypted values are preserved; newly added plaintext values are left for the EncJson tool to encrypt.
 
 ## Metamodel Goal
 
