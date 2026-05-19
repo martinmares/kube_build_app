@@ -701,12 +701,16 @@ func (s *Server) handleSpecialDecryptedEntries(w http.ResponseWriter, r *http.Re
 		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
 		return
 	}
-	entries, err := specialEntriesFromContent(env, specialFile, detail.ContentHash, detail.IsDirty, string(decrypted), false)
+	editable := specialFile == "env.secured.json"
+	entries, err := specialEntriesFromContent(env, specialFile, detail.ContentHash, detail.IsDirty, string(decrypted), editable)
 	if err != nil {
 		writeJSON(w, statusForError(err), map[string]string{"error": err.Error()})
 		return
 	}
-	warning := "decrypted read-only preview; write/encrypt flow is not enabled yet"
+	warning := "decrypted values; saving re-encrypts the file through EncJson"
+	if !editable {
+		warning = "decrypted read-only preview; write/encrypt flow is not enabled yet"
+	}
 	entries.Warning = &warning
 	writeJSON(w, http.StatusOK, entries)
 }

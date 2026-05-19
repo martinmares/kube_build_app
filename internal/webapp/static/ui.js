@@ -1293,7 +1293,10 @@ async function saveDefaultsContainerEnvs() {
   } catch (e) { showError(e); }
 }
 function openSpecialEntriesEditor() {
-  openEditorModal('Edit env.unsecured.json', 'Environment values with explicit JSON value type.', renderSpecialEntriesEditor(state.specialEntries?.entries || []), {wide: true});
+  const secured = state.assetPath === 'env.secured.json';
+  const title = `Edit ${state.assetPath || 'special entries'}`;
+  const description = secured ? 'Decrypted environment values. Saving re-encrypts env.secured.json through EncJson.' : 'Environment values with explicit JSON value type.';
+  openEditorModal(title, description, renderSpecialEntriesEditor(state.specialEntries?.entries || []), {wide: true});
 }
 function renderSpecialEntriesEditor(entries) {
   const rows = (entries || []).map((entry) => renderSpecialEntryRow(entry)).join('');
@@ -1914,8 +1917,9 @@ function renderDefaultsGroupPreview(group) {
 }
 function renderSpecialEntriesPreview(entries) {
   const items = entries.entries || [];
-  const edit = !state.readOnly && entries.editable && state.assetPath === 'env.unsecured.json' ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-special-entries><i class="ti ti-pencil me-1"></i>Edit entries</button>` : '';
-  const decryptBadge = entries.decrypted ? `<span class="badge bg-green-lt"><i class="ti ti-lock-open me-1"></i>decrypted preview</span>` : (isSecuredSpecial(state.assetPath) ? `<span class="badge bg-yellow-lt"><i class="ti ti-lock me-1"></i>encrypted/raw</span>` : '');
+  const canEditEntries = !state.readOnly && entries.editable && (state.assetPath === 'env.unsecured.json' || (state.assetPath === 'env.secured.json' && entries.decrypted));
+  const edit = canEditEntries ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-special-entries><i class="ti ti-pencil me-1"></i>Edit entries</button>` : '';
+  const decryptBadge = entries.decrypted ? `<span class="badge bg-green-lt"><i class="ti ti-lock-open me-1"></i>${entries.editable ? 'decrypted editable' : 'decrypted preview'}</span>` : (isSecuredSpecial(state.assetPath) ? `<span class="badge bg-yellow-lt"><i class="ti ti-lock me-1"></i>encrypted/raw</span>` : '');
   return `
     <div class="overview-section mb-3">
       <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
