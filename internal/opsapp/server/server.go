@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"kube-env/internal/appinfo"
+	"kube-env/internal/opsapp/cluster"
 	"kube-env/internal/opsapp/config"
 	opsdiff "kube-env/internal/opsapp/diff"
 	"kube-env/internal/opsapp/render"
@@ -27,11 +28,13 @@ var contentFiles embed.FS
 var indexTemplate = template.Must(template.ParseFS(contentFiles, "templates/index.html"))
 
 type Options struct {
-	Info      appinfo.Info
-	Config    config.Config
-	StatePath string
-	WorkDir   string
-	FromGit   bool
+	Info        appinfo.Info
+	Config      config.Config
+	StatePath   string
+	WorkDir     string
+	FromGit     bool
+	Kubeconfig  string
+	KubeContext string
 }
 
 type Server struct {
@@ -62,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/envs/{env}/render-digest", s.handleRenderDigest)
 	mux.HandleFunc("GET /api/v1/envs/{env}/status", s.handleStatus)
 	mux.HandleFunc("GET /api/v1/envs/{env}/diff", s.handleDiff)
+	mux.HandleFunc("GET /api/v1/envs/{env}/cluster", s.handleCluster)
 	return mux
 }
 
@@ -84,14 +88,16 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":       s.options.Info.Name,
-		"version":    s.options.Info.Version,
-		"commit":     s.options.Info.Commit,
-		"date":       s.options.Info.Date,
-		"from_git":   s.options.FromGit,
-		"work_dir":   s.options.WorkDir,
-		"state_path": s.options.StatePath,
-		"server":     s.options.Config.Server,
+		"name":         s.options.Info.Name,
+		"version":      s.options.Info.Version,
+		"commit":       s.options.Info.Commit,
+		"date":         s.options.Info.Date,
+		"from_git":     s.options.FromGit,
+		"work_dir":     s.options.WorkDir,
+		"state_path":   s.options.StatePath,
+		"kubeconfig":   s.options.Kubeconfig,
+		"kube_context": s.options.KubeContext,
+		"server":       s.options.Config.Server,
 	})
 }
 
@@ -169,6 +175,20 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"environment": prepared.Environment.Name, "applied": applied, "desired": desired, "diff": diff})
+}
+
+func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
+	env, ok := s.options.Config.Environment(r.PathValue("env"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("environment %q not found", r.PathValue("env")))
+		return
+	}
+	result, err := cluster.InspectNamespace(r.Context(), env.Namespace, cluster.Options{Kubeconfig: s.options.Kubeconfig, Context: s.options.KubeContext})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) prepare(name string) (source.Prepared, error) {

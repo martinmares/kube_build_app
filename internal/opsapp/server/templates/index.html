@@ -48,6 +48,7 @@
               <div class="btn-list">
                 <button class="btn btn-outline-secondary" id="resolve-btn" type="button"><i class="ti ti-git-branch me-2"></i>Resolve</button>
                 <button class="btn btn-primary" id="status-btn" type="button"><i class="ti ti-heartbeat me-2"></i>Status</button>
+                <button class="btn btn-outline-secondary" id="cluster-btn" type="button"><i class="ti ti-server me-2"></i>Cluster</button>
                 <button class="btn btn-outline-secondary" id="diff-btn" type="button"><i class="ti ti-diff me-2"></i>Diff</button>
               </div>
             </div>
@@ -109,6 +110,33 @@
                           </tbody>
                         </table>
                       </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card mb-3">
+                <div class="card-header">
+                  <div>
+                    <h3 class="card-title">Cluster status</h3>
+                    <div class="text-muted small">Read-only snapshot from kubectl for the configured namespace.</div>
+                  </div>
+                  <div class="card-actions"><span class="badge bg-secondary-lt" id="cluster-availability">not loaded</span></div>
+                </div>
+                <div class="card-body">
+                  <div class="row g-2 mb-3" id="cluster-summary"></div>
+                  <div class="row g-3">
+                    <div class="col-12 col-xl-4">
+                      <h4 class="mb-2">Deployments</h4>
+                      <div class="table-responsive cluster-table-wrap"><table class="table table-sm table-vcenter mb-0" id="cluster-deployments"><tbody><tr><td class="text-muted">No data loaded.</td></tr></tbody></table></div>
+                    </div>
+                    <div class="col-12 col-xl-4">
+                      <h4 class="mb-2">Pods</h4>
+                      <div class="table-responsive cluster-table-wrap"><table class="table table-sm table-vcenter mb-0" id="cluster-pods"><tbody><tr><td class="text-muted">No data loaded.</td></tr></tbody></table></div>
+                    </div>
+                    <div class="col-12 col-xl-4">
+                      <h4 class="mb-2">Services</h4>
+                      <div class="table-responsive cluster-table-wrap"><table class="table table-sm table-vcenter mb-0" id="cluster-services"><tbody><tr><td class="text-muted">No data loaded.</td></tr></tbody></table></div>
                     </div>
                   </div>
                 </div>

@@ -47,7 +47,14 @@ func Checkout(opts CheckoutOptions) (Resolution, error) {
 	if err := os.RemoveAll(target); err != nil {
 		return Resolution{}, err
 	}
-	if _, err := gitOutput("", "clone", "--quiet", "--no-checkout", repo, target); err != nil {
+	cloneArgs := []string{"clone", "--quiet", "--no-checkout"}
+	if isLocalRepoPath(repo) {
+		// Avoid Git's local clone object optimization. It can expose stale or missing local
+		// object references from developer worktrees; upload-pack gives us a safer copy.
+		cloneArgs = append(cloneArgs, "--no-local")
+	}
+	cloneArgs = append(cloneArgs, repo, target)
+	if _, err := gitOutput("", cloneArgs...); err != nil {
 		return Resolution{}, err
 	}
 	if _, err := gitOutput(target, "checkout", "--quiet", revision); err != nil {
@@ -62,6 +69,16 @@ func Checkout(opts CheckoutOptions) (Resolution, error) {
 		return Resolution{}, err
 	}
 	return Resolution{Repo: repo, Revision: revision, ResolvedCommit: commit, WorktreePath: absTarget}, nil
+}
+
+func isLocalRepoPath(repo string) bool {
+	if strings.Contains(repo, "://") || strings.HasPrefix(repo, "git@") || strings.HasPrefix(repo, "ssh://") {
+		return false
+	}
+	if _, err := os.Stat(repo); err == nil {
+		return true
+	}
+	return false
 }
 
 func safeName(name string) string {

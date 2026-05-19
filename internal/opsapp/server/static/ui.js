@@ -70,9 +70,19 @@ function selectEnv(env) {
   el('metadata-output').textContent = json(env);
   el('diff-output').textContent = 'No diff loaded.';
   resetStatus();
+  resetCluster();
   renderReleaseLane(env);
   renderSummaryCards(env);
   renderEnvList();
+}
+
+function resetCluster() {
+  el('cluster-availability').className = 'badge bg-secondary-lt';
+  el('cluster-availability').textContent = 'not loaded';
+  el('cluster-summary').innerHTML = '';
+  setTableBody('cluster-deployments', '<tr><td class="text-muted">No data loaded.</td></tr>');
+  setTableBody('cluster-pods', '<tr><td class="text-muted">No data loaded.</td></tr>');
+  setTableBody('cluster-services', '<tr><td class="text-muted">No data loaded.</td></tr>');
 }
 
 function resetStatus() {
@@ -157,6 +167,57 @@ async function loadDiff() {
   renderReleaseLane(payload.desired || state.selected);
 }
 
+async function loadCluster() {
+  if (!state.selected) return;
+  showError(null);
+  const payload = await api(`/api/v1/envs/${encodeURIComponent(state.selected.name)}/cluster`);
+  renderCluster(payload);
+}
+
+function renderCluster(payload) {
+  el('metadata-output').textContent = json(payload);
+  el('cluster-availability').className = `badge ${payload.available ? 'bg-green-lt' : 'bg-red-lt'}`;
+  el('cluster-availability').textContent = payload.available ? `namespace ${payload.namespace}` : 'unavailable';
+  el('cluster-summary').innerHTML = [
+    ['deployments', `${payload.ready_deployments || 0}/${payload.deployment_count || 0} ready`],
+    ['pods', `${payload.ready_pods || 0}/${payload.pod_count || 0} ready`],
+    ['services', String(payload.service_count || 0)],
+  ].map(([label, value]) => `
+    <div class="col-12 col-md-4">
+      <div class="card summary-tile">
+        <div class="card-body py-2">
+          <div class="summary-label">${escapeHTML(label)}</div>
+          <div class="summary-value">${escapeHTML(value)}</div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+  if (!payload.available) {
+    setTableBody('cluster-deployments', `<tr><td class="text-danger">${escapeHTML(payload.error || 'Cluster unavailable')}</td></tr>`);
+    setTableBody('cluster-pods', '<tr><td class="text-muted">No pod data.</td></tr>');
+    setTableBody('cluster-services', '<tr><td class="text-muted">No service data.</td></tr>');
+    return;
+  }
+  setTableBody('cluster-deployments', tableRows(payload.deployments || [], (deployment) => `
+    <tr><td>${escapeHTML(deployment.name)}</td><td class="text-end">${escapeHTML(`${deployment.ready}/${deployment.desired}`)}</td><td class="text-end">${escapeHTML(deployment.available)}</td></tr>
+  `, '<tr><td class="text-muted">No deployments.</td></tr>'));
+  setTableBody('cluster-pods', tableRows(payload.pods || [], (pod) => `
+    <tr><td>${escapeHTML(pod.name)}</td><td>${escapeHTML(pod.phase)}</td><td class="text-end">${escapeHTML(pod.ready)}</td><td class="text-end">${escapeHTML(pod.restarts)}</td></tr>
+  `, '<tr><td class="text-muted">No pods.</td></tr>'));
+  setTableBody('cluster-services', tableRows(payload.services || [], (service) => `
+    <tr><td>${escapeHTML(service.name)}</td><td>${escapeHTML(service.type)}</td><td>${escapeHTML(service.cluster_ip)}</td><td>${escapeHTML(service.ports)}</td></tr>
+  `, '<tr><td class="text-muted">No services.</td></tr>'));
+}
+
+function tableRows(items, render, empty) {
+  if (!items.length) return empty;
+  return items.map(render).join('');
+}
+
+function setTableBody(tableID, html) {
+  el(tableID).querySelector('tbody').innerHTML = html;
+}
+
 function formatDiff(diff) {
   if (!diff) return 'No diff.';
   if (!diff.changed) return 'NoDiff';
@@ -185,6 +246,7 @@ async function refresh() {
 el('refresh-btn').addEventListener('click', refresh);
 el('resolve-btn').addEventListener('click', () => resolveSelected().catch(showError));
 el('status-btn').addEventListener('click', () => loadStatus().catch(showError));
+el('cluster-btn').addEventListener('click', () => loadCluster().catch(showError));
 el('diff-btn').addEventListener('click', () => loadDiff().catch(showError));
 el('env-filter').addEventListener('input', (event) => { state.filter = event.target.value; renderEnvList(); });
 

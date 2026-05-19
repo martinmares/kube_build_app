@@ -44,6 +44,18 @@ func TestCheckoutUsesSafeFallbackRevision(t *testing.T) {
 	}
 }
 
+func TestIsLocalRepoPath(t *testing.T) {
+	repo := initGitRepo(t)
+	if !isLocalRepoPath(repo) {
+		t.Fatalf("isLocalRepoPath(%q) = false, want true", repo)
+	}
+	for _, remote := range []string{"https://example.invalid/repo.git", "ssh://git@example.invalid/repo.git", "git@example.invalid:repo.git"} {
+		if isLocalRepoPath(remote) {
+			t.Fatalf("isLocalRepoPath(%q) = true, want false", remote)
+		}
+	}
+}
+
 func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {

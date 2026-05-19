@@ -25,6 +25,8 @@ type cliOptions struct {
 	configPath  string
 	statePath   string
 	workDir     string
+	kubeconfig  string
+	kubeContext string
 	output      string
 	fromGit     bool
 	showVersion bool
@@ -60,6 +62,8 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.PersistentFlags().StringVar(&opts.configPath, "config", os.Getenv("KUBE_OPS_CONFIG"), "kube-ops-app config file path")
 	root.PersistentFlags().StringVar(&opts.statePath, "state", os.Getenv("KUBE_OPS_STATE"), "optional local state JSON path for prototype applied status")
 	root.PersistentFlags().StringVar(&opts.workDir, "work-dir", os.Getenv("KUBE_OPS_WORK_DIR"), "Git checkout work directory for target revision resolution")
+	root.PersistentFlags().StringVar(&opts.kubeconfig, "kubeconfig", os.Getenv("KUBECONFIG"), "kubeconfig path for read-only cluster status")
+	root.PersistentFlags().StringVar(&opts.kubeContext, "context", "", "kubeconfig context for read-only cluster status")
 	root.PersistentFlags().StringVarP(&opts.output, "output", "o", "text", "output format: text or json")
 	root.PersistentFlags().BoolVar(&opts.fromGit, "from-git", false, "render/status/diff from checked out target revision instead of local root_path")
 	root.AddCommand(newEnvCommand(opts))
@@ -82,11 +86,13 @@ func newServerCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 				addr = cfg.Server.HTTP.Listen
 			}
 			return opsserver.New(opsserver.Options{
-				Info:      info,
-				Config:    cfg,
-				StatePath: opts.statePath,
-				WorkDir:   opts.workDir,
-				FromGit:   opts.fromGit,
+				Info:        info,
+				Config:      cfg,
+				StatePath:   opts.statePath,
+				WorkDir:     opts.workDir,
+				FromGit:     opts.fromGit,
+				Kubeconfig:  opts.kubeconfig,
+				KubeContext: opts.kubeContext,
 			}).ListenAndServe(addr)
 		},
 	}

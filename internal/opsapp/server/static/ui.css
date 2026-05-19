@@ -118,6 +118,22 @@ body {
   overflow-wrap: anywhere;
 }
 
+.cluster-table-wrap {
+  max-height: 18rem;
+  border: 1px solid var(--ops-border);
+  border-radius: .5rem;
+  overflow: auto;
+}
+
+.cluster-table-wrap .table {
+  margin-bottom: 0;
+}
+
+.cluster-table-wrap td,
+.cluster-table-wrap th {
+  white-space: nowrap;
+}
+
 .code-block {
   min-height: 24rem;
   max-height: 42rem;
