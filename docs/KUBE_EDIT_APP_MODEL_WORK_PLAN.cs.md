@@ -163,7 +163,8 @@ Kontrakt:
 - app-level lokální proměnné jsou `vars:`
 - container-level lokální proměnné jsou `containers[].envs`
 - `_defaults.yml` používá `container_envs`
-- staré `env_vars`, `container_env_vars`, `container_vars` a `containers[].vars` už nejsou podporovaný metamodel
+- UI zapisuje nový metamodel, ale Go build kvůli existujícím repozitářům čte legacy `containers[].env_vars` jako alias pro `containers[].envs`
+- staré `container_env_vars`, `container_vars` a `containers[].vars` už nejsou podporovaný metamodel
 
 ### 7. Editor `probes`
 

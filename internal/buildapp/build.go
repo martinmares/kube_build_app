@@ -191,6 +191,7 @@ type containerSpec struct {
 	Image                string                    `yaml:"image"`
 	Assets               []assetSpec               `yaml:"assets"`
 	Mounts               []mountSpec               `yaml:"mounts"`
+	LegacyEnvVars        []envVar                  `yaml:"env_vars"`
 	Envs                 []envVar                  `yaml:"envs"`
 	MTLS                 mtlsSpec                  `yaml:"mtls"`
 	Ports                []portSpec                `yaml:"ports"`
@@ -229,6 +230,7 @@ type initContainerSpec struct {
 	Command         []string                  `yaml:"command"`
 	Arguments       []string                  `yaml:"arguments"`
 	Mounts          []mountSpec               `yaml:"mounts"`
+	LegacyEnvVars   []envVar                  `yaml:"env_vars"`
 	Envs            []envVar                  `yaml:"envs"`
 	EnvFrom         []envFromSpec             `yaml:"env_from"`
 	Resources       map[string]map[string]any `yaml:"resources"`
@@ -2558,8 +2560,8 @@ func renderInitContainer(container initContainerSpec, assets []resolvedAsset, mo
 	if len(container.SecurityContext) > 0 {
 		out["securityContext"] = cloneMap(container.SecurityContext)
 	}
-	if len(container.Envs) > 0 {
-		out["env"] = renderVars(container.Envs)
+	if vars := effectiveInitContainerEnvs(container); len(vars) > 0 {
+		out["env"] = renderVars(vars)
 	}
 	if envFrom := renderEnvFrom(container.EnvFrom); len(envFrom) > 0 {
 		out["envFrom"] = envFrom
@@ -3507,6 +3509,29 @@ func effectiveContainerEnvs(container containerSpec) []envVar {
 	if item, ok := renderJavaRuntimeEnvVar(container.Runtime.Java); ok {
 		items = append(items, item)
 	}
+	items = append(items, container.LegacyEnvVars...)
+	items = append(items, container.Envs...)
+	if len(items) == 0 {
+		return nil
+	}
+	positions := map[string]int{}
+	out := []envVar{}
+	for _, item := range items {
+		if item.Name == "" {
+			continue
+		}
+		if index, ok := positions[item.Name]; ok {
+			out[index] = item
+			continue
+		}
+		positions[item.Name] = len(out)
+		out = append(out, item)
+	}
+	return out
+}
+
+func effectiveInitContainerEnvs(container initContainerSpec) []envVar {
+	items := append([]envVar{}, container.LegacyEnvVars...)
 	items = append(items, container.Envs...)
 	if len(items) == 0 {
 		return nil

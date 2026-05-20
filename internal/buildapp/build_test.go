@@ -2649,6 +2649,57 @@ containers:
 	}
 }
 
+func TestBuildRendersLegacyContainerEnvVars(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    env_vars:
+      - name: JAVA_ARGS
+        value: -Xms500m -Xmx500m
+          -Dbuild.module=api
+      - name: SECRET_PUBLIC_KEY
+        key: public-key
+        secret_name: tsm-secrets
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	env := digSlice(deployment, "spec", "template", "spec", "containers", "0", "env")
+	if len(env) != 2 {
+		t.Fatalf("len(env) = %d, want 2: %#v", len(env), env)
+	}
+	if got := envValue(env, "JAVA_ARGS"); got != "-Xms500m -Xmx500m -Dbuild.module=api" {
+		t.Fatalf("JAVA_ARGS = %q", got)
+	}
+	if got := envSecretName(env, "SECRET_PUBLIC_KEY"); got != "tsm-secrets" {
+		t.Fatalf("SECRET_PUBLIC_KEY secret name = %q, want tsm-secrets", got)
+	}
+}
+
 func writeJSON(t *testing.T, path string, value any) {
 	t.Helper()
 	content, err := json.MarshalIndent(value, "", "  ")
@@ -2790,6 +2841,17 @@ func envFieldPath(items []any, name string) string {
 	fieldRef, _ := valueFrom["fieldRef"].(map[string]any)
 	fieldPath, _ := fieldRef["fieldPath"].(string)
 	return fieldPath
+}
+
+func envSecretName(items []any, name string) string {
+	item := envItem(items, name)
+	if item == nil {
+		return ""
+	}
+	valueFrom, _ := item["valueFrom"].(map[string]any)
+	secretKeyRef, _ := valueFrom["secretKeyRef"].(map[string]any)
+	secretName, _ := secretKeyRef["name"].(string)
+	return secretName
 }
 
 func envItem(items []any, name string) map[string]any {
