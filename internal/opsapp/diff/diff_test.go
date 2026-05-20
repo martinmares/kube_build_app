@@ -3,6 +3,7 @@ package diff
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -32,6 +33,29 @@ func TestDirectoriesDetectsAddedModifiedDeleted(t *testing.T) {
 	}
 	if statuses["added.yml"] != "added" || statuses["deleted.yml"] != "deleted" || statuses["modified.yml"] != "modified" {
 		t.Fatalf("statuses = %#v", statuses)
+	}
+}
+
+func TestDirectoriesUsesLineDiffForModifiedFiles(t *testing.T) {
+	oldRoot := t.TempDir()
+	newRoot := t.TempDir()
+	writeFile(t, filepath.Join(oldRoot, "app.yml"), "line 1\nline 2\nline 3\nline 4\nline 5\n")
+	writeFile(t, filepath.Join(newRoot, "app.yml"), "line 1\nline 2 changed\nline 3\nline 4\nline 5\n")
+
+	result, err := Directories(oldRoot, newRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) != 1 {
+		t.Fatalf("files = %#v, want one modified file", result.Files)
+	}
+	unified := result.Files[0].Unified
+	joined := strings.Join(unified, "\n")
+	if !strings.Contains(joined, "-line 2") || !strings.Contains(joined, "+line 2 changed") {
+		t.Fatalf("unified diff = %q, want changed lines", joined)
+	}
+	if strings.Count(joined, "-line ") > 1 || strings.Count(joined, "+line ") > 1 {
+		t.Fatalf("unified diff = %q, appears to include whole file replacement", joined)
 	}
 }
 

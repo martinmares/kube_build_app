@@ -11,6 +11,7 @@ import (
 
 	"kube-env/internal/appinfo"
 	"kube-env/internal/opsapp/config"
+	"kube-env/internal/opsapp/state"
 )
 
 func TestServerInfoAndEnvironmentList(t *testing.T) {
@@ -50,6 +51,29 @@ func TestServerStatus(t *testing.T) {
 	}
 	if !strings.Contains(resp.Body.String(), "Unknown") || !strings.Contains(resp.Body.String(), "sha256:") {
 		t.Fatalf("status body = %s", resp.Body.String())
+	}
+}
+
+func TestServerMarkApplied(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	srv := New(Options{Info: appinfo.Info{Name: "kube-ops-app", Version: "test"}, Config: testConfig(t), StatePath: statePath})
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/api/v1/envs/test/mark-applied", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("mark-applied status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	applied, ok, err := state.NewStore(statePath).Environment("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || applied.AppliedRevision != "main" || !strings.HasPrefix(applied.AppliedDigest, "sha256:") || applied.SnapshotPath == "" {
+		t.Fatalf("applied = %#v", applied)
+	}
+
+	statusResp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(statusResp, httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/status", nil))
+	if statusResp.Code != http.StatusOK || !strings.Contains(statusResp.Body.String(), "InSync") {
+		t.Fatalf("status = %d, body = %s", statusResp.Code, statusResp.Body.String())
 	}
 }
 

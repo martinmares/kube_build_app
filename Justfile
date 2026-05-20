@@ -132,6 +132,14 @@ run-edit-app root listen="127.0.0.1:8080":
     New-Item -ItemType Directory -Force .tmp/go-build-cache | Out-Null
     $env:GOCACHE = "$PWD\.tmp\go-build-cache"; go run ./cmd/kube-edit-app serve --root "{{root}}" --listen "{{listen}}"
 
+[unix]
+ops-fixture listen=":8185":
+    scripts/ops-fixture "{{listen}}"
+
+[unix]
+ops-fixture-cluster namespace="kube-ops-test":
+    scripts/ops-fixture-cluster "{{namespace}}"
+
 parity name root env release_id:
     scripts/parity-build --name "{{name}}" --root "{{root}}" --env "{{env}}" --release-id "{{release_id}}"
 

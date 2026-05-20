@@ -48,7 +48,7 @@
               <div class="btn-list">
                 <button class="btn btn-outline-secondary" id="resolve-btn" type="button"><i class="ti ti-git-branch me-2"></i>Resolve</button>
                 <button class="btn btn-primary" id="status-btn" type="button"><i class="ti ti-heartbeat me-2"></i>Status</button>
-                <button class="btn btn-outline-secondary" id="cluster-btn" type="button"><i class="ti ti-server me-2"></i>Cluster</button>
+                <button class="btn btn-outline-secondary" id="mark-applied-btn" type="button"><i class="ti ti-check me-2"></i>Mark applied</button>
                 <button class="btn btn-outline-secondary" id="diff-btn" type="button"><i class="ti ti-diff me-2"></i>Diff</button>
               </div>
             </div>
@@ -121,7 +121,10 @@
                     <h3 class="card-title">Cluster status</h3>
                     <div class="text-muted small">Read-only snapshot from kubectl for the configured namespace.</div>
                   </div>
-                  <div class="card-actions"><span class="badge bg-secondary-lt" id="cluster-availability">not loaded</span></div>
+                  <div class="card-actions d-flex align-items-center gap-2">
+                    <span class="text-muted small" id="cluster-updated">not loaded</span>
+                    <span class="badge bg-secondary-lt" id="cluster-availability">not loaded</span>
+                  </div>
                 </div>
                 <div class="card-body">
                   <div class="row g-2 mb-3" id="cluster-summary"></div>

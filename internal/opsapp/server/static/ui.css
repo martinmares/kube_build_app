@@ -134,6 +134,10 @@ body {
   white-space: nowrap;
 }
 
+.cluster-port {
+  margin: 0 .2rem .2rem 0;
+}
+
 .code-block {
   min-height: 24rem;
   max-height: 42rem;

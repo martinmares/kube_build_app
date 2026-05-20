@@ -739,6 +739,9 @@ Hotové:
 - `kube-ops-app env diff ENV` pro diff desired renderu proti uloženému applied snapshotu
 - `kube-ops-app server` s prvním read-only web UI
 - read-only namespace cluster status přes `kubectl` pro deployments/pods/services
+- `just ops-fixture` pro lokální izolovaný `.tmp/environments/test` fixture
+- `just ops-fixture-cluster` pro naplnění lokálního k3d namespace smoke workloady
+- řádkový unified diff pro modified manifesty
 - `--from-git` režim pro render/status/diff/mark-applied z checkoutnutého `target_revision`
 - ukládání resolved commitu do applied state jako `applied_commit`
 - stabilní SHA-256 digest nad vyrenderovanými soubory

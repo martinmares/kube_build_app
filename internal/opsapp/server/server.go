@@ -64,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/envs/{env}/resolve", s.handleResolve)
 	mux.HandleFunc("GET /api/v1/envs/{env}/render-digest", s.handleRenderDigest)
 	mux.HandleFunc("GET /api/v1/envs/{env}/status", s.handleStatus)
+	mux.HandleFunc("POST /api/v1/envs/{env}/mark-applied", s.handleMarkApplied)
 	mux.HandleFunc("GET /api/v1/envs/{env}/diff", s.handleDiff)
 	mux.HandleFunc("GET /api/v1/envs/{env}/cluster", s.handleCluster)
 	return mux
@@ -140,6 +141,42 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleMarkApplied(w http.ResponseWriter, r *http.Request) {
+	if s.options.StatePath == "" {
+		writeError(w, http.StatusBadRequest, errors.New("state path is required for mark-applied"))
+		return
+	}
+	prepared, err := s.prepare(r.PathValue("env"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	store := state.NewStore(s.options.StatePath)
+	snapshotPath, err := store.SnapshotDir(prepared.Environment.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := render.RenderDigestTo(prepared.Environment, snapshotPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	applied := state.EnvironmentState{
+		AppliedRevision: result.TargetRevision,
+		AppliedCommit:   result.ResolvedCommit,
+		AppliedDigest:   result.Digest,
+		SnapshotPath:    snapshotPath,
+		AppliedAt:       time.Now().UTC(),
+		AppliedBy:       "kube-ops-app server mark-applied",
+	}
+	if err := store.SaveEnvironment(result.Environment, applied); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"environment": result.Environment, "render": result, "applied": applied})
 }
 
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {

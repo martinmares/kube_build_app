@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+listen="${1:-:8185}"
+
+rm -rf .tmp/environments .tmp/kube-ops-work .tmp/kube-ops-state
+mkdir -p .tmp/environments
+cp -R fixtures/readme-smoke/environments/dev .tmp/environments/test
+
+cat > .tmp/environments/test/apps/frontend.yml <<'YAML'
+name: frontend
+replicas: 1
+containers:
+  - name: frontend
+    image: "{{env:TSM_REGISTRY_URL}}/frontend:{{env:TSM_RELEASE_ID}}"
+    envs:
+      - name: PUBLIC_API_HOST
+        value: "{{env:PUBLIC_API_HOST}}"
+    resources:
+      cpu:
+        from: "50m"
+        to: "250m"
+      memory:
+        from: "64Mi"
+        to: "256Mi"
+    ports:
+      - name: http
+        port: 8080
+        expose_as:
+          - service_name: frontend
+            port: 80
+            external:
+              - name: frontend-public
+                http:
+                  - hostname: frontend.dev.example.test
+                    path: /
+    probes:
+      preset: http
+      port: 8080
+      path: /health
+YAML
+
+cat > .tmp/environments/test/env.unsecured.json <<'JSON'
+{
+  "environment": {
+    "NAMESPACE": "kube-ops-test",
+    "TSM_REGISTRY_URL": "registry.example.test/tsm",
+    "TSM_RELEASE_ID": "2026.05.19.1",
+    "PUBLIC_API_HOST": "api.test.example.test"
+  }
+}
+JSON
+
+cat > .tmp/ops.yml <<YAML
+server:
+  http:
+    listen: "${listen}"
+
+environments:
+  - name: test
+    namespace: kube-ops-test
+    repo: .tmp/environments
+    root_path: .
+    env_name: test
+    target_revision: HEAD
+YAML
+
+git -C .tmp/environments init -b main >/dev/null
+git -C .tmp/environments config user.email test@example.invalid
+git -C .tmp/environments config user.name "Kube Ops Test"
+git -C .tmp/environments add test
+git -C .tmp/environments commit -m "Initial kube ops test environment" >/dev/null
+
+printf 'Created .tmp/ops.yml and .tmp/environments/test\n'

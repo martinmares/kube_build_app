@@ -3,12 +3,21 @@ const state = {
   envs: [],
   selected: null,
   filter: '',
+  clusterTimer: null,
+  selectedToken: 0,
 };
 
 const el = (id) => document.getElementById(id);
 
 async function api(path) {
   const response = await fetch(path, { headers: { Accept: 'application/json' } });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
+  return payload;
+}
+
+async function apiJSON(path, options = {}) {
+  const response = await fetch(path, { headers: { Accept: 'application/json' }, ...options });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
   return payload;
@@ -65,6 +74,7 @@ function renderEnvList() {
 
 function selectEnv(env) {
   state.selected = env;
+  state.selectedToken += 1;
   el('detail-title').textContent = env.name;
   el('detail-subtitle').textContent = `${env.repo || env.root_path || '-'} :: ${env.root_path || '.'}`;
   el('metadata-output').textContent = json(env);
@@ -74,11 +84,14 @@ function selectEnv(env) {
   renderReleaseLane(env);
   renderSummaryCards(env);
   renderEnvList();
+  refreshSelected({ includeDiff: false });
+  restartClusterPolling();
 }
 
 function resetCluster() {
   el('cluster-availability').className = 'badge bg-secondary-lt';
   el('cluster-availability').textContent = 'not loaded';
+  el('cluster-updated').textContent = 'not loaded';
   el('cluster-summary').innerHTML = '';
   setTableBody('cluster-deployments', '<tr><td class="text-muted">No data loaded.</td></tr>');
   setTableBody('cluster-pods', '<tr><td class="text-muted">No data loaded.</td></tr>');
@@ -93,8 +106,8 @@ function resetStatus() {
 
 function renderReleaseLane(payload) {
   el('target-revision').textContent = payload.target_revision || payload.branch || 'HEAD';
-  el('resolved-commit').textContent = shortHash(payload.resolved_commit || payload.git?.resolved_commit);
-  el('desired-digest').textContent = digestTail(payload.desired_digest || payload.digest);
+  el('resolved-commit').textContent = shortHash(payload.resolved_commit || payload.git?.resolved_commit || payload.render?.resolved_commit);
+  el('desired-digest').textContent = digestTail(payload.desired_digest || payload.digest || payload.render?.digest);
   el('applied-revision').textContent = payload.applied_revision || payload.applied_state?.applied_revision || '-';
   el('applied-digest').textContent = digestTail(payload.applied_digest || payload.applied_state?.applied_digest);
 }
@@ -124,6 +137,7 @@ function renderStatus(payload) {
   el('status-panel').className = className;
   el('status-title').textContent = status;
   el('status-reason').textContent = payload.reason || 'No status reason.';
+  el('desired-digest').textContent = digestTail(payload.desired_digest || payload.render?.digest);
   renderReleaseLane(payload);
   renderSummaryCards(payload);
 }
@@ -137,7 +151,11 @@ async function loadInfo() {
 async function loadEnvs() {
   const payload = await api('/api/v1/envs');
   state.envs = payload.environments || [];
-  if (!state.selected && state.envs.length) selectEnv(state.envs[0]);
+  if (state.selected) {
+    state.selected = state.envs.find((env) => env.name === state.selected.name) || state.selected;
+  } else if (state.envs.length) {
+    selectEnv(state.envs[0]);
+  }
   renderEnvList();
 }
 
@@ -158,6 +176,24 @@ async function loadStatus() {
   renderStatus(payload);
 }
 
+async function markAppliedSelected() {
+  if (!state.selected) return;
+  showError(null);
+  const payload = await apiJSON(`/api/v1/envs/${encodeURIComponent(state.selected.name)}/mark-applied`, { method: 'POST' });
+  el('metadata-output').textContent = json(payload);
+  await loadStatusForToken(state.selectedToken);
+  el('diff-output').textContent = 'No diff loaded.';
+}
+
+async function loadStatusForToken(token) {
+  if (!state.selected) return;
+  const selectedName = state.selected.name;
+  const payload = await api(`/api/v1/envs/${encodeURIComponent(selectedName)}/status`);
+  if (token !== state.selectedToken || !state.selected || state.selected.name !== selectedName) return;
+  el('metadata-output').textContent = json(payload);
+  renderStatus(payload);
+}
+
 async function loadDiff() {
   if (!state.selected) return;
   showError(null);
@@ -174,10 +210,24 @@ async function loadCluster() {
   renderCluster(payload);
 }
 
+async function loadClusterForToken(token, quiet = false) {
+  if (!state.selected) return;
+  const selectedName = state.selected.name;
+  if (!quiet) setClusterLoading();
+  try {
+    const payload = await api(`/api/v1/envs/${encodeURIComponent(selectedName)}/cluster`);
+    if (token !== state.selectedToken || !state.selected || state.selected.name !== selectedName) return;
+    renderCluster(payload);
+  } catch (error) {
+    if (token !== state.selectedToken) return;
+    renderClusterError(error);
+  }
+}
+
 function renderCluster(payload) {
-  el('metadata-output').textContent = json(payload);
   el('cluster-availability').className = `badge ${payload.available ? 'bg-green-lt' : 'bg-red-lt'}`;
   el('cluster-availability').textContent = payload.available ? `namespace ${payload.namespace}` : 'unavailable';
+  el('cluster-updated').textContent = `updated ${new Date().toLocaleTimeString()}`;
   el('cluster-summary').innerHTML = [
     ['deployments', `${payload.ready_deployments || 0}/${payload.deployment_count || 0} ready`],
     ['pods', `${payload.ready_pods || 0}/${payload.pod_count || 0} ready`],
@@ -199,14 +249,64 @@ function renderCluster(payload) {
     return;
   }
   setTableBody('cluster-deployments', tableRows(payload.deployments || [], (deployment) => `
-    <tr><td>${escapeHTML(deployment.name)}</td><td class="text-end">${escapeHTML(`${deployment.ready}/${deployment.desired}`)}</td><td class="text-end">${escapeHTML(deployment.available)}</td></tr>
+    <tr>
+      <td>${escapeHTML(deployment.name)}</td>
+      <td class="text-end">${readyBadge(deployment.ready, deployment.desired)}</td>
+      <td class="text-end">${escapeHTML(deployment.available)}</td>
+    </tr>
   `, '<tr><td class="text-muted">No deployments.</td></tr>'));
   setTableBody('cluster-pods', tableRows(payload.pods || [], (pod) => `
-    <tr><td>${escapeHTML(pod.name)}</td><td>${escapeHTML(pod.phase)}</td><td class="text-end">${escapeHTML(pod.ready)}</td><td class="text-end">${escapeHTML(pod.restarts)}</td></tr>
+    <tr>
+      <td>${escapeHTML(pod.name)}</td>
+      <td>${phaseBadge(pod.phase)}</td>
+      <td class="text-end">${escapeHTML(pod.ready)}</td>
+      <td class="text-end">${restartBadge(pod.restarts)}</td>
+    </tr>
   `, '<tr><td class="text-muted">No pods.</td></tr>'));
   setTableBody('cluster-services', tableRows(payload.services || [], (service) => `
-    <tr><td>${escapeHTML(service.name)}</td><td>${escapeHTML(service.type)}</td><td>${escapeHTML(service.cluster_ip)}</td><td>${escapeHTML(service.ports)}</td></tr>
+    <tr>
+      <td>${escapeHTML(service.name)}</td>
+      <td><span class="badge bg-secondary-lt">${escapeHTML(service.type)}</span></td>
+      <td class="font-monospace">${escapeHTML(service.cluster_ip)}</td>
+      <td>${portChips(service.ports)}</td>
+    </tr>
   `, '<tr><td class="text-muted">No services.</td></tr>'));
+}
+
+function setClusterLoading() {
+  el('cluster-availability').className = 'badge bg-secondary-lt';
+  el('cluster-availability').textContent = 'loading';
+}
+
+function renderClusterError(error) {
+  el('cluster-availability').className = 'badge bg-red-lt';
+  el('cluster-availability').textContent = 'unavailable';
+  el('cluster-updated').textContent = `failed ${new Date().toLocaleTimeString()}`;
+  el('cluster-summary').innerHTML = '';
+  setTableBody('cluster-deployments', `<tr><td class="text-danger">${escapeHTML(error.message || error)}</td></tr>`);
+  setTableBody('cluster-pods', '<tr><td class="text-muted">No pod data.</td></tr>');
+  setTableBody('cluster-services', '<tr><td class="text-muted">No service data.</td></tr>');
+}
+
+function readyBadge(ready, desired) {
+  const isReady = Number(ready) === Number(desired);
+  return `<span class="badge ${isReady ? 'bg-green-lt' : 'bg-yellow-lt'}">${escapeHTML(`${ready}/${desired}`)}</span>`;
+}
+
+function phaseBadge(phase) {
+  const cls = phase === 'Running' ? 'bg-green-lt' : phase === 'Failed' ? 'bg-red-lt' : 'bg-yellow-lt';
+  return `<span class="badge ${cls}">${escapeHTML(phase || '-')}</span>`;
+}
+
+function restartBadge(restarts) {
+  const count = Number(restarts || 0);
+  return `<span class="badge ${count > 0 ? 'bg-red-lt' : 'bg-secondary-lt'}">${escapeHTML(count)}</span>`;
+}
+
+function portChips(ports) {
+  const items = String(ports || '').split(',').map((item) => item.trim()).filter(Boolean);
+  if (!items.length) return '<span class="text-muted">-</span>';
+  return items.map((item) => `<span class="badge bg-blue-lt cluster-port">${escapeHTML(item)}</span>`).join(' ');
 }
 
 function tableRows(items, render, empty) {
@@ -238,15 +338,36 @@ async function refresh() {
   try {
     await loadInfo();
     await loadEnvs();
+    await refreshSelected({ includeDiff: false });
   } catch (error) {
     showError(error);
   }
 }
 
+async function refreshSelected({ includeDiff } = { includeDiff: false }) {
+  if (!state.selected) return;
+  const token = state.selectedToken;
+  await Promise.allSettled([
+    loadStatusForToken(token),
+    loadClusterForToken(token, false),
+  ]);
+  if (includeDiff) {
+    await loadDiff();
+  }
+}
+
+function restartClusterPolling() {
+  if (state.clusterTimer) clearInterval(state.clusterTimer);
+  state.clusterTimer = setInterval(() => {
+    if (!state.selected || document.hidden) return;
+    loadClusterForToken(state.selectedToken, true);
+  }, 10000);
+}
+
 el('refresh-btn').addEventListener('click', refresh);
 el('resolve-btn').addEventListener('click', () => resolveSelected().catch(showError));
 el('status-btn').addEventListener('click', () => loadStatus().catch(showError));
-el('cluster-btn').addEventListener('click', () => loadCluster().catch(showError));
+el('mark-applied-btn').addEventListener('click', () => markAppliedSelected().catch(showError));
 el('diff-btn').addEventListener('click', () => loadDiff().catch(showError));
 el('env-filter').addEventListener('input', (event) => { state.filter = event.target.value; renderEnvList(); });
 

@@ -20,7 +20,9 @@ kube-ops-app   = operations/sync runner prototype over rendered manifests
 Start the early read-only operations UI:
 
 ```bash
-kube-ops-app --config ./ops.yml --state .tmp/kube-ops-state/state.json --work-dir .tmp/kube-ops-work --from-git server
+just ops-fixture
+just ops-fixture-cluster
+kube-ops-app --config .tmp/ops.yml --state .tmp/kube-ops-state/state.json --work-dir .tmp/kube-ops-work --from-git server
 ```
 
 The operations UI can also read the current Kubernetes context through `kubectl` for namespace-level deployment, pod and service status. Use `--kubeconfig` and `--context` when the default context is not the desired test cluster.

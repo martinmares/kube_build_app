@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -121,14 +122,7 @@ func unified(path string, oldContent string, newContent string, status string) [
 	}
 	oldLines := splitLines(oldContent)
 	newLines := splitLines(newContent)
-	lines = append(lines, "@@")
-	for _, line := range oldLines {
-		lines = append(lines, "-"+line)
-	}
-	for _, line := range newLines {
-		lines = append(lines, "+"+line)
-	}
-	return lines
+	return append(lines, lineUnified(oldLines, newLines)...)
 }
 
 func splitLines(content string) []string {
@@ -137,4 +131,161 @@ func splitLines(content string) []string {
 		return nil
 	}
 	return strings.Split(content, "\n")
+}
+
+type diffOp struct {
+	kind string
+	line string
+}
+
+type diffHunk struct {
+	ops      []diffOp
+	oldStart int
+	newStart int
+}
+
+func lineUnified(oldLines []string, newLines []string) []string {
+	ops := diffLines(oldLines, newLines)
+	hunks := unifiedHunks(ops, 3)
+	if len(hunks) == 0 {
+		return nil
+	}
+	lines := []string{}
+	for _, hunk := range hunks {
+		oldCount, newCount := hunkCounts(hunk.ops)
+		lines = append(lines, fmt.Sprintf("@@ -%s +%s @@", rangeText(hunk.oldStart, oldCount), rangeText(hunk.newStart, newCount)))
+		for _, op := range hunk.ops {
+			switch op.kind {
+			case "equal":
+				lines = append(lines, " "+op.line)
+			case "delete":
+				lines = append(lines, "-"+op.line)
+			case "insert":
+				lines = append(lines, "+"+op.line)
+			}
+		}
+	}
+	return lines
+}
+
+func diffLines(oldLines []string, newLines []string) []diffOp {
+	lcs := make([][]int, len(oldLines)+1)
+	for i := range lcs {
+		lcs[i] = make([]int, len(newLines)+1)
+	}
+	for i := len(oldLines) - 1; i >= 0; i-- {
+		for j := len(newLines) - 1; j >= 0; j-- {
+			if oldLines[i] == newLines[j] {
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else if lcs[i+1][j] >= lcs[i][j+1] {
+				lcs[i][j] = lcs[i+1][j]
+			} else {
+				lcs[i][j] = lcs[i][j+1]
+			}
+		}
+	}
+	ops := []diffOp{}
+	i, j := 0, 0
+	for i < len(oldLines) && j < len(newLines) {
+		if oldLines[i] == newLines[j] {
+			ops = append(ops, diffOp{kind: "equal", line: oldLines[i]})
+			i++
+			j++
+		} else if lcs[i+1][j] >= lcs[i][j+1] {
+			ops = append(ops, diffOp{kind: "delete", line: oldLines[i]})
+			i++
+		} else {
+			ops = append(ops, diffOp{kind: "insert", line: newLines[j]})
+			j++
+		}
+	}
+	for i < len(oldLines) {
+		ops = append(ops, diffOp{kind: "delete", line: oldLines[i]})
+		i++
+	}
+	for j < len(newLines) {
+		ops = append(ops, diffOp{kind: "insert", line: newLines[j]})
+		j++
+	}
+	return ops
+}
+
+func unifiedHunks(ops []diffOp, context int) []diffHunk {
+	changeIndexes := []int{}
+	for i, op := range ops {
+		if op.kind != "equal" {
+			changeIndexes = append(changeIndexes, i)
+		}
+	}
+	if len(changeIndexes) == 0 {
+		return nil
+	}
+	hunks := []diffHunk{}
+	start := max(0, changeIndexes[0]-context)
+	end := min(len(ops), changeIndexes[0]+context+1)
+	for _, idx := range changeIndexes[1:] {
+		nextStart := max(0, idx-context)
+		nextEnd := min(len(ops), idx+context+1)
+		if nextStart <= end {
+			end = max(end, nextEnd)
+			continue
+		}
+		hunks = append(hunks, makeHunk(ops, start, end))
+		start, end = nextStart, nextEnd
+	}
+	hunks = append(hunks, makeHunk(ops, start, end))
+	return hunks
+}
+
+func makeHunk(ops []diffOp, start int, end int) diffHunk {
+	oldLine, newLine := 1, 1
+	for _, op := range ops[:start] {
+		switch op.kind {
+		case "equal":
+			oldLine++
+			newLine++
+		case "delete":
+			oldLine++
+		case "insert":
+			newLine++
+		}
+	}
+	return diffHunk{ops: ops[start:end], oldStart: oldLine, newStart: newLine}
+}
+
+func hunkCounts(hunk []diffOp) (int, int) {
+	oldCount, newCount := 0, 0
+	for _, op := range hunk {
+		switch op.kind {
+		case "equal":
+			oldCount++
+			newCount++
+		case "delete":
+			oldCount++
+		case "insert":
+			newCount++
+		}
+	}
+	return oldCount, newCount
+}
+
+func rangeText(start int, count int) string {
+	if count == 1 {
+		return strconv.Itoa(start)
+	}
+	return fmt.Sprintf("%d,%d", start, count)
+}
+
+func min(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
