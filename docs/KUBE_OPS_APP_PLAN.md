@@ -1,5 +1,7 @@
 # kube-ops-app plan
 
+> Status update 2026-05-20: **sandbox/prototype only**. Active product direction moved back to `kube-edit-app`; migrate only useful read-only concepts from this plan. See `docs/KUBE_OPS_TO_EDIT_APP_MIGRATION_PLAN.md`.
+
 > Stav: **implementace zahájena**. Existuje první CLI/config/render-digest/Git-resolve skeleton bez DB, cluster klienta a UI.
 
 `kube-ops-app` není klon ArgoCD. Cílem je doménový OpenShift/Kubernetes operations portal nad prostředími generovanými přes `kube-build-app`.

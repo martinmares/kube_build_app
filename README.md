@@ -4,20 +4,20 @@
 
 The tool is intentionally small at runtime: it reads declarative environment metadata, app model files and assets, then writes Kubernetes YAML into a target directory. The Ruby implementation is the historical reference; the Go implementation is the productized CLI with a single binary, Cobra-based commands and shell completion.
 
-This repository now contains two related binaries:
+This repository currently contains three related binaries, but only two are active product surfaces:
 
 ```text
 kube-build-app = build/render Kubernetes manifests
 kube-edit-app  = web editor for environment repositories
-kube-ops-app   = operations/sync runner prototype over rendered manifests
+kube-ops-app   = sandbox prototype, not active product direction
 ```
 
 `kube-edit-app` is the Go rewrite target for the Rust `kube-environments-ui` web application. See `docs/KUBE_EDIT_APP_PLAN.md`.
-`kube-ops-app` is the early operations portal/sync runner prototype. It starts with config loading, Git target revision resolution, render digest calculation, prototype desired/applied status, applied snapshot diffing and CLI inspection commands. See `docs/KUBE_OPS_APP_PLAN.md`.
+`kube-ops-app` is now kept as a sandbox prototype only. Useful read-only concepts should be migrated into `kube-edit-app`; sync/reconcile remains ArgoCD responsibility. See `docs/KUBE_OPS_TO_EDIT_APP_MIGRATION_PLAN.md`.
 
 `kube-ops-app` commands use local `root_path` by default. Pass `--from-git --work-dir .tmp/kube-ops-work` to checkout `target_revision`, render from that checkout and record the resolved commit in applied state.
 
-Start the early read-only operations UI:
+Start the sandbox read-only operations UI:
 
 ```bash
 just ops-fixture
@@ -25,7 +25,7 @@ just ops-fixture-cluster
 kube-ops-app --config .tmp/ops.yml --state .tmp/kube-ops-state/state.json --work-dir .tmp/kube-ops-work --from-git server
 ```
 
-The operations UI can also read the current Kubernetes context through `kubectl` for namespace-level deployment, pod and service status. Use `--kubeconfig` and `--context` when the default context is not the desired test cluster.
+The sandbox operations UI can also read the current Kubernetes context through `kubectl` for namespace-level deployment, pod and service status. Use `--kubeconfig` and `--context` when the default context is not the desired test cluster.
 
 ## kube-edit-app Workflow
 
