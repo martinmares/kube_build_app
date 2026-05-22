@@ -58,7 +58,7 @@ containers:
             port: 80
 `)
 
-	result, err := Build(Options{Environment: "test", Root: root, Target: target})
+	result, err := Build(Options{Environment: "test", Root: root, Target: target, SyncProfile: "kube-deploy-sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ containers:
         to: "256Mi"
 `)
 
-	result, err := Build(Options{Environment: "test", Root: root, Target: target})
+	result, err := Build(Options{Environment: "test", Root: root, Target: target, SyncProfile: "kube-deploy-sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ containers:
       memory: {from: "128Mi", to: "256Mi"}
 `)
 
-	result, err := Build(Options{Environment: "test", Root: root, Target: target})
+	result, err := Build(Options{Environment: "test", Root: root, Target: target, SyncProfile: "kube-deploy-sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,6 +394,7 @@ containers:
 	}
 
 	ingress := loadYAML(t, filepath.Join(target, "services", "external", "api-public-ingress.yml"))
+	assertSyncMetadata(t, ingress, "test/Ingress/nac-test/api-public", "400")
 	if got := digString(ingress, "kind"); got != "Ingress" {
 		t.Fatalf("ingress kind = %q", got)
 	}
@@ -405,6 +406,7 @@ containers:
 	}
 
 	route := loadYAML(t, filepath.Join(target, "services", "external", "api-route-route.yml"))
+	assertSyncMetadata(t, route, "test/Route/nac-test/api-route", "400")
 	if got := digString(route, "kind"); got != "Route" {
 		t.Fatalf("route kind = %q", got)
 	}
@@ -1400,7 +1402,7 @@ containers:
       memory: {requests: "128Mi", limits: "512Mi"}
 `)
 
-	result, err := Build(Options{Environment: "test", Root: root, Target: target})
+	result, err := Build(Options{Environment: "test", Root: root, Target: target, SyncProfile: "kube-deploy-sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1409,6 +1411,7 @@ containers:
 	}
 
 	hpa := loadYAML(t, filepath.Join(target, "deployments", "api-hpa.yml"))
+	assertSyncMetadata(t, hpa, "test/HorizontalPodAutoscaler/nac-test/api", "210")
 	if got := digString(hpa, "apiVersion"); got != "autoscaling/v2" {
 		t.Fatalf("apiVersion = %q, want autoscaling/v2", got)
 	}
@@ -1714,7 +1717,7 @@ kind: StatefulSet
 subdomain_name: stateful-headless
 `)
 
-	result, err := Build(Options{Environment: "test", Root: root, Target: target})
+	result, err := Build(Options{Environment: "test", Root: root, Target: target, SyncProfile: "kube-deploy-sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1727,6 +1730,7 @@ subdomain_name: stateful-headless
 		t.Fatalf("recreate strategy type = %q, want Recreate", got)
 	}
 	recreateBudget := loadYAML(t, filepath.Join(target, "deployments", "recreate-budget.yml"))
+	assertSyncMetadata(t, recreateBudget, "test/PodDisruptionBudget/nac-test/recreate", "190")
 	if got := digInt(recreateBudget, "spec", "minAvailable"); got != 1 {
 		t.Fatalf("minAvailable = %d, want 1", got)
 	}
@@ -1739,11 +1743,13 @@ subdomain_name: stateful-headless
 		t.Fatalf("one-by-one maxUnavailable = %d, want 1", got)
 	}
 	oneByOneBudget := loadYAML(t, filepath.Join(target, "deployments", "one-by-one-budget.yml"))
+	assertSyncMetadata(t, oneByOneBudget, "test/PodDisruptionBudget/nac-test/one-by-one", "190")
 	if got := digInt(oneByOneBudget, "spec", "maxUnavailable"); got != 1 {
 		t.Fatalf("budget maxUnavailable = %d, want 1", got)
 	}
 
 	stateful := loadYAML(t, filepath.Join(target, "deployments", "stateful-deployment.yml"))
+	assertSyncMetadata(t, stateful, "test/StatefulSet/nac-test/stateful", "200")
 	if got := digString(stateful, "kind"); got != "StatefulSet" {
 		t.Fatalf("kind = %q, want StatefulSet", got)
 	}
@@ -2082,6 +2088,184 @@ containers:
 	}
 	if got := digString(configMap, "data", "app.conf"); got != rawContent {
 		t.Fatalf("asset content = %q, want raw content", got)
+	}
+}
+
+func TestBuildAddsSyncMetadataProfile(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "assets", "app.conf"), "value=one\n")
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    assets:
+      - file: assets/app.conf
+        to: /app/app.conf
+    ports:
+      - name: http
+        port: 8080
+        expose_as:
+          - service_name: api
+            port: 80
+    resources:
+      cpu: {requests: "100m", limits: "500m"}
+      memory: {requests: "128Mi", limits: "512Mi"}
+`)
+
+	result, err := Build(Options{Environment: "test", Root: root, Target: target, SyncProfile: "kube-deploy-sync"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	assertSyncMetadata(t, deployment, "test/Deployment/nac-test/api", "200")
+	if got := digString(deployment, "metadata", "labels", "kube-build-app.io/sync-set"); got != "test" {
+		t.Fatalf("deployment sync-set = %q, want test", got)
+	}
+
+	service := loadYAML(t, filepath.Join(target, "services", "api-service.yml"))
+	assertSyncMetadata(t, service, "test/Service/nac-test/api", "300")
+
+	if len(result.Assets) != 1 {
+		t.Fatalf("len(assets) = %d, want 1", len(result.Assets))
+	}
+	configMap := loadYAML(t, result.Assets[0])
+	assertSyncMetadata(t, configMap, "test/app/api/container/api/asset/assets/app.conf:/app/app.conf", "100")
+}
+
+func TestBuildSyncMetadataKeepsAssetSyncIDStableAcrossContentHashName(t *testing.T) {
+	root := t.TempDir()
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    assets:
+      - file: assets/app.conf
+        to: /app/app.conf
+    resources:
+      cpu: {requests: "100m", limits: "500m"}
+      memory: {requests: "128Mi", limits: "512Mi"}
+`)
+
+	writeFile(t, filepath.Join(envDir, "assets", "app.conf"), "value=one\n")
+	targetOne := filepath.Join(t.TempDir(), "target")
+	resultOne, err := Build(Options{Environment: "test", Root: root, Target: targetOne, SyncProfile: "kube-deploy-sync"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := loadYAML(t, resultOne.Assets[0])
+
+	writeFile(t, filepath.Join(envDir, "assets", "app.conf"), "value=two\n")
+	targetTwo := filepath.Join(t.TempDir(), "target")
+	resultTwo, err := Build(Options{Environment: "test", Root: root, Target: targetTwo, SyncProfile: "kube-deploy-sync"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := loadYAML(t, resultTwo.Assets[0])
+
+	if filepath.Base(resultOne.Assets[0]) == filepath.Base(resultTwo.Assets[0]) {
+		t.Fatalf("asset object name did not change: %s", resultOne.Assets[0])
+	}
+	if got, want := digString(second, "metadata", "annotations", "kube-build-app.io/sync-id"), digString(first, "metadata", "annotations", "kube-build-app.io/sync-id"); got != want {
+		t.Fatalf("sync-id changed: %q != %q", got, want)
+	}
+	if got, want := digString(second, "metadata", "annotations", "kube-build-app.io/sync-hash"), digString(first, "metadata", "annotations", "kube-build-app.io/sync-hash"); got == want {
+		t.Fatalf("sync-hash did not change: %q", got)
+	}
+}
+
+func TestBuildArgocdSyncMetadataProfileAddsSyncWave(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    resources:
+      cpu: {requests: "100m", limits: "500m"}
+      memory: {requests: "128Mi", limits: "512Mi"}
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target, SyncProfile: "argocd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	assertSyncMetadata(t, deployment, "test/Deployment/nac-test/api", "200")
+	if got := digString(deployment, "metadata", "annotations", "argocd.argoproj.io/sync-wave"); got != "200" {
+		t.Fatalf("argocd sync-wave = %q, want 200", got)
+	}
+}
+
+func TestCanonicalObjectHashIgnoresRuntimeFieldsAndSyncHash(t *testing.T) {
+	object := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":              "api",
+			"namespace":         "nac-test",
+			"resourceVersion":   "123",
+			"creationTimestamp": "now",
+			"annotations": map[string]any{
+				"kube-build-app.io/sync-id":   "test/ConfigMap/nac-test/api",
+				"kube-build-app.io/sync-hash": "sha256:old",
+			},
+		},
+		"data":   map[string]any{"app.conf": "value=one\n"},
+		"status": map[string]any{"ignored": true},
+	}
+	first, err := canonicalObjectHash(object, "kube-build-app.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := object["metadata"].(map[string]any)
+	metadata["resourceVersion"] = "456"
+	object["status"] = map[string]any{"ignored": false}
+	metadata["annotations"].(map[string]any)["kube-build-app.io/sync-hash"] = "sha256:new"
+	second, err := canonicalObjectHash(object, "kube-build-app.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("hash changed after volatile field update: %s != %s", first, second)
+	}
+	object["data"].(map[string]any)["app.conf"] = "value=two\n"
+	third, err := canonicalObjectHash(object, "kube-build-app.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third == first {
+		t.Fatalf("hash did not change after desired content update: %s", third)
 	}
 }
 
@@ -2771,6 +2955,25 @@ func digString(value any, path ...string) string {
 		return out
 	}
 	return ""
+}
+
+func assertSyncMetadata(t *testing.T, object map[string]any, syncID string, order string) {
+	t.Helper()
+	if got := digString(object, "metadata", "labels", "app.kubernetes.io/managed-by"); got != "kube-build-app" {
+		t.Fatalf("managed-by label = %q, want kube-build-app", got)
+	}
+	if got := digString(object, "metadata", "labels", "kube-build-app.io/sync-id-hash"); len(got) != 16 {
+		t.Fatalf("sync-id-hash = %q, want 16 hex chars", got)
+	}
+	if got := digString(object, "metadata", "annotations", "kube-build-app.io/sync-id"); got != syncID {
+		t.Fatalf("sync-id = %q, want %q", got, syncID)
+	}
+	if got := digString(object, "metadata", "annotations", "kube-build-app.io/sync-order"); got != order {
+		t.Fatalf("sync-order = %q, want %q", got, order)
+	}
+	if got := digString(object, "metadata", "annotations", "kube-build-app.io/sync-hash"); !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("sync-hash = %q, want sha256 prefix", got)
+	}
 }
 
 func digInt(value any, path ...string) int {

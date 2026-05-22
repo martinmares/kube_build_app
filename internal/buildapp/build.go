@@ -33,6 +33,9 @@ type Options struct {
 	VarsSources      []string
 	HelmEscapeAssets bool
 	ReleaseManifest  string
+	SyncProfile      string
+	SyncPrefix       string
+	SyncSet          string
 	Down             []string
 }
 
@@ -381,6 +384,7 @@ type resolvedAsset struct {
 	VolumeName    string
 	ConfigMapKey  string
 	ContainerName string
+	SourceFile    string
 	To            string
 	Content       []byte
 	Binary        bool
@@ -545,13 +549,8 @@ func Build(opts Options) (Result, error) {
 		if asset.Kind != "configmap" && asset.Kind != "" {
 			continue
 		}
-		configMap := renderAssetConfigMap(asset, vars["NAMESPACE"], sharedAssetsWave)
-		out, err := yaml.Marshal(configMap)
-		if err != nil {
-			return Result{}, err
-		}
 		outPath := filepath.Join(sharedAssetsDir, asset.VolumeName+".yml")
-		if err := os.WriteFile(outPath, out, 0o644); err != nil {
+		if err := writeRenderedObject(outPath, renderAssetConfigMap(asset, vars["NAMESPACE"], sharedAssetsWave), opts, syncMetadataSpec{ID: syncAssetID(opts, vars["NAMESPACE"], "", asset, true), Order: 100}); err != nil {
 			return Result{}, err
 		}
 		result.Assets = append(result.Assets, outPath)
@@ -581,12 +580,8 @@ func Build(opts Options) (Result, error) {
 		if err != nil {
 			return Result{}, err
 		}
-		out, err := yaml.Marshal(deployment)
-		if err != nil {
-			return Result{}, err
-		}
 		outPath := filepath.Join(deploymentsDir, app.Name+"-deployment.yml")
-		if err := os.WriteFile(outPath, out, 0o644); err != nil {
+		if err := writeRenderedObject(outPath, deployment, opts, syncMetadataSpec{ID: syncObjectID(opts, app.Kind, vars["NAMESPACE"], app.Name), Order: 200}); err != nil {
 			return Result{}, err
 		}
 		result.Deployments = append(result.Deployments, outPath)
@@ -595,27 +590,19 @@ func Build(opts Options) (Result, error) {
 		if !app.DisableCreateService {
 			services := renderServices(app, vars["NAMESPACE"], opts.Environment)
 			for _, service := range services {
-				out, err := yaml.Marshal(service.Object)
-				if err != nil {
-					return Result{}, err
-				}
 				outPath := filepath.Join(servicesDir, service.Name+"-service.yml")
-				if err := os.WriteFile(outPath, out, 0o644); err != nil {
+				if err := writeRenderedObject(outPath, service.Object, opts, syncMetadataSpec{ID: syncObjectID(opts, "Service", vars["NAMESPACE"], service.Name), Order: 300}); err != nil {
 					return Result{}, err
 				}
 				result.Services = append(result.Services, outPath)
 				result.Events = append(result.Events, BuildEvent{Type: "service", App: app.Name, Name: service.Name, Path: outPath})
 
 				for _, external := range service.Externals {
-					out, err := yaml.Marshal(external.Object)
-					if err != nil {
-						return Result{}, err
-					}
 					if err := os.MkdirAll(externalServicesDir, 0o755); err != nil {
 						return Result{}, err
 					}
 					outPath := filepath.Join(externalServicesDir, external.Name+"-"+external.Kind+".yml")
-					if err := os.WriteFile(outPath, out, 0o644); err != nil {
+					if err := writeRenderedObject(outPath, external.Object, opts, syncMetadataSpec{ID: syncObjectID(opts, externalKindName(external.Kind), vars["NAMESPACE"], external.Name), Order: 400}); err != nil {
 						return Result{}, err
 					}
 					result.Externals = append(result.Externals, outPath)
@@ -625,13 +612,8 @@ func Build(opts Options) (Result, error) {
 		}
 
 		for _, asset := range configMapResolvedAssets(resolvedAssets) {
-			configMap := renderAssetConfigMap(asset, vars["NAMESPACE"], appArgoCDWave(app))
-			out, err := yaml.Marshal(configMap)
-			if err != nil {
-				return Result{}, err
-			}
 			outPath := filepath.Join(assetsDir, asset.VolumeName+".yml")
-			if err := os.WriteFile(outPath, out, 0o644); err != nil {
+			if err := writeRenderedObject(outPath, renderAssetConfigMap(asset, vars["NAMESPACE"], appArgoCDWave(app)), opts, syncMetadataSpec{ID: syncAssetID(opts, vars["NAMESPACE"], app.Name, asset, false), Order: 100}); err != nil {
 				return Result{}, err
 			}
 			result.Assets = append(result.Assets, outPath)
@@ -639,12 +621,8 @@ func Build(opts Options) (Result, error) {
 		}
 
 		if budget := renderBudget(app, vars["NAMESPACE"]); budget != nil {
-			out, err := yaml.Marshal(budget)
-			if err != nil {
-				return Result{}, err
-			}
 			outPath := filepath.Join(deploymentsDir, app.Name+"-budget.yml")
-			if err := os.WriteFile(outPath, out, 0o644); err != nil {
+			if err := writeRenderedObject(outPath, budget, opts, syncMetadataSpec{ID: syncObjectID(opts, "PodDisruptionBudget", vars["NAMESPACE"], app.Name), Order: 190}); err != nil {
 				return Result{}, err
 			}
 			result.Budgets = append(result.Budgets, outPath)
@@ -652,12 +630,8 @@ func Build(opts Options) (Result, error) {
 		}
 
 		if autoscaling := renderAutoscaling(app, vars["NAMESPACE"]); autoscaling != nil {
-			out, err := yaml.Marshal(autoscaling)
-			if err != nil {
-				return Result{}, err
-			}
 			outPath := filepath.Join(deploymentsDir, app.Name+"-hpa.yml")
-			if err := os.WriteFile(outPath, out, 0o644); err != nil {
+			if err := writeRenderedObject(outPath, autoscaling, opts, syncMetadataSpec{ID: syncObjectID(opts, "HorizontalPodAutoscaler", vars["NAMESPACE"], app.Name), Order: 210}); err != nil {
 				return Result{}, err
 			}
 			result.Autoscaling = append(result.Autoscaling, outPath)
@@ -666,6 +640,144 @@ func Build(opts Options) (Result, error) {
 	}
 
 	return result, nil
+}
+
+func writeRenderedObject(path string, object map[string]any, opts Options, syncSpec syncMetadataSpec) error {
+	if err := applySyncMetadata(object, opts, syncSpec); err != nil {
+		return err
+	}
+	out, err := yaml.Marshal(object)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, out, 0o644)
+}
+
+func applySyncMetadata(object map[string]any, opts Options, spec syncMetadataSpec) error {
+	profile := strings.TrimSpace(opts.SyncProfile)
+	if profile == "" || profile == "none" {
+		return nil
+	}
+	if profile != "kube-deploy-sync" && profile != "argocd" {
+		return fmt.Errorf("unsupported sync metadata profile: %s", profile)
+	}
+	if strings.TrimSpace(spec.ID) == "" {
+		return errors.New("sync metadata id is required")
+	}
+	prefix := syncMetadataPrefix(opts)
+	syncSet := syncMetadataSet(opts)
+	metadata := ensureMap(object, "metadata")
+	labels := ensureMap(metadata, "labels")
+	annotations := ensureMap(metadata, "annotations")
+
+	labels["app.kubernetes.io/managed-by"] = "kube-build-app"
+	labels[prefix+"/sync-set"] = syncSet
+	labels[prefix+"/sync-id-hash"] = shortSyncIDHash(spec.ID)
+	annotations[prefix+"/sync-id"] = spec.ID
+	annotations[prefix+"/sync-order"] = strconv.Itoa(spec.Order)
+	if profile == "argocd" {
+		if _, ok := annotations["argocd.argoproj.io/sync-wave"]; !ok {
+			annotations["argocd.argoproj.io/sync-wave"] = strconv.Itoa(spec.Order)
+		}
+	}
+
+	hash, err := canonicalObjectHash(object, prefix)
+	if err != nil {
+		return err
+	}
+	annotations[prefix+"/sync-hash"] = hash
+	return nil
+}
+
+func syncMetadataPrefix(opts Options) string {
+	if prefix := strings.TrimSpace(opts.SyncPrefix); prefix != "" {
+		return strings.TrimSuffix(prefix, "/")
+	}
+	return "kube-build-app.io"
+}
+
+func syncMetadataSet(opts Options) string {
+	if syncSet := strings.TrimSpace(opts.SyncSet); syncSet != "" {
+		return syncSet
+	}
+	return strings.TrimSpace(opts.Environment)
+}
+
+func syncObjectID(opts Options, kind string, namespace string, name string) string {
+	return strings.Join([]string{syncMetadataSet(opts), strings.TrimSpace(kind), strings.TrimSpace(namespace), strings.TrimSpace(name)}, "/")
+}
+
+func syncAssetID(opts Options, namespace string, appName string, asset resolvedAsset, shared bool) string {
+	source := strings.TrimSpace(asset.SourceFile)
+	if source == "" {
+		source = strings.TrimSpace(asset.VolumeName)
+	}
+	if shared {
+		return strings.Join([]string{syncMetadataSet(opts), "shared", "asset", strings.TrimSpace(namespace), source + ":" + strings.TrimSpace(asset.To)}, "/")
+	}
+	return strings.Join([]string{syncMetadataSet(opts), "app", strings.TrimSpace(appName), "container", strings.TrimSpace(asset.ContainerName), "asset", source + ":" + strings.TrimSpace(asset.To)}, "/")
+}
+
+func externalKindName(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "ingress":
+		return "Ingress"
+	case "route":
+		return "Route"
+	default:
+		return strings.TrimSpace(kind)
+	}
+}
+
+func shortSyncIDHash(syncID string) string {
+	sum := sha256.Sum256([]byte(syncID))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+func canonicalObjectHash(object map[string]any, prefix string) (string, error) {
+	copyObject, err := deepCopyMap(object)
+	if err != nil {
+		return "", err
+	}
+	delete(copyObject, "status")
+	if metadata, ok := copyObject["metadata"].(map[string]any); ok {
+		for _, key := range []string{"creationTimestamp", "resourceVersion", "uid", "generation", "managedFields"} {
+			delete(metadata, key)
+		}
+		if annotations, ok := metadata["annotations"].(map[string]any); ok {
+			delete(annotations, strings.TrimSuffix(prefix, "/")+"/sync-hash")
+			if len(annotations) == 0 {
+				delete(metadata, "annotations")
+			}
+		}
+	}
+	canonical, err := json.Marshal(copyObject)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(canonical)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func deepCopyMap(value map[string]any) (map[string]any, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func ensureMap(parent map[string]any, key string) map[string]any {
+	if existing, ok := parent[key].(map[string]any); ok {
+		return existing
+	}
+	next := map[string]any{}
+	parent[key] = next
+	return next
 }
 
 func Inventory(opts Options) (map[string]any, error) {
@@ -2957,6 +3069,7 @@ func resolveAsset(appName string, containerName string, spec assetSpec, envDir s
 		VolumeName:    containerName + "-asset-" + digest,
 		ConfigMapKey:  key,
 		ContainerName: containerName,
+		SourceFile:    spec.File,
 		To:            spec.To,
 		Content:       renderedContent,
 		Binary:        spec.Binary,
@@ -3240,6 +3353,11 @@ type renderedExternal struct {
 	Name   string
 	Kind   string
 	Object map[string]any
+}
+
+type syncMetadataSpec struct {
+	ID    string
+	Order int
 }
 
 func renderServices(app appModel, namespace string, environment string) []renderedService {

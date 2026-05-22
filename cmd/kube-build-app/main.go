@@ -27,6 +27,9 @@ type cliOptions struct {
 	varsSources      []string
 	helmEscapeAssets bool
 	releaseManifest  string
+	syncProfile      string
+	syncPrefix       string
+	syncSet          string
 	down             []string
 	list             bool
 	summary          bool
@@ -84,6 +87,9 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.PersistentFlags().StringArrayVar(&opts.varsSources, "vars-source", nil, "variable source(s): env, json, dot-env; repeatable or comma-separated")
 	root.PersistentFlags().BoolVar(&opts.helmEscapeAssets, "helm-escape-assets", false, "escape remaining {{VAR}} placeholders in text assets")
 	root.PersistentFlags().StringVarP(&opts.releaseManifest, "release-manifest", "r", "", "release manifest YAML path")
+	root.PersistentFlags().StringVar(&opts.syncProfile, "sync-metadata-profile", "", "sync metadata profile: none, kube-deploy-sync, argocd")
+	root.PersistentFlags().StringVar(&opts.syncPrefix, "sync-metadata-prefix", "kube-build-app.io", "sync metadata label/annotation prefix")
+	root.PersistentFlags().StringVar(&opts.syncSet, "sync-set", "", "sync metadata set name; defaults to environment")
 	root.PersistentFlags().StringArrayVarP(&opts.down, "down", "w", nil, "scale app replicas down to 0; repeatable or comma-separated")
 	root.PersistentFlags().BoolVarP(&opts.debug, "debug", "b", false, "debug output compatibility flag")
 	root.PersistentFlags().BoolVar(&opts.verbose, "verbose", false, "print build render events to stderr")
@@ -411,6 +417,9 @@ func toBuildOptions(opts *cliOptions) buildapp.Options {
 		VarsSources:      opts.varsSources,
 		HelmEscapeAssets: opts.helmEscapeAssets,
 		ReleaseManifest:  opts.releaseManifest,
+		SyncProfile:      opts.syncProfile,
+		SyncPrefix:       opts.syncPrefix,
+		SyncSet:          opts.syncSet,
 		Down:             opts.down,
 	}
 }
