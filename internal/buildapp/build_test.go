@@ -58,7 +58,7 @@ containers:
             port: 80
 `)
 
-	result, err := Build(Options{Environment: "test", Root: root, Target: target, SyncProfile: "kube-deploy-sync"})
+	result, err := Build(Options{Environment: "test", Root: root, Target: target})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ containers:
         to: "256Mi"
 `)
 
-	result, err := Build(Options{Environment: "test", Root: root, Target: target, SyncProfile: "kube-deploy-sync"})
+	result, err := Build(Options{Environment: "test", Root: root, Target: target})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2091,6 +2091,34 @@ containers:
 	}
 }
 
+func TestBuildDoesNotAddSyncMetadataByDefault(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeMinimalApp(t, envDir, "api.yml", `
+name: api
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "metadata", "annotations", "kube-build-app.io/sync-id"); got != "" {
+		t.Fatalf("default build emitted sync-id = %q", got)
+	}
+	if got := digString(deployment, "metadata", "labels", "kube-build-app.io/sync-set"); got != "" {
+		t.Fatalf("default build emitted sync-set = %q", got)
+	}
+}
+
 func TestBuildAddsSyncMetadataProfile(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
@@ -2141,6 +2169,61 @@ containers:
 	}
 	configMap := loadYAML(t, result.Assets[0])
 	assertSyncMetadata(t, configMap, "test/app/api/container/api/asset/assets/app.conf:/app/app.conf", "100")
+}
+
+func TestBuildSyncMetadataSupportsCustomPrefixAndSyncSet(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeMinimalApp(t, envDir, "api.yml", `
+name: api
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target, SyncProfile: "kube-deploy-sync", SyncPrefix: "sync.example.test", SyncSet: "release-2026.20"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "metadata", "labels", "sync.example.test/sync-set"); got != "release-2026.20" {
+		t.Fatalf("custom sync-set = %q, want release-2026.20", got)
+	}
+	if got := digString(deployment, "metadata", "annotations", "sync.example.test/sync-id"); got != "release-2026.20/Deployment/nac-test/api" {
+		t.Fatalf("custom sync-id = %q", got)
+	}
+	if got := digString(deployment, "metadata", "annotations", "sync.example.test/sync-hash"); !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("custom sync-hash = %q, want sha256 prefix", got)
+	}
+}
+
+func TestBuildRejectsUnsupportedSyncMetadataProfile(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeMinimalApp(t, envDir, "api.yml", `
+name: api
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target, SyncProfile: "unknown-syncer"})
+	if err == nil {
+		t.Fatal("expected unsupported sync metadata profile error")
+	}
+	if !strings.Contains(err.Error(), "unsupported sync metadata profile") {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func TestBuildSyncMetadataKeepsAssetSyncIDStableAcrossContentHashName(t *testing.T) {

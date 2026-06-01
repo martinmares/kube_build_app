@@ -30,6 +30,8 @@ Those may be revisited later only with a separate design.
 
 ### 1. Read-only cluster panel
 
+Status: first `kube-edit-app` implementation added.
+
 Source idea:
 
 - `internal/opsapp/cluster`
@@ -42,6 +44,7 @@ Target in `kube-edit-app`:
 - Show namespace, deployments, pods, services, readiness counts and last refresh time.
 - Auto-refresh periodically after environment selection.
 - Keep it read-only; no apply, no scale, no restart.
+- Enabled explicitly by `kube-edit-app serve --cluster-status`; hidden by default.
 
 Open design points:
 

@@ -24,6 +24,9 @@ type cliOptions struct {
 	encjsonPath       string
 	encjsonLegacyPath string
 	encjsonKeydir     string
+	clusterStatus     bool
+	kubeconfig        string
+	kubeContext       string
 	showVersion       bool
 }
 
@@ -75,6 +78,9 @@ func newServeCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	cmd.Flags().StringVar(&opts.encjsonPath, "encjson-path", os.Getenv("ENCJSON_PATH"), "modern EncJson binary path")
 	cmd.Flags().StringVar(&opts.encjsonLegacyPath, "encjson-legacy-path", os.Getenv("ENCJSON_LEGACY_PATH"), "legacy EncJson binary path")
 	cmd.Flags().StringVar(&opts.encjsonKeydir, "encjson-keydir", os.Getenv("ENCJSON_KEYDIR"), "optional EncJson key directory")
+	cmd.Flags().BoolVar(&opts.clusterStatus, "cluster-status", false, "enable read-only Kubernetes namespace status panel")
+	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", os.Getenv("KUBECONFIG"), "optional kubeconfig path for read-only cluster status")
+	cmd.Flags().StringVar(&opts.kubeContext, "context", "", "optional kubeconfig context for read-only cluster status")
 	return cmd
 }
 
@@ -97,6 +103,9 @@ func runServe(_ *cobra.Command, info appinfo.Info, opts *cliOptions) error {
 		EncjsonPath:       opts.encjsonPath,
 		EncjsonLegacyPath: opts.encjsonLegacyPath,
 		EncjsonKeydir:     opts.encjsonKeydir,
+		ClusterStatus:     opts.clusterStatus,
+		Kubeconfig:        opts.kubeconfig,
+		KubeContext:       opts.kubeContext,
 	}
 	server := webapp.NewServer(info, repo, serverOpts)
 	if err := server.ListenAndServe(opts.listen); err != nil && !errors.Is(err, http.ErrServerClosed) {

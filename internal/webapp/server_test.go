@@ -745,6 +745,56 @@ func TestBuildReadOnlyEndpoints(t *testing.T) {
 	}
 }
 
+func TestClusterStatusEndpointDisabledByDefault(t *testing.T) {
+	root := t.TempDir()
+	writeBuildFixture(t, root)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/cluster", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"enabled":false`) {
+		t.Fatalf("unexpected response:\n%s", response.Body.String())
+	}
+}
+
+func TestClusterStatusEndpointUsesNamespaceFromEnv(t *testing.T) {
+	root := t.TempDir()
+	writeBuildFixture(t, root)
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "kubectl"), []byte(fakeClusterKubectlScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ClusterStatus: true})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/cluster", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, expected := range []string{`"enabled":true`, `"namespace":"nac-test"`, `"deployment_count":1`, `"ready_pods":1`, `"service_count":1`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("response missing %s:\n%s", expected, body)
+		}
+	}
+}
+
 func TestBuildPreviewContentEndpoint(t *testing.T) {
 	root := t.TempDir()
 	writeBuildFixture(t, root)
@@ -874,6 +924,39 @@ containers:
         to: "256Mi"
 `)
 }
+
+const fakeClusterKubectlScript = `#!/bin/sh
+resource=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "get" ]; then
+    resource="$arg"
+    break
+  fi
+  prev="$arg"
+done
+case "$resource" in
+  deployments)
+    cat <<'JSON'
+{"items":[{"metadata":{"name":"api"},"spec":{"replicas":1},"status":{"readyReplicas":1,"availableReplicas":1,"updatedReplicas":1}}]}
+JSON
+    ;;
+  pods)
+    cat <<'JSON'
+{"items":[{"metadata":{"name":"api-1"},"status":{"phase":"Running","containerStatuses":[{"ready":true,"restartCount":0}]}}]}
+JSON
+    ;;
+  services)
+    cat <<'JSON'
+{"items":[{"metadata":{"name":"api"},"spec":{"type":"ClusterIP","clusterIP":"10.0.0.1","ports":[{"port":80,"targetPort":8080,"protocol":"TCP"}]}}]}
+JSON
+    ;;
+  *)
+    echo "unexpected resource $resource" >&2
+    exit 2
+    ;;
+esac
+`
 
 func TestDefaultsUpdateEndpoints(t *testing.T) {
 	root := t.TempDir()

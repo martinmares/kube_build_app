@@ -118,6 +118,21 @@
                     </div>
                   </div>
                 </div>
+                <div class="card mb-3 hidden" id="cluster-status-card">
+                  <div class="card-header">
+                    <div>
+                      <h3 class="card-title">Runtime snapshot</h3>
+                      <div class="text-muted small">Read-only Kubernetes namespace status from kubectl.</div>
+                    </div>
+                    <div class="card-actions">
+                      <span class="badge bg-secondary-lt" id="cluster-status-updated">not loaded</span>
+                      <button class="btn btn-sm btn-outline-secondary" id="cluster-refresh-btn" type="button"><i class="ti ti-refresh me-1"></i>Refresh</button>
+                    </div>
+                  </div>
+                  <div class="card-body" id="cluster-status-body">
+                    <div class="text-muted">Cluster status is not loaded.</div>
+                  </div>
+                </div>
                 <div class="card mb-3">
                   <div class="card-header"><div><h3 class="card-title">Generated files</h3><div class="text-muted small">Build preview renders into a temporary directory and lists generated manifests without touching deploy output.</div></div></div>
                   <div class="card-body">

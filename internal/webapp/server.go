@@ -24,6 +24,7 @@ import (
 
 	"kube-env/internal/appinfo"
 	"kube-env/internal/buildapp"
+	"kube-env/internal/opsapp/cluster"
 	"kube-env/internal/repository"
 )
 
@@ -93,6 +94,9 @@ type Options struct {
 	EncjsonPath       string
 	EncjsonLegacyPath string
 	EncjsonKeydir     string
+	ClusterStatus     bool
+	Kubeconfig        string
+	KubeContext       string
 }
 
 func NewServer(info appinfo.Info, repo *repository.Repository, options ...Options) *Server {
@@ -145,6 +149,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/envs/{env}/inventory", s.handleBuildInventory)
 	mux.HandleFunc("POST /api/v1/envs/{env}/preview", s.handleBuildPreview)
 	mux.HandleFunc("GET /api/v1/envs/{env}/preview/{preview_id}/content/{file_path...}", s.handleBuildPreviewContent)
+	mux.HandleFunc("GET /api/v1/envs/{env}/cluster", s.handleClusterStatus)
 	return mux
 }
 
@@ -185,6 +190,11 @@ func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 		"date":      s.info.Date,
 		"base_path": s.options.BasePath,
 		"read_only": s.options.ReadOnly,
+		"cluster_status": map[string]any{
+			"enabled":      s.options.ClusterStatus,
+			"kubeconfig":   s.options.Kubeconfig != "",
+			"kube_context": s.options.KubeContext,
+		},
 	})
 }
 
@@ -1020,6 +1030,54 @@ func (s *Server) handleBuildPreviewContent(w http.ResponseWriter, r *http.Reques
 		Binary:      binary,
 		Truncated:   truncated,
 	})
+}
+
+func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if !s.options.ClusterStatus {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		return
+	}
+	namespace, err := s.environmentNamespace(r.PathValue("env"))
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	summary, err := cluster.InspectNamespace(r.Context(), namespace, cluster.Options{Kubeconfig: s.options.Kubeconfig, Context: s.options.KubeContext})
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "updated_at": time.Now(), "cluster": summary})
+}
+
+func (s *Server) environmentNamespace(env string) (string, error) {
+	env = strings.TrimSpace(env)
+	if env == "" {
+		return "", errors.New("environment is required")
+	}
+	envDir := filepath.Join(s.repo.Root(), env)
+	if !strings.HasPrefix(envDir, s.repo.Root()+string(os.PathSeparator)) {
+		return "", errors.New("invalid environment path")
+	}
+	content, err := os.ReadFile(filepath.Join(envDir, "env.unsecured.json"))
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		Environment map[string]any `json:"environment"`
+	}
+	if err := json.Unmarshal(content, &payload); err != nil {
+		return "", err
+	}
+	namespace := strings.TrimSpace(fmt.Sprint(payload.Environment["NAMESPACE"]))
+	if namespace == "" || namespace == "<nil>" {
+		return "", fmt.Errorf("environment %q does not define NAMESPACE in env.unsecured.json", env)
+	}
+	return namespace, nil
 }
 
 func previewFiles(root string) ([]buildPreviewFile, error) {

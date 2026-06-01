@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -226,6 +226,7 @@ async function init() {
   qs('#assets-filter')?.addEventListener('input', () => renderAssets());
   qs('#build-validate-btn')?.addEventListener('click', () => runBuildValidate());
   qs('#build-refresh-btn')?.addEventListener('click', () => loadBuildData());
+  qs('#cluster-refresh-btn')?.addEventListener('click', () => loadClusterStatus({force: true}));
   qs('#build-preview-btn')?.addEventListener('click', () => loadBuildPreview());
   qs('#build-preview-tree')?.addEventListener('click', (e) => handleBuildPreviewTreeClick(e));
   qs('#build-preview-filter')?.addEventListener('input', () => renderBuildPreview(state.buildPreview));
@@ -288,6 +289,9 @@ async function init() {
   qs('#edit-modal')?.addEventListener('click', (e) => handleEditModalClick(e));
   qs('#edit-modal')?.addEventListener('input', (e) => handleEditModalInput(e));
   qs('#value-edit-apply')?.addEventListener('click', () => applySpecialValueDialog());
+  window.setInterval(() => {
+    if (state.clusterStatusEnabled && state.env && state.active === 'build') loadClusterStatus();
+  }, 15000);
   await loadAll();
 }
 async function loadAll() {
@@ -295,7 +299,9 @@ async function loadAll() {
   try {
     const info = await api('/api/v1/info');
     state.readOnly = !!info.read_only;
+    state.clusterStatusEnabled = !!info.cluster_status?.enabled;
     document.body.classList.toggle('read-only-mode', state.readOnly);
+    qs('#cluster-status-card')?.classList.toggle('hidden', !state.clusterStatusEnabled);
     setText('#app-version', formatAppVersion(info));
     qs('#read-only-badge').classList.toggle('hidden', !info.read_only);
     qs('#write-mode-badge')?.classList.toggle('hidden', !!info.read_only);
@@ -788,9 +794,12 @@ function resetBuildView() {
 	state.buildPreviewContent = null;
 	state.buildPreviewOpenDirs = new Set();
 	state.buildChecks = {};
+	state.clusterStatus = null;
+	state.clusterStatusLoading = false;
 	setBuildStatus('info', 'Select an environment and run a build check.');
 	setBuildDataEnv(null);
 	renderBuildWorkflow();
+	renderClusterStatus(null);
 	setHTML('#build-totals', '');
   const summaryBody = qs('#build-summary-table tbody');
   if (summaryBody) summaryBody.innerHTML = '<tr><td colspan="9" class="text-muted">No summary loaded.</td></tr>';
@@ -2697,8 +2706,26 @@ async function loadBuildData() {
   if (!state.env) return;
   clearError();
   try {
-    await Promise.all([loadBuildSummary(), loadBuildInventory()]);
+    await Promise.all([loadBuildSummary(), loadBuildInventory(), loadClusterStatus()]);
   } catch (e) { showError(e); }
+}
+async function loadClusterStatus(options = {}) {
+  if (!state.clusterStatusEnabled || !state.env || state.clusterStatusLoading && !options.force) return;
+  const env = state.env;
+  state.clusterStatusLoading = true;
+  renderClusterStatus(state.clusterStatus, true);
+  try {
+    const status = await api(`/api/v1/envs/${encodeURIComponent(env)}/cluster`);
+    if (state.env !== env) return;
+    state.clusterStatus = status;
+    renderClusterStatus(status, false);
+  } catch (e) {
+    if (state.env !== env) return;
+    state.clusterStatus = {enabled: true, error: String(e)};
+    renderClusterStatus(state.clusterStatus, false);
+  } finally {
+    if (state.env === env) state.clusterStatusLoading = false;
+  }
 }
 function setBuildStatus(kind, text, html = false) {
   const el = qs('#build-status');
@@ -2759,6 +2786,65 @@ function buildCheckText(items, fallback) {
 function formatTime(value) {
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+}
+function renderClusterStatus(payload, loading = false) {
+  const card = qs('#cluster-status-card');
+  if (!card) return;
+  card.classList.toggle('hidden', !state.clusterStatusEnabled);
+  if (!state.clusterStatusEnabled) return;
+  const body = qs('#cluster-status-body');
+  const updated = qs('#cluster-status-updated');
+  if (updated) {
+    updated.className = `badge ${loading ? 'bg-blue-lt' : payload?.cluster?.available ? 'bg-green-lt' : payload?.error || payload?.cluster?.error ? 'bg-red-lt' : 'bg-secondary-lt'}`;
+    updated.textContent = loading ? 'loading' : payload?.updated_at ? `updated ${formatTime(payload.updated_at)}` : 'not loaded';
+  }
+  if (!body) return;
+  if (loading && !payload) {
+    body.innerHTML = '<div class="text-muted">Loading runtime snapshot...</div>';
+    return;
+  }
+  if (!payload) {
+    body.innerHTML = '<div class="text-muted">Cluster status is not loaded.</div>';
+    return;
+  }
+  if (payload.enabled === false) {
+    body.innerHTML = '<div class="text-muted">Cluster status is disabled.</div>';
+    return;
+  }
+  if (payload.error) {
+    body.innerHTML = `<div class="alert alert-danger mb-0">${esc(payload.error)}</div>`;
+    return;
+  }
+  const cluster = payload.cluster || {};
+  if (!cluster.available) {
+    body.innerHTML = `<div class="alert alert-warning mb-0">${esc(cluster.error || 'Cluster status is unavailable.')}</div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div class="row g-2 mb-3">
+      ${metricCard('Namespace', cluster.namespace || '-')}
+      ${metricCard('Deployments', `${cluster.ready_deployments ?? 0}/${cluster.deployment_count ?? 0} ready`)}
+      ${metricCard('Pods', `${cluster.ready_pods ?? 0}/${cluster.pod_count ?? 0} ready`)}
+      ${metricCard('Services', cluster.service_count ?? 0)}
+    </div>
+    <div class="row g-3">
+      ${runtimeList('Deployments', cluster.deployments || [], (item) => `
+        <div class="runtime-row-main">${esc(item.name)}</div>
+        <div class="runtime-row-meta"><span class="badge bg-green-lt">${esc(item.ready ?? 0)}/${esc(item.desired ?? 0)}</span><span>${esc(item.updated ?? 0)} updated</span></div>`)}
+      ${runtimeList('Pods', cluster.pods || [], (item) => `
+        <div class="runtime-row-main">${esc(item.name)}</div>
+        <div class="runtime-row-meta"><span class="badge ${item.phase === 'Running' ? 'bg-green-lt' : 'bg-yellow-lt'}">${esc(item.phase || '?')}</span><span>${esc(item.ready || '-')}</span><span>${esc(item.restarts ?? 0)} restarts</span></div>`)}
+      ${runtimeList('Services', cluster.services || [], (item) => `
+        <div class="runtime-row-main">${esc(item.name)}</div>
+        <div class="runtime-row-meta"><span class="badge bg-secondary-lt">${esc(item.type || '?')}</span><span>${esc(item.cluster_ip || '-')}</span><span>${esc(item.ports || '-')}</span></div>`)}
+    </div>`;
+}
+function metricCard(label, value) {
+  return `<div class="col-6 col-xl-3"><div class="metric-card"><div class="overview-subtitle">${esc(label)}</div><div class="fs-3 fw-semibold">${esc(value)}</div></div></div>`;
+}
+function runtimeList(title, items, renderItem) {
+  const rows = items.length ? items.map((item) => `<div class="runtime-row">${renderItem(item)}</div>`).join('') : '<div class="text-muted small">No data.</div>';
+  return `<div class="col-12 col-xl-4"><h4 class="mb-2">${esc(title)}</h4><div class="runtime-list">${rows}</div></div>`;
 }
 function formatBuildError(message) {
   const text = String(message || '');
