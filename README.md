@@ -53,6 +53,39 @@ Recommended editing flow:
 
 Read-only mode still renders structured previews, build checks, generated file preview and diffs, but mutating controls are hidden or disabled and mutating API endpoints return `403`. This is the preferred mode for review, L2 inspection and dashboards. Use `--allow-write` only for intentional repository edits.
 
+### Trusted Proxy Authentication
+
+`kube-edit-app` can be protected by a trusted reverse proxy that authenticates
+the browser and forwards identity through `X-Auth-*` headers:
+
+```bash
+kube-edit-app serve \
+  --root ./environments \
+  --trusted-proxy-auth
+```
+
+Environment variables are also supported:
+
+```bash
+KUBE_EDIT_TRUSTED_PROXY_AUTH=true
+KUBE_EDIT_AUTH_HEADER_USER=X-Auth-User
+KUBE_EDIT_AUTH_HEADER_EMAIL=X-Auth-Email
+KUBE_EDIT_AUTH_HEADER_GROUPS=X-Auth-Groups
+KUBE_EDIT_AUTH_GROUP_PREFIX=kube-edit-app
+```
+
+Supported groups:
+
+- `kube-edit-app:role:admin`
+- `kube-edit-app:env:*:reader`
+- `kube-edit-app:env:*:writer`
+- `kube-edit-app:env:<env>:reader`
+- `kube-edit-app:env:<env>:writer`
+
+`reader` can inspect the allowed environments. `writer` can modify the allowed
+environments when the server is also started with `--allow-write`. Global Git
+commit/restore operations require `kube-edit-app:role:admin`.
+
 `env.secured.json` can be edited through the EncJson flow when `kube-edit-app` is started with configured EncJson paths. Existing encrypted values are preserved; newly added plaintext values are left for the EncJson tool to encrypt.
 
 ## Metamodel Goal

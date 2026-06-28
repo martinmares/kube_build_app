@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -27,6 +28,11 @@ type cliOptions struct {
 	clusterStatus     bool
 	kubeconfig        string
 	kubeContext       string
+	trustedProxy      bool
+	authHeaderUser    string
+	authHeaderEmail   string
+	authHeaderGroups  string
+	authGroupPrefix   string
 	showVersion       bool
 }
 
@@ -81,6 +87,11 @@ func newServeCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.clusterStatus, "cluster-status", false, "enable read-only Kubernetes namespace status panel")
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", os.Getenv("KUBECONFIG"), "optional kubeconfig path for read-only cluster status")
 	cmd.Flags().StringVar(&opts.kubeContext, "context", "", "optional kubeconfig context for read-only cluster status")
+	cmd.Flags().BoolVar(&opts.trustedProxy, "trusted-proxy-auth", envBool("KUBE_EDIT_TRUSTED_PROXY_AUTH"), "enable trusted proxy X-Auth-* authentication")
+	cmd.Flags().StringVar(&opts.authHeaderUser, "auth-header-user", envDefault("KUBE_EDIT_AUTH_HEADER_USER", "X-Auth-User"), "trusted proxy username header")
+	cmd.Flags().StringVar(&opts.authHeaderEmail, "auth-header-email", envDefault("KUBE_EDIT_AUTH_HEADER_EMAIL", "X-Auth-Email"), "trusted proxy email header")
+	cmd.Flags().StringVar(&opts.authHeaderGroups, "auth-header-groups", envDefault("KUBE_EDIT_AUTH_HEADER_GROUPS", "X-Auth-Groups"), "trusted proxy groups header")
+	cmd.Flags().StringVar(&opts.authGroupPrefix, "auth-group-prefix", envDefault("KUBE_EDIT_AUTH_GROUP_PREFIX", "kube-edit-app"), "trusted proxy group prefix")
 	return cmd
 }
 
@@ -106,6 +117,13 @@ func runServe(_ *cobra.Command, info appinfo.Info, opts *cliOptions) error {
 		ClusterStatus:     opts.clusterStatus,
 		Kubeconfig:        opts.kubeconfig,
 		KubeContext:       opts.kubeContext,
+		TrustedProxyAuth: webapp.TrustedProxyAuthOptions{
+			Enabled:      opts.trustedProxy,
+			HeaderUser:   opts.authHeaderUser,
+			HeaderEmail:  opts.authHeaderEmail,
+			HeaderGroups: opts.authHeaderGroups,
+			GroupPrefix:  opts.authGroupPrefix,
+		},
 	}
 	server := webapp.NewServer(info, repo, serverOpts)
 	if err := server.ListenAndServe(opts.listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -113,6 +131,18 @@ func runServe(_ *cobra.Command, info appinfo.Info, opts *cliOptions) error {
 		return err
 	}
 	return nil
+}
+
+func envDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func envBool(name string) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
 }
 
 func printJSON(cmd *cobra.Command, payload any) error {

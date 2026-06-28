@@ -97,6 +97,15 @@ type Options struct {
 	ClusterStatus     bool
 	Kubeconfig        string
 	KubeContext       string
+	TrustedProxyAuth  TrustedProxyAuthOptions
+}
+
+type TrustedProxyAuthOptions struct {
+	Enabled      bool
+	HeaderUser   string
+	HeaderEmail  string
+	HeaderGroups string
+	GroupPrefix  string
 }
 
 func NewServer(info appinfo.Info, repo *repository.Repository, options ...Options) *Server {
@@ -107,6 +116,7 @@ func NewServer(info appinfo.Info, repo *repository.Repository, options ...Option
 	if opts.BasePath == "" {
 		opts.BasePath = "/"
 	}
+	opts.TrustedProxyAuth = normalizeTrustedProxyAuth(opts.TrustedProxyAuth)
 	return &Server{info: info, repo: repo, options: opts, buildPreviewDirs: map[string]buildPreviewSnapshot{}}
 }
 
@@ -150,7 +160,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/envs/{env}/preview", s.handleBuildPreview)
 	mux.HandleFunc("GET /api/v1/envs/{env}/preview/{preview_id}/content/{file_path...}", s.handleBuildPreviewContent)
 	mux.HandleFunc("GET /api/v1/envs/{env}/cluster", s.handleClusterStatus)
-	return mux
+	return s.authMiddleware(mux)
 }
 
 func (s *Server) ListenAndServe(addr string) error {
@@ -270,7 +280,7 @@ func (s *Server) handleGitCommit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) handleEnvironments(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleEnvironments(w http.ResponseWriter, r *http.Request) {
 	if s.repo == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
 		return
@@ -280,6 +290,7 @@ func (s *Server) handleEnvironments(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	environments = s.filterEnvironmentsForRequest(r, environments)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"root":  s.repo.Root(),
 		"items": environments,

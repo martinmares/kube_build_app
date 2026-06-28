@@ -41,6 +41,39 @@ Doporučený postup editace:
 
 Read-only režim stále zobrazuje strukturované preview, build checks, generated file preview a diffy, ale mutační prvky jsou schované nebo vypnuté a mutační API endpointy vrací `403`. Je to preferovaný režim pro review, L2 kontrolu a dashboardy. `--allow-write` používejte jen pro záměrné editace repozitáře.
 
+### Trusted Proxy Autentizace
+
+`kube-edit-app` lze chránit přes důvěryhodnou reverse proxy, která provede
+autentizaci v browseru a předá identitu přes `X-Auth-*` hlavičky:
+
+```bash
+kube-edit-app serve \
+  --root ./environments \
+  --trusted-proxy-auth
+```
+
+Podporované jsou i environment proměnné:
+
+```bash
+KUBE_EDIT_TRUSTED_PROXY_AUTH=true
+KUBE_EDIT_AUTH_HEADER_USER=X-Auth-User
+KUBE_EDIT_AUTH_HEADER_EMAIL=X-Auth-Email
+KUBE_EDIT_AUTH_HEADER_GROUPS=X-Auth-Groups
+KUBE_EDIT_AUTH_GROUP_PREFIX=kube-edit-app
+```
+
+Podporované skupiny:
+
+- `kube-edit-app:role:admin`
+- `kube-edit-app:env:*:reader`
+- `kube-edit-app:env:*:writer`
+- `kube-edit-app:env:<env>:reader`
+- `kube-edit-app:env:<env>:writer`
+
+`reader` může prohlížet povolené environmenty. `writer` může povolené environmenty
+měnit, pokud je server zároveň spuštěný s `--allow-write`. Globální Git commit/restore
+operace vyžadují `kube-edit-app:role:admin`.
+
 `env.secured.json` lze editovat přes EncJson flow, pokud je `kube-edit-app` spuštěný s nakonfigurovanými EncJson cestami. Existující encrypted hodnoty se zachovají; nově přidané plaintext hodnoty zůstávají pro zašifrování nástrojem EncJson.
 
 ## Cíl Metamodelu
