@@ -1902,6 +1902,94 @@ containers:
 	}
 }
 
+func TestBuildAppliesImageOverrideOverReleaseManifest(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	manifestPath := filepath.Join(root, "release.yml")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, manifestPath, `
+images:
+  - app_name: api
+    container_name: api
+    image: registry.release/api
+    tag: "2.0.0"
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	_, err := Build(Options{
+		Environment:     "test",
+		Root:            root,
+		Target:          target,
+		ReleaseManifest: manifestPath,
+		ImageOverrides:  []string{"api/api=registry.cli/api@sha256:1234"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	api := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(api, "spec", "template", "spec", "containers", "0", "image"); got != "registry.cli/api@sha256:1234" {
+		t.Fatalf("api image = %q", got)
+	}
+}
+
+func TestBuildImagePolicyStrictRequiresOverride(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeMinimalApp(t, envDir, "api.yml", `
+name: api
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target, ImagePolicy: "strict"})
+	if err == nil || !strings.Contains(err.Error(), "image override missing for api/app") {
+		t.Fatalf("err = %v, want missing strict image override", err)
+	}
+}
+
+func TestBuildReleaseManifestMustExistWhenSpecified(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeMinimalApp(t, envDir, "api.yml", `
+name: api
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: filepath.Join(root, "missing.yml")})
+	if err == nil || !strings.Contains(err.Error(), "release manifest not found") {
+		t.Fatalf("err = %v, want missing release manifest", err)
+	}
+}
+
 func TestInventoryContainsProfilesAndMTLSPaths(t *testing.T) {
 	root := t.TempDir()
 	envDir := filepath.Join(root, "test")

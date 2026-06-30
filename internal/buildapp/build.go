@@ -33,6 +33,8 @@ type Options struct {
 	VarsSources      []string
 	HelmEscapeAssets bool
 	ReleaseManifest  string
+	ImageOverrides   []string
+	ImagePolicy      string
 	SyncProfile      string
 	SyncPrefix       string
 	SyncSet          string
@@ -528,7 +530,7 @@ func Build(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := applyReleaseManifest(apps, opts.ReleaseManifest); err != nil {
+	if err := applyImageOverrides(apps, opts); err != nil {
 		return Result{}, err
 	}
 	if err := applyReplicaProfile(apps, envDir, opts); err != nil {
@@ -804,7 +806,7 @@ func Inventory(opts Options) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := applyReleaseManifest(apps, opts.ReleaseManifest); err != nil {
+	if err := applyImageOverrides(apps, opts); err != nil {
 		return nil, err
 	}
 	if err := validateApps(apps); err != nil {
@@ -892,7 +894,7 @@ func Validate(opts Options) error {
 	if err != nil {
 		return err
 	}
-	if err := applyReleaseManifest(apps, opts.ReleaseManifest); err != nil {
+	if err := applyImageOverrides(apps, opts); err != nil {
 		return err
 	}
 	if err := applyReplicaProfile(apps, envDir, opts); err != nil {
@@ -1043,7 +1045,7 @@ func loadPreparedApps(opts Options, applyProfileAndDown bool) ([]appModel, strin
 	if err != nil {
 		return nil, "", nil, err
 	}
-	if err := applyReleaseManifest(apps, opts.ReleaseManifest); err != nil {
+	if err := applyImageOverrides(apps, opts); err != nil {
 		return nil, "", nil, err
 	}
 	if applyProfileAndDown {
@@ -1595,22 +1597,97 @@ func applyScaleDown(apps []appModel, down []string) {
 	}
 }
 
-func applyReleaseManifest(apps []appModel, path string) error {
-	if strings.TrimSpace(path) == "" {
-		return nil
+func applyImageOverrides(apps []appModel, opts Options) error {
+	policy := normalizeImagePolicy(opts.ImagePolicy)
+	if policy != "fallback" && policy != "strict" {
+		return fmt.Errorf("invalid image policy %q: expected fallback or strict", opts.ImagePolicy)
 	}
-	manifest, err := loadReleaseManifest(path)
+	images := map[imageKey]string{}
+	if strings.TrimSpace(opts.ReleaseManifest) != "" {
+		manifest, err := loadReleaseManifest(opts.ReleaseManifest)
+		if err != nil {
+			return err
+		}
+		for _, app := range apps {
+			for _, container := range app.Containers {
+				if image := manifest.imageFor(app.Name, container.Name); image != "" {
+					images[imageKey{App: app.Name, Container: container.Name}] = image
+				}
+			}
+		}
+	}
+	cliImages, err := parseImageOverrides(opts.ImageOverrides)
 	if err != nil {
 		return err
 	}
+	for key, image := range cliImages {
+		images[key] = image
+	}
 	for i := range apps {
 		for j := range apps[i].Containers {
-			if image := manifest.imageFor(apps[i].Name, apps[i].Containers[j].Name); image != "" {
+			key := imageKey{App: apps[i].Name, Container: apps[i].Containers[j].Name}
+			if image := images[key]; image != "" {
 				apps[i].Containers[j].Image = image
 			}
 		}
 	}
+	if policy == "strict" {
+		for _, app := range apps {
+			for _, container := range app.Containers {
+				key := imageKey{App: app.Name, Container: container.Name}
+				if images[key] == "" {
+					return fmt.Errorf("image override missing for %s/%s in strict image policy", app.Name, container.Name)
+				}
+			}
+		}
+	}
 	return nil
+}
+
+type imageKey struct {
+	App       string
+	Container string
+}
+
+func parseImageOverrides(items []string) (map[imageKey]string, error) {
+	overrides := map[imageKey]string{}
+	for _, item := range items {
+		for _, part := range splitCommaSeparated(item) {
+			keyRaw, image, ok := strings.Cut(part, "=")
+			if !ok {
+				return nil, fmt.Errorf("invalid image override %q: expected app/container=image", part)
+			}
+			app, container, ok := strings.Cut(strings.TrimSpace(keyRaw), "/")
+			if !ok || strings.TrimSpace(app) == "" || strings.TrimSpace(container) == "" {
+				return nil, fmt.Errorf("invalid image override %q: expected app/container=image", part)
+			}
+			image = strings.TrimSpace(image)
+			if image == "" {
+				return nil, fmt.Errorf("invalid image override %q: image must not be empty", part)
+			}
+			overrides[imageKey{App: strings.TrimSpace(app), Container: strings.TrimSpace(container)}] = image
+		}
+	}
+	return overrides, nil
+}
+
+func splitCommaSeparated(items string) []string {
+	var out []string
+	for _, part := range strings.Split(items, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func normalizeImagePolicy(policy string) string {
+	policy = strings.TrimSpace(strings.ToLower(policy))
+	if policy == "" {
+		return "fallback"
+	}
+	return policy
 }
 
 type releaseManifest struct {
@@ -1627,7 +1704,7 @@ type releaseImage struct {
 
 func loadReleaseManifest(path string) (releaseManifest, error) {
 	if !isFile(path) {
-		return releaseManifest{}, nil
+		return releaseManifest{}, fmt.Errorf("release manifest not found: %s", path)
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
