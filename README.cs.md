@@ -242,6 +242,8 @@ Užitečné flagy:
 -p, --profile            název replica profilu
     --profiles-file      cesta k replica profiles souboru
 -r, --release-manifest   cesta k release manifest YAML
+    --image              přepíše image ve formátu app/container=image; opakovatelné
+    --image-policy       politika image override: fallback nebo strict
 -w, --down               nastaví vybraným appkám replicas na 0
 -E, --env-file           explicitní .env soubor
     --vars-source        env, json, dot-env; opakovatelné nebo comma-separated
@@ -251,6 +253,60 @@ Užitečné flagy:
     --log-format         formát verbose build logu: text nebo json
     --color              barvy ve verbose text logu: auto, always nebo never
 ```
+
+## Vyhodnocení Image
+
+`kube-build-app` vyhodnocuje container image podle dvojice `<app>/<container>`.
+
+Pořadí precedence:
+
+1. `--image app/container=image`
+2. `--release-manifest release.yml`
+3. `image:` z `<env>/apps/<app>.yml`
+
+Přímý CLI override se hodí pro jednorázové CI/CD joby:
+
+```bash
+kube-build-app build -e test \
+  --image 'tsm-dms/tsm-dms=registry.example.com/tsm-dms:2.0.0' \
+  --image 'tsm-ui/tsm-ui=registry.example.com/tsm-ui@sha256:abcdef'
+```
+
+Mezi selektorem a image používáme `=`, ne `:`, protože container image reference sama používá `:` pro tagy a `@sha256:...` pro digesty.
+
+Release manifest je určený pro řízené release pipeline. `kube-build-app` umí přímo použít manifest generovaný nástrojem `simple-release-management`:
+
+```yaml
+release_id: 2026.06.25.01
+registry_base: registry.example.com/project
+images:
+  - app_name: tsm-dms
+    container_name: tsm-dms
+    image: registry.example.com/project/tsm-dms
+    tag: 2026.06.25.01
+    digest: sha256:abcdef
+```
+
+Pokud je vyplněný `digest`, výsledný deployment použije neměnnou digest referenci:
+
+```text
+registry.example.com/project/tsm-dms@sha256:abcdef
+```
+
+Pokud je vyplněný pouze `tag`, výsledný deployment použije:
+
+```text
+registry.example.com/project/tsm-dms:2026.06.25.01
+```
+
+Image policy:
+
+```bash
+kube-build-app build -e test --release-manifest release.yml --image-policy fallback
+kube-build-app build -e test --release-manifest release.yml --image-policy strict
+```
+
+`fallback` ponechá image z app YAML, pokud override neexistuje. `strict` vyžaduje, aby každý renderovaný `<app>/<container>` měl image z `--image` nebo `--release-manifest`; to je doporučené pro release pipeline.
 
 ## Kontrakt Placeholderů
 
