@@ -352,6 +352,21 @@ containers:
         value: "{{RUNTIME_VALUE}}"
 ```
 
+### Proměnné Prostředí Kontejneru
+
+Pro proměnné prostředí kontejneru používejte `containers[].envs`. Historický
+zápis `containers[].env_vars` zůstává kvůli existujícím environment repozitářům
+funkční trvale, ale nástroj při jeho použití vypíše deprekační varování.
+
+Pokud jsou v jednom kontejneru oba bloky, hodnoty se sloučí podle názvu
+proměnné: nejprve se použije `env_vars`, při shodném názvu jej přepíše `envs`.
+
+Pro zákaz nového historického zápisu v CI použijte:
+
+```bash
+kube-build-app validate -e test -R environments --fail-on-deprecated
+```
+
 ## Zdroje Proměnných
 
 Výchozí chování je zpětně kompatibilní:

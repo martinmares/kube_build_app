@@ -364,6 +364,21 @@ containers:
         value: "{{RUNTIME_VALUE}}"
 ```
 
+### Container Environment Variables
+
+Use `containers[].envs` for container environment variables. The historical
+`containers[].env_vars` spelling remains supported indefinitely for existing
+environment repositories, but emits a deprecation warning.
+
+If both keys are present in one container, values are merged by variable name:
+`env_vars` is applied first and `envs` wins on a duplicate name.
+
+Use this in CI to prevent new uses of the historical spelling:
+
+```bash
+kube-build-app validate -e test -R environments --fail-on-deprecated
+```
+
 ## Variable Sources
 
 Default behavior is backward-compatible:
