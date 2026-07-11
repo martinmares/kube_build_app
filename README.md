@@ -1065,7 +1065,118 @@ env_from:
 
 This renders to Kubernetes `envFrom`.
 
-### 15. Init Containers
+### 15. Workload Identity and Downward API
+
+Use `workload_identity` when an app needs a projected Kubernetes/OpenShift ServiceAccount token for service-to-service authentication:
+
+```yaml
+workload_identity:
+  service_account:
+    create: true
+    name: order-api      # default: app name
+    automount: false     # default: false when tokens are configured
+
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+      mount_path: /var/run/secrets/workload-identity/simple-config # default
+      path: token                                                  # default
+      expiration_seconds: 3600                                     # default
+```
+
+The generated deployment contains `serviceAccountName`, `automountServiceAccountToken: false`, a projected `serviceAccountToken` volume, and a read-only mount. When `service_account.create=true`, `kube-build-app` also generates a `ServiceAccount` manifest.
+
+Use `pod_info` for the common Downward API metadata mount:
+
+```yaml
+pod_info:
+  enabled: true
+  mount_path: /etc/podinfo
+```
+
+This creates files such as:
+
+```text
+/etc/podinfo/namespace
+/etc/podinfo/pod_name
+```
+
+For custom Downward API mounts, use the explicit form:
+
+```yaml
+downward_api:
+  mounts:
+    - name: runtime-info
+      mount_path: /etc/runtime-info
+      items:
+        - path: namespace
+          field_path: metadata.namespace
+        - path: pod_name
+          field_path: metadata.name
+```
+
+Pod name is runtime/audit metadata only. Authorization should use the normalized workload identity `namespace/serviceAccount` from the projected token.
+
+### 16. Sidecars and Pod Options
+
+Use app-level `sidecars` for helper containers that run in the same Pod but are not primary application containers:
+
+```yaml
+workload_identity:
+  service_account:
+    create: true
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+
+sidecars:
+  - name: simple-config-token-proxy
+    image: "{{TSM_REGISTRY_URL}}/simple-config-token-proxy:{{TSM_RELEASE_ID}}"
+    startup:
+      command:
+        - simple-config-token-proxy
+      arguments:
+        - --listen
+        - 127.0.0.1:9999
+        - --upstream
+        - https://config.example.test/simple-config-server
+        - --token-file
+        - /var/run/secrets/workload-identity/simple-config/token
+    resources:
+      cpu:
+        from: "10m"
+        to: "100m"
+      memory:
+        from: "32Mi"
+        to: "128Mi"
+
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    envs:
+      - name: SPRING_CLOUD_CONFIG_URI
+        value: http://127.0.0.1:9999
+```
+
+Sidecars are rendered as regular Kubernetes containers in the same Pod. They share Pod networking automatically, so `127.0.0.1` works between the app container and the sidecar. Workload identity token mounts and Downward API mounts are mounted into sidecars as well.
+
+For helper containers that need to see processes from other containers in the same Pod, enable shared process namespace:
+
+```yaml
+pod:
+  share_process_namespace: true
+
+sidecars:
+  - name: cgroup-runtime-exporter
+    image: "{{TSM_REGISTRY_URL}}/cgroup-runtime-exporter:{{TSM_RELEASE_ID}}"
+    envs:
+      - name: TARGET_PID
+        value: "1"
+```
+
+This renders Kubernetes `shareProcessNamespace: true`. Sidecar ports are not used for service generation; services are generated only from primary `containers`.
+
+### 17. Init Containers
 
 Use app-level `init_containers` for generic Kubernetes init containers:
 
@@ -1110,7 +1221,7 @@ Supported init container fields intentionally mirror the common subset of regula
 
 Existing `tools` remain the preferred shortcut for exposing static utility binaries through generated init containers.
 
-### 16. Raw Escape Hatches
+### 18. Raw Escape Hatches
 
 Use `deployment_raw` for rare Deployment-level fields:
 
@@ -1130,7 +1241,7 @@ pod_raw:
 
 `deployment_raw` is recursively merged into the generated Deployment object. `pod_raw` is applied to `spec.template.spec`.
 
-### 17. Raw Container Fields
+### 19. Raw Container Fields
 
 Use raw passthrough only when the model does not expose a dedicated field:
 
@@ -1145,7 +1256,7 @@ containers:
 
 Dedicated model fields are preferred because they can be validated and represented in UI tooling.
 
-### 18. Cgroup Exporter Defaults
+### 20. Cgroup Exporter Defaults
 
 At container level you can enable automatic variable injection for cgroup exporter:
 
@@ -1169,7 +1280,7 @@ CGROUP_EXPORTER_MEMORY_LIMITS_MIB
 CGROUP_EXPORTER_NODE_NAME
 ```
 
-### 19. Ignored Apps
+### 21. Ignored Apps
 
 Exclude an app from build:
 

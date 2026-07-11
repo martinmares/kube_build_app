@@ -1053,7 +1053,118 @@ env_from:
 
 Výsledkem je Kubernetes `envFrom`.
 
-### 15. Init Containers
+### 15. Workload Identity a Downward API
+
+`workload_identity` použijte ve chvíli, kdy aplikace potřebuje projektovaný Kubernetes/OpenShift ServiceAccount token pro service-to-service autentizaci:
+
+```yaml
+workload_identity:
+  service_account:
+    create: true
+    name: order-api      # default: název appky
+    automount: false     # default: false, pokud jsou nastavené tokens
+
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+      mount_path: /var/run/secrets/workload-identity/simple-config # default
+      path: token                                                  # default
+      expiration_seconds: 3600                                     # default
+```
+
+Výsledný deployment obsahuje `serviceAccountName`, `automountServiceAccountToken: false`, projektovaný `serviceAccountToken` volume a read-only mount. Pokud je `service_account.create=true`, `kube-build-app` zároveň vygeneruje `ServiceAccount` manifest.
+
+Pro běžný Downward API mount s runtime informacemi o podu použijte `pod_info`:
+
+```yaml
+pod_info:
+  enabled: true
+  mount_path: /etc/podinfo
+```
+
+Vzniknou například soubory:
+
+```text
+/etc/podinfo/namespace
+/etc/podinfo/pod_name
+```
+
+Pro vlastní Downward API mount použijte explicitní tvar:
+
+```yaml
+downward_api:
+  mounts:
+    - name: runtime-info
+      mount_path: /etc/runtime-info
+      items:
+        - path: namespace
+          field_path: metadata.namespace
+        - path: pod_name
+          field_path: metadata.name
+```
+
+Pod name je jen runtime/audit metadata. Autorizace má používat normalizovanou workload identitu `namespace/serviceAccount` z projektovaného tokenu.
+
+### 16. Sidecars a Pod Options
+
+App-level `sidecars` použijte pro pomocné containery, které běží ve stejném Podu, ale nejsou primární aplikační containery:
+
+```yaml
+workload_identity:
+  service_account:
+    create: true
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+
+sidecars:
+  - name: simple-config-token-proxy
+    image: "{{TSM_REGISTRY_URL}}/simple-config-token-proxy:{{TSM_RELEASE_ID}}"
+    startup:
+      command:
+        - simple-config-token-proxy
+      arguments:
+        - --listen
+        - 127.0.0.1:9999
+        - --upstream
+        - https://config.example.test/simple-config-server
+        - --token-file
+        - /var/run/secrets/workload-identity/simple-config/token
+    resources:
+      cpu:
+        from: "10m"
+        to: "100m"
+      memory:
+        from: "32Mi"
+        to: "128Mi"
+
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    envs:
+      - name: SPRING_CLOUD_CONFIG_URI
+        value: http://127.0.0.1:9999
+```
+
+Sidecary se renderují jako běžné Kubernetes containery ve stejném Podu. Síť v Podu sdílí automaticky, takže `127.0.0.1` funguje mezi aplikačním containerem a sidecarem. Workload identity token mounty i Downward API mounty se mountují i do sidecarů.
+
+Pro pomocné containery, které potřebují vidět procesy ostatních containerů ve stejném Podu, zapněte sdílený process namespace:
+
+```yaml
+pod:
+  share_process_namespace: true
+
+sidecars:
+  - name: cgroup-runtime-exporter
+    image: "{{TSM_REGISTRY_URL}}/cgroup-runtime-exporter:{{TSM_RELEASE_ID}}"
+    envs:
+      - name: TARGET_PID
+        value: "1"
+```
+
+Výsledkem je Kubernetes `shareProcessNamespace: true`. Porty sidecarů se nepoužívají pro generování Service; služby se generují jen z primárních `containers`.
+
+### 17. Init Containers
 
 App-level `init_containers` použijte pro obecné Kubernetes init containery:
 
@@ -1098,7 +1209,7 @@ Podporovaná pole init containeru záměrně kopírují běžnou podmnožinu sta
 
 Existující `tools` zůstávají preferovaná zkratka pro vystavení statických utilit přes generované init containery.
 
-### 16. Raw Escape Hatches
+### 18. Raw Escape Hatches
 
 `deployment_raw` použijte pro vzácná Deployment-level pole:
 
@@ -1118,7 +1229,7 @@ pod_raw:
 
 `deployment_raw` se rekurzivně merguje do vygenerovaného Deployment objektu. `pod_raw` se aplikuje do `spec.template.spec`.
 
-### 17. Raw Container Fields
+### 19. Raw Container Fields
 
 Raw passthrough používejte jen tehdy, když model nemá dedikované pole:
 
@@ -1133,7 +1244,7 @@ containers:
 
 Dedikovaná modelová pole jsou lepší, protože se dají validovat a zobrazit v UI nástrojích.
 
-### 18. Cgroup Exporter Defaults
+### 20. Cgroup Exporter Defaults
 
 Na úrovni containeru lze zapnout automatické vkládání variable pro cgroup exporter:
 
@@ -1157,7 +1268,7 @@ CGROUP_EXPORTER_MEMORY_LIMITS_MIB
 CGROUP_EXPORTER_NODE_NAME
 ```
 
-### 19. Ignorované Appky
+### 21. Ignorované Appky
 
 Vynechání appky z buildu:
 
