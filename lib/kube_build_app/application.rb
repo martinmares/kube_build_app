@@ -28,13 +28,14 @@ module KubeBuildApp
 
     attr_reader :name, :kind, :subdomain_name, :file_name, :content, :containers, :registry, :dns, :shared_assets,
                 :strategy, :env, :labels, :annotations, :argocd_wave, :pod_annotations, :disable_create_service, :min_available, :max_unavailable, :has_budget,
-                :arch, :node_selector, :tolerations, :tools, :rollout_checksum_annotations
+                :arch, :node_selector, :tolerations, :tools, :rollout_checksum_annotations, :deprecated_env_vars
     attr_accessor :replicas
 
     def initialize(env, shared_assets, file_name, release_manifest = nil)
       if File.file? file_name
         @env = env
         @file_name = file_name
+        @deprecated_env_vars = []
         @content = apply_app_vars()
         @ignore = @content["ignore"]
         @name = @content["name"]
@@ -153,6 +154,7 @@ module KubeBuildApp
       apply_container_var_defaults!(merged_obj, defaults_obj["container_envs"])
       merged_obj.delete("container_envs")
       apply_vars_inplace(merged_obj)
+      @deprecated_env_vars.map! { |container| container["name"] }
 
       merged_obj
     end
@@ -250,7 +252,13 @@ module KubeBuildApp
           effective_defaults = merge_named_entries(effective_defaults, item["envs"], "container_envs[#{item['name']}].envs")
         end
 
-        merged_envs = merge_named_entries(effective_defaults, container["envs"], "containers[#{container['name']}].envs")
+        if container.has_key?("env_vars")
+          @deprecated_env_vars << container
+        end
+
+        merged_envs = merge_named_entries(effective_defaults, container["env_vars"], "containers[#{container['name']}].env_vars")
+        merged_envs = merge_named_entries(merged_envs, container["envs"], "containers[#{container['name']}].envs")
+        container.delete("env_vars")
         if merged_envs.empty?
           container.delete("envs")
         else

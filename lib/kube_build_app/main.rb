@@ -53,6 +53,7 @@ module KubeBuildApp
 
       load_apps
       validate_apps!
+      report_deprecations!
       print_vars_sources_info
       puts Paint["Validation OK (#{@apps.size} apps)", :green]
     end
@@ -61,6 +62,7 @@ module KubeBuildApp
       if @env.apps_dir?
         load_apps
         validate_apps!
+        report_deprecations!
 
         if @args[:inventory]
           puts JSON.pretty_generate(build_inventory)
@@ -273,8 +275,23 @@ module KubeBuildApp
         opt :env_file, "Load variables only from explicit .env file path and disable json/process ENV sources", type: :string, short: "-E"
         opt :vars_source, "Variable source(s), repeatable: env | json | dot-env (dot-env uses <environment_dir>/.env)", type: :string, multi: true
         opt :helm_escape_assets, "Escape remaining {{VAR}} placeholders in text assets to Helm-safe {{`{{ VAR }}`}}", type: :boolean, default: false
+        opt :fail_on_deprecated, "Fail when deprecated metamodel keys are used", type: :boolean, default: false
       end
       opts
+    end
+
+    def report_deprecations!
+      messages = @apps.flat_map do |app|
+        app.deprecated_env_vars.map do |container_name|
+          "#{app.file_name}: container '#{container_name}' uses deprecated 'env_vars'; migrate to 'envs'"
+        end
+      end
+      return if messages.empty?
+
+      messages.each { |message| warn "warning: #{message}" }
+      if @args[:fail_on_deprecated]
+        raise ValidationError, "Deprecated metamodel keys are forbidden by --fail-on-deprecated (#{messages.size} occurrence/s)"
+      end
     end
 
     def print_vars_sources_info

@@ -178,6 +178,81 @@ class ComprehensiveFeaturesTest < Minitest::Test
     assert_equal "service-default", service_only["value"]
   end
 
+  def test_legacy_env_vars_are_rendered_and_envs_take_precedence
+    write_minimal_env
+    write_file(
+      File.join(@env_dir, "apps", "legacy-env-vars.yml"),
+      <<~YAML,
+        name: legacy-env-vars
+        replicas: 1
+        containers:
+          - name: legacy-env-vars
+            image: "{{TSM_REGISTRY_URL}}/legacy-env-vars:{{TSM_RELEASE_ID}}"
+            env_vars:
+              - name: LEGACY_VALUE
+                value: "legacy"
+              - name: OVERRIDDEN_VALUE
+                value: "legacy"
+              - name: SECRET_VALUE
+                secret_name: app-secret
+                key: token
+              - name: CPU_REQUEST
+                resource_name: requests.cpu
+                divisor: 1m
+              - name: NODE_NAME
+                field_path: spec.nodeName
+            envs:
+              - name: OVERRIDDEN_VALUE
+                value: "modern"
+            startup:
+              command: ["/bin/sh"]
+              arguments: ["-c", "echo ok"]
+            resources:
+              cpu: { from: "100m", to: "200m" }
+              memory: { from: "128Mi", to: "256Mi" }
+      YAML
+    )
+
+    out, err, status = run_kube_build_app("-e", "test", "-R", @root_dir, "-t", @target_dir)
+    assert status.success?, "build failed\nstdout:\n#{out}\nstderr:\n#{err}"
+    assert_includes err, "uses deprecated 'env_vars'"
+
+    env = load_deployment("legacy-env-vars").dig("spec", "template", "spec", "containers", 0, "env") || []
+    assert_equal "legacy", env.find { |item| item["name"] == "LEGACY_VALUE" }["value"]
+    assert_equal "modern", env.find { |item| item["name"] == "OVERRIDDEN_VALUE" }["value"]
+    assert_equal "app-secret", env.find { |item| item["name"] == "SECRET_VALUE" }.dig("valueFrom", "secretKeyRef", "name")
+    assert_equal "requests.cpu", env.find { |item| item["name"] == "CPU_REQUEST" }.dig("valueFrom", "resourceFieldRef", "resource")
+    assert_equal "spec.nodeName", env.find { |item| item["name"] == "NODE_NAME" }.dig("valueFrom", "fieldRef", "fieldPath")
+  end
+
+  def test_fail_on_deprecated_rejects_legacy_env_vars
+    write_minimal_env
+    write_file(
+      File.join(@env_dir, "apps", "legacy-env-vars.yml"),
+      <<~YAML,
+        name: legacy-env-vars
+        replicas: 1
+        containers:
+          - name: legacy-env-vars
+            image: "{{TSM_REGISTRY_URL}}/legacy-env-vars:{{TSM_RELEASE_ID}}"
+            env_vars:
+              - name: LEGACY_VALUE
+                value: "legacy"
+            startup:
+              command: ["/bin/sh"]
+              arguments: ["-c", "echo ok"]
+            resources:
+              cpu: { from: "100m", to: "200m" }
+              memory: { from: "128Mi", to: "256Mi" }
+      YAML
+    )
+
+    _out, err, status = run_kube_build_app("validate", "-e", "test", "-R", @root_dir, "--fail-on-deprecated")
+    refute status.success?
+    assert_includes err, "uses deprecated 'env_vars'"
+    assert_includes err, "--fail-on-deprecated"
+  end
+
   def test_defaults_remove_true_fails_when_combined_with_other_fields
     write_minimal_env
     write_file(
