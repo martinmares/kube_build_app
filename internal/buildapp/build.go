@@ -42,13 +42,14 @@ type Options struct {
 }
 
 type Result struct {
-	Deployments []string
-	Services    []string
-	Assets      []string
-	Budgets     []string
-	Autoscaling []string
-	Externals   []string
-	Events      []BuildEvent
+	Deployments     []string
+	Services        []string
+	Assets          []string
+	Budgets         []string
+	Autoscaling     []string
+	Externals       []string
+	ServiceAccounts []string
+	Events          []BuildEvent
 }
 
 type BuildEvent struct {
@@ -108,36 +109,41 @@ type variable struct {
 }
 
 type appModel struct {
-	Vars                 []variable          `yaml:"vars"`
-	Name                 string              `yaml:"name"`
-	Kind                 string              `yaml:"kind"`
-	Ignore               bool                `yaml:"ignore"`
-	DisableSharedAssets  bool                `yaml:"disable_shared_assets"`
-	DisableCreateService bool                `yaml:"disable_create_service"`
-	Strategy             string              `yaml:"strategy"`
-	SubdomainName        string              `yaml:"subdomain_name"`
-	MinAvailable         any                 `yaml:"min_available"`
-	MaxUnavailable       any                 `yaml:"max_unavailable"`
-	Replicas             int                 `yaml:"replicas"`
-	Labels               map[string]any      `yaml:"labels"`
-	Annotations          map[string]any      `yaml:"annotations"`
-	PodAnnotations       map[string]any      `yaml:"pod_annotations"`
-	SecurityContext      map[string]any      `yaml:"security_context"`
-	TerminationGrace     *int                `yaml:"termination_grace_period"`
-	ServiceAccount       string              `yaml:"service_account"`
-	DeploymentRaw        map[string]any      `yaml:"deployment_raw"`
-	PodRaw               map[string]any      `yaml:"pod_raw"`
-	Autoscaling          autoscalingSpec     `yaml:"autoscaling"`
-	RolloutOn            rolloutOnSpec       `yaml:"rollout_on"`
-	Tools                []toolSpec          `yaml:"tools"`
-	InitContainers       []initContainerSpec `yaml:"init_containers"`
-	Registry             []registrySpec      `yaml:"registry"`
-	DNS                  []hostAliasSpec     `yaml:"dns"`
-	Arch                 string              `yaml:"arch"`
-	NodeSelector         map[string]any      `yaml:"node_selector"`
-	Tolerations          []any               `yaml:"tolerations"`
-	Scheduling           schedulingSpec      `yaml:"scheduling"`
-	Containers           []containerSpec     `yaml:"containers"`
+	Vars                 []variable           `yaml:"vars"`
+	Name                 string               `yaml:"name"`
+	Kind                 string               `yaml:"kind"`
+	Ignore               bool                 `yaml:"ignore"`
+	DisableSharedAssets  bool                 `yaml:"disable_shared_assets"`
+	DisableCreateService bool                 `yaml:"disable_create_service"`
+	Strategy             string               `yaml:"strategy"`
+	SubdomainName        string               `yaml:"subdomain_name"`
+	MinAvailable         any                  `yaml:"min_available"`
+	MaxUnavailable       any                  `yaml:"max_unavailable"`
+	Replicas             int                  `yaml:"replicas"`
+	Labels               map[string]any       `yaml:"labels"`
+	Annotations          map[string]any       `yaml:"annotations"`
+	PodAnnotations       map[string]any       `yaml:"pod_annotations"`
+	SecurityContext      map[string]any       `yaml:"security_context"`
+	TerminationGrace     *int                 `yaml:"termination_grace_period"`
+	ServiceAccount       string               `yaml:"service_account"`
+	WorkloadIdentity     workloadIdentitySpec `yaml:"workload_identity"`
+	PodInfo              podInfoSpec          `yaml:"pod_info"`
+	DownwardAPI          downwardAPISpec      `yaml:"downward_api"`
+	Pod                  appPodSpec           `yaml:"pod"`
+	DeploymentRaw        map[string]any       `yaml:"deployment_raw"`
+	PodRaw               map[string]any       `yaml:"pod_raw"`
+	Autoscaling          autoscalingSpec      `yaml:"autoscaling"`
+	RolloutOn            rolloutOnSpec        `yaml:"rollout_on"`
+	Tools                []toolSpec           `yaml:"tools"`
+	InitContainers       []initContainerSpec  `yaml:"init_containers"`
+	Registry             []registrySpec       `yaml:"registry"`
+	DNS                  []hostAliasSpec      `yaml:"dns"`
+	Arch                 string               `yaml:"arch"`
+	NodeSelector         map[string]any       `yaml:"node_selector"`
+	Tolerations          []any                `yaml:"tolerations"`
+	Scheduling           schedulingSpec       `yaml:"scheduling"`
+	Containers           []containerSpec      `yaml:"containers"`
+	Sidecars             []containerSpec      `yaml:"sidecars"`
 }
 
 type rolloutOnSpec struct {
@@ -155,6 +161,49 @@ type registrySpec struct {
 type hostAliasSpec struct {
 	IP        string   `yaml:"ip"`
 	Hostnames []string `yaml:"hostnames"`
+}
+
+type workloadIdentitySpec struct {
+	ServiceAccount workloadServiceAccountSpec  `yaml:"service_account"`
+	Tokens         []workloadIdentityTokenSpec `yaml:"tokens"`
+}
+
+type workloadServiceAccountSpec struct {
+	Create    bool   `yaml:"create"`
+	Name      string `yaml:"name"`
+	Automount *bool  `yaml:"automount"`
+}
+
+type workloadIdentityTokenSpec struct {
+	Name              string `yaml:"name"`
+	Audience          string `yaml:"audience"`
+	MountPath         string `yaml:"mount_path"`
+	Path              string `yaml:"path"`
+	ExpirationSeconds int    `yaml:"expiration_seconds"`
+}
+
+type podInfoSpec struct {
+	Enabled   bool   `yaml:"enabled"`
+	MountPath string `yaml:"mount_path"`
+}
+
+type downwardAPISpec struct {
+	Mounts []downwardAPIMountSpec `yaml:"mounts"`
+}
+
+type downwardAPIMountSpec struct {
+	Name      string                `yaml:"name"`
+	MountPath string                `yaml:"mount_path"`
+	Items     []downwardAPIItemSpec `yaml:"items"`
+}
+
+type downwardAPIItemSpec struct {
+	Path      string `yaml:"path"`
+	FieldPath string `yaml:"field_path"`
+}
+
+type appPodSpec struct {
+	ShareProcessNamespace bool `yaml:"share_process_namespace"`
 }
 
 type schedulingSpec struct {
@@ -562,9 +611,12 @@ func Build(opts Options) (Result, error) {
 		if app.Ignore {
 			continue
 		}
-		result.Events = append(result.Events, BuildEvent{Type: "app", App: app.Name, Count: len(app.Containers)})
+		result.Events = append(result.Events, BuildEvent{Type: "app", App: app.Name, Count: len(app.Containers) + len(app.Sidecars)})
 		for _, container := range app.Containers {
 			result.Events = append(result.Events, BuildEvent{Type: "container", App: app.Name, Container: container.Name, Count: len(container.Assets)})
+		}
+		for _, sidecar := range app.Sidecars {
+			result.Events = append(result.Events, BuildEvent{Type: "sidecar", App: app.Name, Container: sidecar.Name, Count: len(sidecar.Assets)})
 		}
 		appSharedAssets := sharedAssets
 		if app.DisableSharedAssets {
@@ -577,6 +629,14 @@ func Build(opts Options) (Result, error) {
 		rolloutAnnotations, err := rolloutChecksumAnnotations(app, envDir)
 		if err != nil {
 			return Result{}, err
+		}
+		if serviceAccount := renderServiceAccount(app, vars["NAMESPACE"]); serviceAccount != nil {
+			outPath := filepath.Join(deploymentsDir, app.Name+"-serviceaccount.yml")
+			if err := writeRenderedObject(outPath, serviceAccount, opts, syncMetadataSpec{ID: syncObjectID(opts, "ServiceAccount", vars["NAMESPACE"], effectiveServiceAccountName(app)), Order: 180}); err != nil {
+				return Result{}, err
+			}
+			result.ServiceAccounts = append(result.ServiceAccounts, outPath)
+			result.Events = append(result.Events, BuildEvent{Type: "serviceaccount", App: app.Name, Name: effectiveServiceAccountName(app), Path: outPath})
 		}
 		deployment, err := renderDeployment(app, vars["NAMESPACE"], resolvedAssets, appSharedAssets, rolloutAnnotations)
 		if err != nil {
@@ -822,7 +882,7 @@ func Inventory(opts Options) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, container := range app.Containers {
+		for _, container := range appRuntimeContainers(app) {
 			item := map[string]any{
 				"env":                    opts.Environment,
 				"app":                    app.Name,
@@ -931,7 +991,7 @@ func ResourceSummary(opts Options) (ResourceSummaryData, error) {
 		summary.Totals.Apps++
 		summary.Totals.Replicas += app.Replicas
 		replicas := app.Replicas
-		for _, container := range app.Containers {
+		for _, container := range appRuntimeContainers(app) {
 			cpuRequestRaw := resourceRequestValue(container.Resources, "cpu")
 			cpuLimitRaw := resourceLimitValue(container.Resources, "cpu")
 			memRequestRaw := resourceRequestValue(container.Resources, "memory")
@@ -1453,6 +1513,30 @@ func loadApps(appFiles []string, defaultsPath string, vars map[string]string) ([
 
 func validateApps(apps []appModel) error {
 	for _, app := range apps {
+		for _, token := range app.WorkloadIdentity.Tokens {
+			if strings.TrimSpace(token.Name) == "" {
+				return fmt.Errorf("%s: workload_identity.tokens[].name is required", app.Name)
+			}
+			if strings.TrimSpace(token.Audience) == "" {
+				return fmt.Errorf("%s: workload_identity token %q requires audience", app.Name, token.Name)
+			}
+		}
+		for _, mount := range app.DownwardAPI.Mounts {
+			if strings.TrimSpace(mount.Name) == "" {
+				return fmt.Errorf("%s: downward_api.mounts[].name is required", app.Name)
+			}
+			if strings.TrimSpace(mount.MountPath) == "" {
+				return fmt.Errorf("%s: downward_api mount %q requires mount_path", app.Name, mount.Name)
+			}
+			if len(mount.Items) == 0 {
+				return fmt.Errorf("%s: downward_api mount %q requires items", app.Name, mount.Name)
+			}
+			for _, item := range mount.Items {
+				if strings.TrimSpace(item.Path) == "" || strings.TrimSpace(item.FieldPath) == "" {
+					return fmt.Errorf("%s: downward_api mount %q requires item path and field_path", app.Name, mount.Name)
+				}
+			}
+		}
 		if app.Autoscaling.Enabled {
 			if app.Autoscaling.MinReplicas < 1 {
 				return fmt.Errorf("%s: autoscaling.min_replicas must be greater than 0", app.Name)
@@ -1470,7 +1554,7 @@ func validateApps(apps []appModel) error {
 				return fmt.Errorf("%s: autoscaling.memory.average_utilization must be between 1 and 100", app.Name)
 			}
 		}
-		for _, container := range app.Containers {
+		for _, container := range appRuntimeContainers(app) {
 			for _, port := range container.Ports {
 				for _, expose := range port.ExposeAs {
 					if expose.ServiceName != "" && expose.Hostname != "" && expose.ServiceName != expose.Hostname {
@@ -1500,6 +1584,13 @@ func validateApps(apps []appModel) error {
 
 func validAutoscalingUtilization(value int) bool {
 	return value == 0 || (value >= 1 && value <= 100)
+}
+
+func appRuntimeContainers(app appModel) []containerSpec {
+	out := make([]containerSpec, 0, len(app.Containers)+len(app.Sidecars))
+	out = append(out, app.Containers...)
+	out = append(out, app.Sidecars...)
+	return out
 }
 
 func autoscalingHasRawMetrics(autoscaling autoscalingSpec) bool {
@@ -1614,6 +1705,11 @@ func applyImageOverrides(apps []appModel, opts Options) error {
 					images[imageKey{App: app.Name, Container: container.Name}] = image
 				}
 			}
+			for _, sidecar := range app.Sidecars {
+				if image := manifest.exactImageFor(app.Name, sidecar.Name); image != "" {
+					images[imageKey{App: app.Name, Container: sidecar.Name}] = image
+				}
+			}
 		}
 	}
 	cliImages, err := parseImageOverrides(opts.ImageOverrides)
@@ -1630,10 +1726,16 @@ func applyImageOverrides(apps []appModel, opts Options) error {
 				apps[i].Containers[j].Image = image
 			}
 		}
+		for j := range apps[i].Sidecars {
+			key := imageKey{App: apps[i].Name, Container: apps[i].Sidecars[j].Name}
+			if image := images[key]; image != "" {
+				apps[i].Sidecars[j].Image = image
+			}
+		}
 	}
 	if policy == "strict" {
 		for _, app := range apps {
-			for _, container := range app.Containers {
+			for _, container := range appRuntimeContainers(app) {
 				key := imageKey{App: app.Name, Container: container.Name}
 				if images[key] == "" {
 					return fmt.Errorf("image override missing for %s/%s in strict image policy", app.Name, container.Name)
@@ -1718,6 +1820,13 @@ func loadReleaseManifest(path string) (releaseManifest, error) {
 }
 
 func (m releaseManifest) imageFor(appName string, containerName string) string {
+	if image := m.exactImageFor(appName, containerName); image != "" {
+		return image
+	}
+	return m.defaultImageFor(appName)
+}
+
+func (m releaseManifest) exactImageFor(appName string, containerName string) string {
 	var match *releaseImage
 	for i := range m.Images {
 		item := &m.Images[i]
@@ -1726,15 +1835,22 @@ func (m releaseManifest) imageFor(appName string, containerName string) string {
 			break
 		}
 	}
-	if match == nil {
-		for i := range m.Images {
-			item := &m.Images[i]
-			if item.AppName == appName && strings.TrimSpace(item.ContainerName) == "" {
-				match = item
-				break
-			}
+	return releaseImageRef(match)
+}
+
+func (m releaseManifest) defaultImageFor(appName string) string {
+	var match *releaseImage
+	for i := range m.Images {
+		item := &m.Images[i]
+		if item.AppName == appName && strings.TrimSpace(item.ContainerName) == "" {
+			match = item
+			break
 		}
 	}
+	return releaseImageRef(match)
+}
+
+func releaseImageRef(match *releaseImage) string {
 	if match == nil || strings.TrimSpace(match.Image) == "" {
 		return ""
 	}
@@ -2270,22 +2386,197 @@ func cloneNode(node *yaml.Node) *yaml.Node {
 	return &out
 }
 
+func renderServiceAccount(app appModel, namespace string) map[string]any {
+	if !app.WorkloadIdentity.ServiceAccount.Create {
+		return nil
+	}
+	name := effectiveServiceAccountName(app)
+	if name == "" {
+		return nil
+	}
+	return map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ServiceAccount",
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": namespace,
+		},
+	}
+}
+
+func effectiveServiceAccountName(app appModel) string {
+	if name := strings.TrimSpace(app.WorkloadIdentity.ServiceAccount.Name); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(app.ServiceAccount); name != "" {
+		return name
+	}
+	if hasWorkloadIdentity(app) {
+		return app.Name
+	}
+	return ""
+}
+
+func effectiveServiceAccountAutomount(app appModel) (bool, bool) {
+	if app.WorkloadIdentity.ServiceAccount.Automount != nil {
+		return *app.WorkloadIdentity.ServiceAccount.Automount, true
+	}
+	if len(app.WorkloadIdentity.Tokens) > 0 {
+		return false, true
+	}
+	return false, false
+}
+
+func hasWorkloadIdentity(app appModel) bool {
+	return app.WorkloadIdentity.ServiceAccount.Create ||
+		strings.TrimSpace(app.WorkloadIdentity.ServiceAccount.Name) != "" ||
+		app.WorkloadIdentity.ServiceAccount.Automount != nil ||
+		len(app.WorkloadIdentity.Tokens) > 0
+}
+
+func workloadIdentityAssets(app appModel) []resolvedAsset {
+	out := make([]resolvedAsset, 0, len(app.WorkloadIdentity.Tokens))
+	for _, token := range app.WorkloadIdentity.Tokens {
+		name := strings.TrimSpace(token.Name)
+		if name == "" {
+			continue
+		}
+		path := strings.TrimSpace(token.Path)
+		if path == "" {
+			path = "token"
+		}
+		mountPath := strings.TrimSpace(token.MountPath)
+		if mountPath == "" {
+			mountPath = "/var/run/secrets/workload-identity/" + name
+		}
+		expirationSeconds := token.ExpirationSeconds
+		if expirationSeconds == 0 {
+			expirationSeconds = 3600
+		}
+		serviceAccountToken := map[string]any{
+			"path":              path,
+			"audience":          token.Audience,
+			"expirationSeconds": expirationSeconds,
+		}
+		out = append(out, resolvedAsset{
+			VolumeName: name + "-token",
+			Kind:       "raw",
+			RawVolume: map[string]any{
+				"name": name + "-token",
+				"projected": map[string]any{
+					"sources": []any{
+						map[string]any{"serviceAccountToken": serviceAccountToken},
+					},
+				},
+			},
+			RawMount: map[string]any{
+				"name":      name + "-token",
+				"mountPath": mountPath,
+				"readOnly":  true,
+			},
+		})
+	}
+	return out
+}
+
+func downwardAPIAssets(app appModel) []resolvedAsset {
+	mounts := append([]downwardAPIMountSpec{}, app.DownwardAPI.Mounts...)
+	if app.PodInfo.Enabled {
+		mountPath := strings.TrimSpace(app.PodInfo.MountPath)
+		if mountPath == "" {
+			mountPath = "/etc/podinfo"
+		}
+		mounts = append(mounts, downwardAPIMountSpec{
+			Name:      "podinfo",
+			MountPath: mountPath,
+			Items: []downwardAPIItemSpec{
+				{Path: "namespace", FieldPath: "metadata.namespace"},
+				{Path: "pod_name", FieldPath: "metadata.name"},
+			},
+		})
+	}
+	out := make([]resolvedAsset, 0, len(mounts))
+	for _, mount := range mounts {
+		name := strings.TrimSpace(mount.Name)
+		if name == "" {
+			continue
+		}
+		mountPath := strings.TrimSpace(mount.MountPath)
+		if mountPath == "" {
+			continue
+		}
+		items := make([]any, 0, len(mount.Items))
+		for _, item := range mount.Items {
+			if strings.TrimSpace(item.Path) == "" || strings.TrimSpace(item.FieldPath) == "" {
+				continue
+			}
+			items = append(items, map[string]any{
+				"path": strings.TrimSpace(item.Path),
+				"fieldRef": map[string]any{
+					"fieldPath": strings.TrimSpace(item.FieldPath),
+				},
+			})
+		}
+		if len(items) == 0 {
+			continue
+		}
+		out = append(out, resolvedAsset{
+			VolumeName: name,
+			Kind:       "raw",
+			RawVolume: map[string]any{
+				"name":        name,
+				"downwardAPI": map[string]any{"items": items},
+			},
+			RawMount: map[string]any{
+				"name":      name,
+				"mountPath": mountPath,
+				"readOnly":  true,
+			},
+		})
+	}
+	return out
+}
+
+func cloneAssetsMap(items map[string][]resolvedAsset) map[string][]resolvedAsset {
+	out := make(map[string][]resolvedAsset, len(items))
+	for key, value := range items {
+		out[key] = append([]resolvedAsset{}, value...)
+	}
+	return out
+}
+
 func renderDeployment(app appModel, namespace string, assets map[string][]resolvedAsset, sharedAssets []resolvedAsset, rolloutAnnotations map[string]string) (map[string]any, error) {
 	labels := map[string]any{appLabel: app.Name}
 	for key, value := range app.Labels {
 		labels[key] = value
 	}
+	workloadAssets := workloadIdentityAssets(app)
+	workloadAssets = append(workloadAssets, downwardAPIAssets(app)...)
 
-	containers := make([]map[string]any, 0, len(app.Containers))
+	containers := make([]map[string]any, 0, len(app.Containers)+len(app.Sidecars))
 	for _, container := range app.Containers {
-		containers = append(containers, renderContainer(container, assets[container.Name], sharedAssets, len(app.Tools) > 0))
+		containerAssets := append([]resolvedAsset{}, assets[container.Name]...)
+		containerAssets = append(containerAssets, workloadAssets...)
+		containers = append(containers, renderContainer(container, containerAssets, sharedAssets, len(app.Tools) > 0))
 	}
-	initContainers := renderInitContainers(app, assets, len(app.Tools) > 0)
+	for _, sidecar := range app.Sidecars {
+		sidecarAssets := append([]resolvedAsset{}, assets[sidecar.Name]...)
+		sidecarAssets = append(sidecarAssets, workloadAssets...)
+		containers = append(containers, renderContainer(sidecar, sidecarAssets, sharedAssets, len(app.Tools) > 0))
+	}
+	initAssets := assets
+	if len(workloadAssets) > 0 {
+		initAssets = cloneAssetsMap(assets)
+		for _, container := range app.InitContainers {
+			initAssets[container.Name] = append(initAssets[container.Name], workloadAssets...)
+		}
+	}
+	initContainers := renderInitContainers(app, initAssets, len(app.Tools) > 0)
 
 	podSpec := map[string]any{
 		"containers":       containers,
 		"imagePullSecrets": renderImagePullSecrets(app.Registry),
-		"volumes":          renderVolumes(app, assets, sharedAssets),
+		"volumes":          renderVolumes(app, assets, sharedAssets, workloadAssets),
 	}
 	if len(app.SecurityContext) > 0 {
 		podSpec["securityContext"] = cloneMap(app.SecurityContext)
@@ -2293,8 +2584,14 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 	if app.TerminationGrace != nil {
 		podSpec["terminationGracePeriodSeconds"] = *app.TerminationGrace
 	}
-	if strings.TrimSpace(app.ServiceAccount) != "" {
-		podSpec["serviceAccountName"] = strings.TrimSpace(app.ServiceAccount)
+	if name := effectiveServiceAccountName(app); name != "" {
+		podSpec["serviceAccountName"] = name
+	}
+	if automount, ok := effectiveServiceAccountAutomount(app); ok {
+		podSpec["automountServiceAccountToken"] = automount
+	}
+	if app.Pod.ShareProcessNamespace {
+		podSpec["shareProcessNamespace"] = true
 	}
 	if len(app.DNS) > 0 {
 		podSpec["hostAliases"] = renderHostAliases(app.DNS)
@@ -3001,6 +3298,23 @@ func resolveAssets(app appModel, envDir string, vars map[string]string, opts Opt
 			out[container.Name] = append(out[container.Name], asset)
 		}
 	}
+	for _, container := range app.Sidecars {
+		assetSpecs := append([]assetSpec{}, container.Assets...)
+		for _, item := range assetSpecs {
+			asset, err := resolveAsset(app.Name, container.Name, item, envDir, vars, opts)
+			if err != nil {
+				return nil, err
+			}
+			out[container.Name] = append(out[container.Name], asset)
+		}
+		for _, item := range container.Mounts {
+			asset, err := resolveMount(app.Name, container.Name, item, envDir, vars, opts)
+			if err != nil {
+				return nil, err
+			}
+			out[container.Name] = append(out[container.Name], asset)
+		}
+	}
 	for _, container := range app.InitContainers {
 		for _, item := range container.Mounts {
 			asset, err := resolveMount(app.Name, container.Name, item, envDir, vars, opts)
@@ -3216,9 +3530,10 @@ func rawVolumeName(spec mountSpec) string {
 	return spec.Name
 }
 
-func renderVolumes(app appModel, assets map[string][]resolvedAsset, sharedAssets []resolvedAsset) []any {
+func renderVolumes(app appModel, assets map[string][]resolvedAsset, sharedAssets []resolvedAsset, extraAssets []resolvedAsset) []any {
 	all := orderedResolvedAssets(app, assets)
 	all = append(sharedAssets, all...)
+	all = append(all, extraAssets...)
 	out := make([]any, 0, len(all))
 	seenVolumes := map[string]bool{}
 	for _, asset := range all {
@@ -3341,6 +3656,10 @@ func orderedResolvedAssets(app appModel, assets map[string][]resolvedAsset) []re
 	out := []resolvedAsset{}
 	seen := map[string]bool{}
 	for _, container := range app.Containers {
+		out = append(out, assets[container.Name]...)
+		seen[container.Name] = true
+	}
+	for _, container := range app.Sidecars {
 		out = append(out, assets[container.Name]...)
 		seen[container.Name] = true
 	}

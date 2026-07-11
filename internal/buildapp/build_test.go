@@ -883,6 +883,291 @@ containers:
 	}
 }
 
+func TestBuildGeneratesWorkloadIdentityServiceAccountAndToken(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+workload_identity:
+  service_account:
+    create: true
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+pod_info:
+  enabled: true
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	result, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ServiceAccounts) != 1 {
+		t.Fatalf("len(serviceAccounts) = %d, want 1", len(result.ServiceAccounts))
+	}
+
+	serviceAccount := loadYAML(t, filepath.Join(target, "deployments", "api-serviceaccount.yml"))
+	if got := digString(serviceAccount, "kind"); got != "ServiceAccount" {
+		t.Fatalf("service account kind = %q, want ServiceAccount", got)
+	}
+	if got := digString(serviceAccount, "metadata", "name"); got != "api" {
+		t.Fatalf("service account metadata.name = %q, want api", got)
+	}
+	if got := digString(serviceAccount, "metadata", "namespace"); got != "nac-test" {
+		t.Fatalf("service account metadata.namespace = %q, want nac-test", got)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "serviceAccountName"); got != "api" {
+		t.Fatalf("serviceAccountName = %q, want api", got)
+	}
+	if got := digBool(deployment, "spec", "template", "spec", "automountServiceAccountToken"); got {
+		t.Fatalf("automountServiceAccountToken = true, want false")
+	}
+	if got := digString(deployment, "spec", "template", "spec", "volumes", "0", "projected", "sources", "0", "serviceAccountToken", "audience"); got != "simple-config-server" {
+		t.Fatalf("token audience = %q, want simple-config-server", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "volumes", "0", "projected", "sources", "0", "serviceAccountToken", "path"); got != "token" {
+		t.Fatalf("token path = %q, want token", got)
+	}
+	if got := digInt(deployment, "spec", "template", "spec", "volumes", "0", "projected", "sources", "0", "serviceAccountToken", "expirationSeconds"); got != 3600 {
+		t.Fatalf("token expirationSeconds = %d, want 3600", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "0", "mountPath"); got != "/var/run/secrets/workload-identity/simple-config" {
+		t.Fatalf("token mountPath = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "volumes", "1", "downwardAPI", "items", "0", "fieldRef", "fieldPath"); got != "metadata.namespace" {
+		t.Fatalf("podinfo namespace fieldPath = %q, want metadata.namespace", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "1", "mountPath"); got != "/etc/podinfo" {
+		t.Fatalf("podinfo mountPath = %q, want /etc/podinfo", got)
+	}
+}
+
+func TestBuildGeneratesDownwardAPIMount(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+downward_api:
+  mounts:
+    - name: runtime-info
+      mount_path: /etc/runtime-info
+      items:
+        - path: namespace
+          field_path: metadata.namespace
+        - path: pod_name
+          field_path: metadata.name
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "volumes", "0", "name"); got != "runtime-info" {
+		t.Fatalf("downwardAPI volume name = %q, want runtime-info", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "volumes", "0", "downwardAPI", "items", "1", "fieldRef", "fieldPath"); got != "metadata.name" {
+		t.Fatalf("downwardAPI pod_name fieldPath = %q, want metadata.name", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "0", "mountPath"); got != "/etc/runtime-info" {
+		t.Fatalf("downwardAPI mountPath = %q, want /etc/runtime-info", got)
+	}
+	if got := digBool(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "0", "readOnly"); !got {
+		t.Fatalf("downwardAPI mount readOnly = false, want true")
+	}
+}
+
+func TestBuildGeneratesSidecarsAndSharedProcessNamespace(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+pod:
+  share_process_namespace: true
+workload_identity:
+  service_account:
+    create: true
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+sidecars:
+  - name: simple-config-token-proxy
+    image: "{{TSM_REGISTRY_URL}}/simple-config-token-proxy:{{TSM_RELEASE_ID}}"
+    startup:
+      command:
+        - simple-config-token-proxy
+      arguments:
+        - --listen
+        - 127.0.0.1:9999
+        - --upstream
+        - https://config.example.test/simple-config-server
+        - --token-file
+        - /var/run/secrets/workload-identity/simple-config/token
+    resources:
+      cpu:
+        from: "10m"
+        to: "100m"
+      memory:
+        from: "32Mi"
+        to: "128Mi"
+  - name: cgroup-runtime-exporter
+    image: "{{TSM_REGISTRY_URL}}/cgroup-runtime-exporter:{{TSM_RELEASE_ID}}"
+    envs:
+      - name: TARGET_PID
+        value: "1"
+    resources:
+      cpu:
+        from: "5m"
+        to: "50m"
+      memory:
+        from: "16Mi"
+        to: "64Mi"
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    envs:
+      - name: SPRING_CLOUD_CONFIG_URI
+        value: http://127.0.0.1:9999
+    resources:
+      cpu:
+        from: "100m"
+        to: "200m"
+      memory:
+        from: "128Mi"
+        to: "256Mi"
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digBool(deployment, "spec", "template", "spec", "shareProcessNamespace"); !got {
+		t.Fatalf("shareProcessNamespace = false, want true")
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "1", "name"); got != "simple-config-token-proxy" {
+		t.Fatalf("sidecar[0].name = %q, want simple-config-token-proxy", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "1", "command", "0"); got != "simple-config-token-proxy" {
+		t.Fatalf("sidecar command[0] = %q, want simple-config-token-proxy", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "1", "args", "1"); got != "127.0.0.1:9999" {
+		t.Fatalf("sidecar args[1] = %q, want 127.0.0.1:9999", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "1", "volumeMounts", "0", "mountPath"); got != "/var/run/secrets/workload-identity/simple-config" {
+		t.Fatalf("sidecar token mountPath = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "2", "name"); got != "cgroup-runtime-exporter" {
+		t.Fatalf("sidecar[1].name = %q, want cgroup-runtime-exporter", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "2", "env", "0", "name"); got != "TARGET_PID" {
+		t.Fatalf("cgroup env[0].name = %q, want TARGET_PID", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "2", "env", "0", "value"); got != "1" {
+		t.Fatalf("cgroup TARGET_PID = %q, want 1", got)
+	}
+}
+
+func TestBuildReleaseManifestDefaultDoesNotOverrideSidecarImage(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	manifestPath := filepath.Join(root, "release.yml")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":        "nac-test",
+			"TSM_REGISTRY_URL": "registry.local/tsm",
+			"TSM_RELEASE_ID":   "1.0.0",
+		},
+	})
+	writeFile(t, manifestPath, `
+images:
+  - app_name: api
+    image: registry.release/api
+    tag: "2.0.0"
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+sidecars:
+  - name: helper
+    image: registry.local/helper:1.0.0
+    resources:
+      cpu: {from: "10m", to: "50m"}
+      memory: {from: "16Mi", to: "64Mi"}
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "image"); got != "registry.release/api:2.0.0" {
+		t.Fatalf("app image = %q, want registry.release/api:2.0.0", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "1", "image"); got != "registry.local/helper:1.0.0" {
+		t.Fatalf("sidecar image = %q, want registry.local/helper:1.0.0", got)
+	}
+}
+
 func TestBuildGeneratesGenericInitContainers(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
