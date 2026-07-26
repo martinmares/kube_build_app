@@ -33,6 +33,7 @@ type cliOptions struct {
 	syncPrefix       string
 	syncSet          string
 	down             []string
+	yamlIndent       int
 	list             bool
 	summary          bool
 	summaryFormat    string
@@ -95,6 +96,7 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.PersistentFlags().StringVar(&opts.syncPrefix, "sync-metadata-prefix", "kube-build-app.io", "sync metadata label/annotation prefix")
 	root.PersistentFlags().StringVar(&opts.syncSet, "sync-set", "", "sync metadata set name; defaults to environment")
 	root.PersistentFlags().StringArrayVarP(&opts.down, "down", "w", nil, "scale app replicas down to 0; repeatable or comma-separated")
+	root.PersistentFlags().IntVar(&opts.yamlIndent, "yaml-indent", 2, "manifest YAML indentation: 2 or 4 spaces")
 	root.PersistentFlags().BoolVarP(&opts.debug, "debug", "b", false, "debug output compatibility flag")
 	root.PersistentFlags().BoolVar(&opts.verbose, "verbose", false, "print build render events to stderr")
 	root.PersistentFlags().StringVar(&opts.logFormat, "log-format", "text", "verbose build log format: text or json")
@@ -427,6 +429,7 @@ func toBuildOptions(opts *cliOptions) buildapp.Options {
 		SyncPrefix:       opts.syncPrefix,
 		SyncSet:          opts.syncSet,
 		Down:             opts.down,
+		YAMLIndent:       opts.yamlIndent,
 	}
 }
 

@@ -907,22 +907,32 @@ disable_shared_assets: true
 
 ### 10. Tools
 
-Static utility binaries can be exposed through initContainers and mounted under `/app/tools`:
+Static utility binaries can be copied by initContainers and mounted at an exact path in every app container:
 
 ```yaml
 tools:
   - name: util-apply-env
     image: registry.example.com/tools/apply-env:latest
     expose_bin: /usr/bin/apply-env
-    as: /app/tools/apply-env
+    mount_path: /usr/local/bin/apply-env
+    image_pull_policy: Always
+    resources:
+      cpu: { requests: "10m", limits: "100m" }
+      memory: { requests: "16Mi", limits: "128Mi" }
 ```
 
 Behavior:
 
 - every tool becomes an initContainer
 - the initContainer copies `expose_bin` into a shared `emptyDir`
-- app containers mount that volume read-only under `/app/tools`
-- if `as` is omitted, target defaults to `/app/tools/<basename(expose_bin)>`
+- app containers mount the copied file read-only at `mount_path` via `subPath`
+- `mount_path` is required and must be an absolute file path
+- `image_pull_policy` defaults to `Always`; accepted values are `Always`, `IfNotPresent` and `Never`
+- `as` is removed and rejected; it must be replaced with `mount_path`
+- every tool gets default resources (`10m`/`100m` CPU and `16Mi`/`128Mi` memory), so it is valid in namespaces with a `ResourceQuota`; `resources` can override individual values
+
+`image_pull_policy` uses the same values and default for `containers`,
+`sidecars`, `init_containers` and `tools`.
 
 ### 11. Scheduling and Pod Metadata
 
@@ -1317,6 +1327,7 @@ tools:
   - name: util-apply-env
     image: registry.example.com/tools/apply-env:latest
     expose_bin: /usr/bin/apply-env
+    mount_path: /usr/local/bin/apply-env
 
 vars:
   - name: LOG_LEVEL
@@ -1527,6 +1538,14 @@ Build cross-platform binaries:
 just build-cross
 just build-cross-all
 ```
+
+Generated manifests use two-space YAML indentation by default, matching the Ruby implementation. Use `--yaml-indent 4` only where a repository convention requires four spaces:
+
+```bash
+kube-build-app build -e test -R environments -t deploy/test --yaml-indent 4
+```
+
+`just build-cross` injects the `VERSION`, Git commit and UTC build timestamp into every `kube-build-app` binary. Verify an artifact with `kube-build-app --version`.
 
 Build release binaries with version metadata and SHA256 checksums:
 

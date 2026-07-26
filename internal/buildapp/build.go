@@ -1,6 +1,7 @@
 package buildapp
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -39,6 +40,7 @@ type Options struct {
 	SyncPrefix       string
 	SyncSet          string
 	Down             []string
+	YAMLIndent       int
 }
 
 type Result struct {
@@ -243,6 +245,7 @@ type antiAffinitySpec struct {
 type containerSpec struct {
 	Name                 string                    `yaml:"name"`
 	Image                string                    `yaml:"image"`
+	ImagePullPolicy      string                    `yaml:"image_pull_policy"`
 	Assets               []assetSpec               `yaml:"assets"`
 	Mounts               []mountSpec               `yaml:"mounts"`
 	LegacyEnvVars        []envVar                  `yaml:"env_vars"`
@@ -281,6 +284,7 @@ type javaRuntimeExportSpec struct {
 type initContainerSpec struct {
 	Name            string                    `yaml:"name"`
 	Image           string                    `yaml:"image"`
+	ImagePullPolicy string                    `yaml:"image_pull_policy"`
 	Command         []string                  `yaml:"command"`
 	Arguments       []string                  `yaml:"arguments"`
 	Mounts          []mountSpec               `yaml:"mounts"`
@@ -486,10 +490,13 @@ type externalHostSpec struct {
 }
 
 type toolSpec struct {
-	Name      string `yaml:"name"`
-	Image     string `yaml:"image"`
-	ExposeBin string `yaml:"expose_bin"`
-	As        string `yaml:"as"`
+	Name            string                    `yaml:"name"`
+	Image           string                    `yaml:"image"`
+	ExposeBin       string                    `yaml:"expose_bin"`
+	MountPath       string                    `yaml:"mount_path"`
+	LegacyAs        string                    `yaml:"as"`
+	ImagePullPolicy string                    `yaml:"image_pull_policy"`
+	Resources       map[string]map[string]any `yaml:"resources"`
 }
 
 type envVar struct {
@@ -528,6 +535,11 @@ func Build(opts Options) (Result, error) {
 	if strings.TrimSpace(opts.Environment) == "" {
 		return Result{}, errors.New("environment is required")
 	}
+	yamlIndent, err := normalizeYAMLIndent(opts.YAMLIndent)
+	if err != nil {
+		return Result{}, err
+	}
+	opts.YAMLIndent = yamlIndent
 	if strings.TrimSpace(opts.Root) == "" {
 		opts.Root = "environments"
 	}
@@ -708,11 +720,39 @@ func writeRenderedObject(path string, object map[string]any, opts Options, syncS
 	if err := applySyncMetadata(object, opts, syncSpec); err != nil {
 		return err
 	}
-	out, err := yaml.Marshal(object)
+	out, err := marshalManifestYAML(object, opts.YAMLIndent)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, out, 0o644)
+}
+
+func normalizeYAMLIndent(indent int) (int, error) {
+	switch indent {
+	case 0, 2:
+		return 2, nil
+	case 4:
+		return 4, nil
+	default:
+		return 0, fmt.Errorf("yaml indent must be 2 or 4, got %d", indent)
+	}
+}
+
+func marshalManifestYAML(object map[string]any, indent int) ([]byte, error) {
+	indent, err := normalizeYAMLIndent(indent)
+	if err != nil {
+		return nil, err
+	}
+	var buffer bytes.Buffer
+	encoder := yaml.NewEncoder(&buffer)
+	encoder.SetIndent(indent)
+	if err := encoder.Encode(object); err != nil {
+		return nil, err
+	}
+	if err := encoder.Close(); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
 }
 
 func applySyncMetadata(object map[string]any, opts Options, spec syncMetadataSpec) error {
@@ -1513,6 +1553,9 @@ func loadApps(appFiles []string, defaultsPath string, vars map[string]string) ([
 
 func validateApps(apps []appModel) error {
 	for _, app := range apps {
+		if err := validateTools(app); err != nil {
+			return err
+		}
 		for _, token := range app.WorkloadIdentity.Tokens {
 			if strings.TrimSpace(token.Name) == "" {
 				return fmt.Errorf("%s: workload_identity.tokens[].name is required", app.Name)
@@ -1555,6 +1598,9 @@ func validateApps(apps []appModel) error {
 			}
 		}
 		for _, container := range appRuntimeContainers(app) {
+			if _, err := imagePullPolicy(container.ImagePullPolicy); err != nil {
+				return fmt.Errorf("%s: container %q: %w", app.Name, container.Name, err)
+			}
 			for _, port := range container.Ports {
 				for _, expose := range port.ExposeAs {
 					if expose.ServiceName != "" && expose.Hostname != "" && expose.ServiceName != expose.Hostname {
@@ -1577,6 +1623,38 @@ func validateApps(apps []appModel) error {
 			if len(container.SimpleInit.Exec.Command) == 0 {
 				return fmt.Errorf("%s: container %q requires simple_init.exec.command as non-empty array", app.Name, container.Name)
 			}
+		}
+		for _, container := range app.InitContainers {
+			if _, err := imagePullPolicy(container.ImagePullPolicy); err != nil {
+				return fmt.Errorf("%s: init container %q: %w", app.Name, container.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateTools(app appModel) error {
+	seenPaths := map[string]bool{}
+	for _, tool := range app.Tools {
+		if strings.TrimSpace(tool.LegacyAs) != "" {
+			return fmt.Errorf("%s: tool %q uses removed key as; use mount_path", app.Name, tool.Name)
+		}
+		if strings.TrimSpace(tool.ExposeBin) == "" {
+			return fmt.Errorf("%s: tool %q requires expose_bin", app.Name, tool.Name)
+		}
+		if strings.TrimSpace(tool.Image) == "" {
+			return fmt.Errorf("%s: tool %q requires image", app.Name, tool.Name)
+		}
+		mountPath, err := normalizedToolMountPath(tool)
+		if err != nil {
+			return fmt.Errorf("%s: tool %q: %w", app.Name, tool.Name, err)
+		}
+		if seenPaths[mountPath] {
+			return fmt.Errorf("%s: duplicate tool mount_path %q", app.Name, mountPath)
+		}
+		seenPaths[mountPath] = true
+		if _, err := imagePullPolicy(tool.ImagePullPolicy); err != nil {
+			return fmt.Errorf("%s: tool %q: %w", app.Name, tool.Name, err)
 		}
 	}
 	return nil
@@ -2557,12 +2635,12 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 	for _, container := range app.Containers {
 		containerAssets := append([]resolvedAsset{}, assets[container.Name]...)
 		containerAssets = append(containerAssets, workloadAssets...)
-		containers = append(containers, renderContainer(container, containerAssets, sharedAssets, len(app.Tools) > 0))
+		containers = append(containers, renderContainer(container, containerAssets, sharedAssets, app.Tools))
 	}
 	for _, sidecar := range app.Sidecars {
 		sidecarAssets := append([]resolvedAsset{}, assets[sidecar.Name]...)
 		sidecarAssets = append(sidecarAssets, workloadAssets...)
-		containers = append(containers, renderContainer(sidecar, sidecarAssets, sharedAssets, len(app.Tools) > 0))
+		containers = append(containers, renderContainer(sidecar, sidecarAssets, sharedAssets, app.Tools))
 	}
 	initAssets := assets
 	if len(workloadAssets) > 0 {
@@ -2571,7 +2649,7 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 			initAssets[container.Name] = append(initAssets[container.Name], workloadAssets...)
 		}
 	}
-	initContainers := renderInitContainers(app, initAssets, len(app.Tools) > 0)
+	initContainers := renderInitContainers(app, initAssets, app.Tools)
 
 	podSpec := map[string]any{
 		"containers":       containers,
@@ -2947,19 +3025,13 @@ func renderHostAliases(dns []hostAliasSpec) []any {
 	return out
 }
 
-func renderContainer(container containerSpec, assets []resolvedAsset, sharedAssets []resolvedAsset, mountTools bool) map[string]any {
+func renderContainer(container containerSpec, assets []resolvedAsset, sharedAssets []resolvedAsset, tools []toolSpec) map[string]any {
 	mounts := renderVolumeMounts(append(append([]resolvedAsset{}, assets...), sharedAssets...))
-	if mountTools {
-		mounts = append(mounts, map[string]any{
-			"name":      "app-tools",
-			"mountPath": "/app/tools",
-			"readOnly":  true,
-		})
-	}
+	mounts = append(mounts, renderToolVolumeMounts(tools)...)
 	out := map[string]any{
 		"name":            container.Name,
 		"image":           container.Image,
-		"imagePullPolicy": "Always",
+		"imagePullPolicy": mustImagePullPolicy(container.ImagePullPolicy),
 		"resources":       renderResources(container.Resources),
 		"volumeMounts":    mounts,
 	}
@@ -3009,27 +3081,21 @@ func renderContainer(container containerSpec, assets []resolvedAsset, sharedAsse
 	return out
 }
 
-func renderInitContainers(app appModel, assets map[string][]resolvedAsset, mountTools bool) []map[string]any {
+func renderInitContainers(app appModel, assets map[string][]resolvedAsset, tools []toolSpec) []map[string]any {
 	out := renderToolInitContainers(app.Tools)
 	for _, container := range app.InitContainers {
-		out = append(out, renderInitContainer(container, assets[container.Name], mountTools))
+		out = append(out, renderInitContainer(container, assets[container.Name], tools))
 	}
 	return out
 }
 
-func renderInitContainer(container initContainerSpec, assets []resolvedAsset, mountTools bool) map[string]any {
+func renderInitContainer(container initContainerSpec, assets []resolvedAsset, tools []toolSpec) map[string]any {
 	mounts := renderVolumeMounts(assets)
-	if mountTools {
-		mounts = append(mounts, map[string]any{
-			"name":      "app-tools",
-			"mountPath": "/app/tools",
-			"readOnly":  true,
-		})
-	}
+	mounts = append(mounts, renderToolVolumeMounts(tools)...)
 	out := map[string]any{
 		"name":            container.Name,
 		"image":           container.Image,
-		"imagePullPolicy": "Always",
+		"imagePullPolicy": mustImagePullPolicy(container.ImagePullPolicy),
 	}
 	if len(container.Resources) > 0 {
 		out["resources"] = renderResources(container.Resources)
@@ -4131,8 +4197,9 @@ func renderToolInitContainers(tools []toolSpec) []map[string]any {
 		out = append(out, map[string]any{
 			"name":            name,
 			"image":           image,
-			"imagePullPolicy": "IfNotPresent",
+			"imagePullPolicy": mustImagePullPolicy(tool.ImagePullPolicy),
 			"command":         []string{"/bin/sh", "-ec", script},
+			"resources":       renderResources(toolResources(tool.Resources)),
 			"volumeMounts": []any{
 				map[string]any{
 					"name":      "app-tools",
@@ -4144,19 +4211,88 @@ func renderToolInitContainers(tools []toolSpec) []map[string]any {
 	return out
 }
 
-func toolTargetRelative(tool toolSpec) string {
-	target := strings.TrimSpace(tool.As)
-	if target == "" {
-		target = "/app/tools/" + filepath.Base(tool.ExposeBin)
+func toolResources(overrides map[string]map[string]any) map[string]map[string]any {
+	// A ResourceQuota applies to initContainers too. Keep tools small by default,
+	// while allowing a tool image with higher requirements to override either value.
+	resources := map[string]map[string]any{
+		"cpu": {
+			"requests": "10m",
+			"limits":   "100m",
+		},
+		"memory": {
+			"requests": "16Mi",
+			"limits":   "128Mi",
+		},
 	}
-	if strings.HasPrefix(target, "/app/tools/") {
-		rel := strings.TrimPrefix(target, "/app/tools/")
-		if rel == "" {
-			return filepath.Base(tool.ExposeBin)
+	for resource, values := range overrides {
+		if resources[resource] == nil {
+			resources[resource] = map[string]any{}
 		}
-		return rel
+		for key, value := range values {
+			resources[resource][key] = value
+		}
 	}
-	return filepath.Base(target)
+	return resources
+}
+
+func toolTargetRelative(tool toolSpec) string {
+	target, err := normalizedToolMountPath(tool)
+	if err != nil {
+		panic(err)
+	}
+	return strings.TrimPrefix(target, "/")
+}
+
+func renderToolVolumeMounts(tools []toolSpec) []any {
+	out := make([]any, 0, len(tools))
+	for _, tool := range tools {
+		mountPath, err := normalizedToolMountPath(tool)
+		if err != nil {
+			panic(err)
+		}
+		out = append(out, map[string]any{
+			"name":      "app-tools",
+			"mountPath": mountPath,
+			"subPath":   toolTargetRelative(tool),
+			"readOnly":  true,
+		})
+	}
+	return out
+}
+
+func normalizedToolMountPath(tool toolSpec) (string, error) {
+	target := strings.TrimSpace(tool.MountPath)
+	if target == "" {
+		return "", errors.New("mount_path is required")
+	}
+	if !filepath.IsAbs(target) || target == "/" {
+		return "", fmt.Errorf("invalid mount_path %q", target)
+	}
+	if filepath.Clean(target) != target {
+		return "", fmt.Errorf("invalid mount_path %q", target)
+	}
+	return target, nil
+}
+
+func imagePullPolicy(value string) (string, error) {
+	policy := strings.TrimSpace(value)
+	if policy == "" {
+		return "Always", nil
+	}
+	switch policy {
+	case "Always", "IfNotPresent", "Never":
+		return policy, nil
+	default:
+		return "", fmt.Errorf("invalid image_pull_policy %q: expected Always, IfNotPresent or Never", policy)
+	}
+}
+
+func mustImagePullPolicy(value string) string {
+	policy, err := imagePullPolicy(value)
+	if err != nil {
+		panic(err)
+	}
+	return policy
 }
 
 func shellQuote(value string) string {

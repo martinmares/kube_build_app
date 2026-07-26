@@ -6,10 +6,9 @@ module KubeBuildApp
     require_relative "service"
 
     attr_reader :content, :name, :startup, :simple_init, :mtls, :envs, :assets, :ports, :services, :resources, :shared_assets,
-                :env, :health, :probe, :raw
+                :env, :health, :probe, :raw, :image_pull_policy
     attr_accessor :image
     TOOLS_VOLUME_NAME = "app-tools"
-    TOOLS_MOUNT_PATH = "/app/tools"
     MTLS_ENC_MOUNT_DIR = "/app/mtls.enc"
     CGROUP_EXPORTER_DEFAULT_VARS = [
       { "name" => "CGROUP_EXPORTER_METRICS_PREFIX", "value" => "{{TSM_METRICS_PREFIX}}" },
@@ -29,6 +28,7 @@ module KubeBuildApp
       @content = content
       @name = content["name"]
       @image = content["image"]
+      @image_pull_policy = content["image_pull_policy"]
       @startup = content["startup"]
       @simple_init = content["simple_init"]
       @mtls = content["mtls"]
@@ -191,7 +191,7 @@ module KubeBuildApp
       result["args"] = container.startup["arguments"] if container.startup
       effective_vars = Container::build_effective_vars(container)
       result["env"] = Container::build_vars(effective_vars) if effective_vars && effective_vars.size > 0
-      result["imagePullPolicy"] = "Always"
+      result["imagePullPolicy"] = Container.image_pull_policy(container.image_pull_policy)
       result["resources"] = Container::build_resources(container.resources)
       # result["securityContext"] = {
       #   "allowPrivilegeEscalation" => false,
@@ -397,13 +397,7 @@ module KubeBuildApp
       result = Array.new
       result += Asset::build_spec_assets(assets)
       result += Asset::build_spec_assets(shared_assets)
-      if tools && tools.size > 0
-        result << {
-          "name" => TOOLS_VOLUME_NAME,
-          "mountPath" => TOOLS_MOUNT_PATH,
-          "readOnly" => true,
-        }
-      end
+      result += Container.build_tool_mounts(tools) if tools && tools.size > 0
       result
     end
 
@@ -411,11 +405,8 @@ module KubeBuildApp
       result = []
       tools.each do |item|
         next unless item.is_a?(Hash)
-        expose_bin = item["expose_bin"]
-        next if expose_bin.nil? || expose_bin.to_s.strip.empty?
-
-        image = item["image"] || item["name"]
-        next if image.nil? || image.to_s.strip.empty?
+        expose_bin = tool_expose_bin(item)
+        image = tool_image(item)
 
         rel_target = tools_target_relative(item)
         script = [
@@ -428,7 +419,7 @@ module KubeBuildApp
         result << {
           "name" => (item["name"] || "tool-#{File.basename(rel_target)}"),
           "image" => image,
-          "imagePullPolicy" => "IfNotPresent",
+          "imagePullPolicy" => image_pull_policy(item["image_pull_policy"]),
           "command" => ["/bin/sh", "-ec", script],
           "volumeMounts" => [
             {
@@ -442,14 +433,63 @@ module KubeBuildApp
     end
 
     def self.tools_target_relative(item)
-      target = item["as"] || "#{TOOLS_MOUNT_PATH}/#{File.basename(item["expose_bin"])}"
-      if target.start_with?("#{TOOLS_MOUNT_PATH}/")
-        rel = target.sub("#{TOOLS_MOUNT_PATH}/", "")
-        rel.empty? ? File.basename(item["expose_bin"]) : rel
-      else
-        # convention-over-configuration: everything is exposed under /app/tools
-        File.basename(target)
+      target = tool_mount_path(item)
+      target.sub(%r{\A/}, "")
+    end
+
+    def self.build_tool_mounts(tools)
+      tools.map do |item|
+        tool_expose_bin(item)
+        tool_image(item)
+        {
+          "name" => TOOLS_VOLUME_NAME,
+          "mountPath" => tool_mount_path(item),
+          "readOnly" => true,
+          "subPath" => tools_target_relative(item),
+        }
       end
+    end
+
+    def self.tool_mount_path(item)
+      raise ArgumentError, "tool '#{item['name'] || item['image']}' uses removed key 'as'; use 'mount_path'" if item.has_key?("as")
+
+      target = item["mount_path"]
+      if target.nil? || target.to_s.strip.empty?
+        raise ArgumentError, "tool '#{item['name'] || item['image']}' requires non-empty 'mount_path'"
+      end
+
+      target = target.to_s.strip
+      unless target.start_with?("/") && target != "/" && !target.split("/").include?("..")
+        raise ArgumentError, "tool '#{item['name'] || item['image']}' has invalid mount_path '#{target}'"
+      end
+
+      target
+    end
+
+    def self.tool_expose_bin(item)
+      source = item["expose_bin"]
+      if source.nil? || source.to_s.strip.empty?
+        raise ArgumentError, "tool '#{item['name'] || item['image']}' requires non-empty 'expose_bin'"
+      end
+
+      source.to_s.strip
+    end
+
+    def self.tool_image(item)
+      image = item["image"]
+      if image.nil? || image.to_s.strip.empty?
+        raise ArgumentError, "tool '#{item['name']}' requires non-empty 'image'"
+      end
+
+      image.to_s.strip
+    end
+
+    def self.image_pull_policy(value)
+      policy = value.to_s.strip
+      policy = "Always" if policy.empty?
+      return policy if ["Always", "IfNotPresent", "Never"].include?(policy)
+
+      raise ArgumentError, "invalid image_pull_policy '#{policy}'; expected Always, IfNotPresent or Never"
     end
 
     def self.shell_escape(value)

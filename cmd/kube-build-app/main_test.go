@@ -50,6 +50,19 @@ func TestCobraBuildImageOverride(t *testing.T) {
 	}
 }
 
+func TestCobraBuildYAMLIndent(t *testing.T) {
+	root := writeCLIEnv(t)
+	target := filepath.Join(t.TempDir(), "target")
+	runCLI(t, "build", "-e", "test", "-R", root, "-t", target, "--yaml-indent", "4")
+	content, err := os.ReadFile(filepath.Join(target, "deployments", "api-deployment.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "\n    template:\n") {
+		t.Fatalf("deployment does not use four-space YAML indentation:\n%s", content)
+	}
+}
+
 func TestCobraBuildRejectsSummaryFlag(t *testing.T) {
 	root := writeCLIEnv(t)
 	out, err := runCLIError("build", "-e", "test", "-R", root, "-s")

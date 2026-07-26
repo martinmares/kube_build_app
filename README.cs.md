@@ -895,22 +895,32 @@ disable_shared_assets: true
 
 ### 10. Tools
 
-Statické utility binárky lze vystavit přes initContainers a mount do `/app/tools`:
+Statické utility binárky lze zkopírovat initContainery a přimountovat na přesnou cestu do každého aplikačního kontejneru:
 
 ```yaml
 tools:
   - name: util-apply-env
     image: registry.example.com/tools/apply-env:latest
     expose_bin: /usr/bin/apply-env
-    as: /app/tools/apply-env
+    mount_path: /usr/local/bin/apply-env
+    image_pull_policy: Always
+    resources:
+      cpu: { requests: "10m", limits: "100m" }
+      memory: { requests: "16Mi", limits: "128Mi" }
 ```
 
 Chování:
 
 - každý tool se generuje jako initContainer
 - initContainer zkopíruje `expose_bin` do sdíleného `emptyDir`
-- app containery mountují volume read-only pod `/app/tools`
-- pokud `as` chybí, cíl je `/app/tools/<basename(expose_bin)>`
+- app containery přimountují zkopírovaný soubor read-only na `mount_path` přes `subPath`
+- `mount_path` je povinný a musí být absolutní cesta k souboru
+- `image_pull_policy` má výchozí hodnotu `Always`; povolené hodnoty jsou `Always`, `IfNotPresent` a `Never`
+- `as` je odstraněné a odmítne se; musí být nahrazeno `mount_path`
+- každý tool dostane výchozí resources (`10m`/`100m` CPU a `16Mi`/`128Mi` memory), proto vyhoví namespace s `ResourceQuota`; `resources` může přepsat jednotlivé hodnoty
+
+`image_pull_policy` používá stejné hodnoty a výchozí chování u `containers`,
+`sidecars`, `init_containers` i `tools`.
 
 ### 11. Scheduling a Pod Metadata
 
@@ -1305,6 +1315,7 @@ tools:
   - name: util-apply-env
     image: registry.example.com/tools/apply-env:latest
     expose_bin: /usr/bin/apply-env
+    mount_path: /usr/local/bin/apply-env
 
 vars:
   - name: LOG_LEVEL
@@ -1515,6 +1526,14 @@ Cross-platform build:
 just build-cross
 just build-cross-all
 ```
+
+Generované manifesty používají výchozí odsazení YAML dvěma mezerami, stejně jako Ruby implementace. Pokud repozitář výslovně vyžaduje čtyři mezery, použijte `--yaml-indent 4`:
+
+```bash
+kube-build-app build -e test -R environments -t deploy/test --yaml-indent 4
+```
+
+`just build-cross` vloží do každé binárky `kube-build-app` hodnotu `VERSION`, Git commit a čas buildu v UTC. Artefakt ověříte pomocí `kube-build-app --version`.
 
 Release binárky s version metadata a SHA256 checksumy:
 

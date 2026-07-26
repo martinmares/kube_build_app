@@ -23,7 +23,7 @@ class ComprehensiveFeaturesTest < Minitest::Test
           - name: util-encjson-rs
             image: toolbox:1
             expose_bin: /usr/bin/encjson-rs
-            as: /app/tools/encjson
+            mount_path: /usr/local/bin/encjson
       YAML
     )
     write_file(
@@ -68,11 +68,14 @@ class ComprehensiveFeaturesTest < Minitest::Test
 
     refute_empty with_tools.dig("spec", "template", "spec", "initContainers") || []
     mounts = with_tools.dig("spec", "template", "spec", "containers", 0, "volumeMounts") || []
-    assert_includes mounts.map { |m| m["mountPath"] }, "/app/tools"
+    tool_mount = mounts.find { |mount| mount["mountPath"] == "/usr/local/bin/encjson" }
+    refute_nil tool_mount
+    assert_equal "usr/local/bin/encjson", tool_mount["subPath"]
+    assert_equal "Always", with_tools.dig("spec", "template", "spec", "initContainers", 0, "imagePullPolicy")
 
     assert_nil without_tools.dig("spec", "template", "spec", "initContainers")
     mounts_without = without_tools.dig("spec", "template", "spec", "containers", 0, "volumeMounts") || []
-    refute_includes mounts_without.map { |m| m["mountPath"] }, "/app/tools"
+    refute_includes mounts_without.map { |m| m["mountPath"] }, "/usr/local/bin/encjson"
   end
 
   def test_defaults_vars_merge_override_and_remove

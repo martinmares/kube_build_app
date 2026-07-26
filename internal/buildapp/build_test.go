@@ -101,6 +101,45 @@ containers:
 	}
 }
 
+func TestWriteRenderedObjectUsesConfiguredYAMLIndent(t *testing.T) {
+	object := map[string]any{
+		"spec": map[string]any{
+			"replicas": 1,
+		},
+	}
+
+	defaultPath := filepath.Join(t.TempDir(), "default.yml")
+	if err := writeRenderedObject(defaultPath, object, Options{}, syncMetadataSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	defaultContent, err := os.ReadFile(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(defaultContent), "\n  replicas: 1\n") {
+		t.Fatalf("default YAML must use two-space indentation:\n%s", defaultContent)
+	}
+
+	fourSpacePath := filepath.Join(t.TempDir(), "four-space.yml")
+	if err := writeRenderedObject(fourSpacePath, object, Options{YAMLIndent: 4}, syncMetadataSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	fourSpaceContent, err := os.ReadFile(fourSpacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(fourSpaceContent), "\n    replicas: 1\n") {
+		t.Fatalf("configured YAML must use four-space indentation:\n%s", fourSpaceContent)
+	}
+}
+
+func TestBuildRejectsUnsupportedYAMLIndent(t *testing.T) {
+	_, err := Build(Options{Environment: "test", YAMLIndent: 3})
+	if err == nil || !strings.Contains(err.Error(), "yaml indent must be 2 or 4") {
+		t.Fatalf("Build error = %v, want invalid YAML indentation", err)
+	}
+}
+
 func TestBuildSupportsEnvFileAndVarsSourcePrecedence(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
@@ -1570,7 +1609,7 @@ tools:
   - name: util-encjson-rs
     image: toolbox:1
     expose_bin: /usr/bin/encjson-rs
-    as: /app/tools/encjson
+    mount_path: /usr/local/bin/encjson
 `)
 	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
 name: api
@@ -1599,8 +1638,26 @@ containers:
 	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "name"); got != "util-encjson-rs" {
 		t.Fatalf("tool initContainer name = %q", got)
 	}
-	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "0", "mountPath"); got != "/app/tools" {
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "0", "mountPath"); got != "/usr/local/bin/encjson" {
 		t.Fatalf("tools mountPath = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "0", "subPath"); got != "usr/local/bin/encjson" {
+		t.Fatalf("tools subPath = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "imagePullPolicy"); got != "Always" {
+		t.Fatalf("tool imagePullPolicy = %q, want Always", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "resources", "requests", "cpu"); got != "10m" {
+		t.Fatalf("tool CPU request = %q, want 10m", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "resources", "limits", "cpu"); got != "100m" {
+		t.Fatalf("tool CPU limit = %q, want 100m", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "resources", "requests", "memory"); got != "16Mi" {
+		t.Fatalf("tool memory request = %q, want 16Mi", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "initContainers", "0", "resources", "limits", "memory"); got != "128Mi" {
+		t.Fatalf("tool memory limit = %q, want 128Mi", got)
 	}
 	env := digSlice(deployment, "spec", "template", "spec", "containers", "0", "env")
 	if got := envValue(env, "CGROUP_EXPORTER_LISTEN"); got != "127.0.0.1:9393" {
@@ -1608,6 +1665,29 @@ containers:
 	}
 	if got := envFieldPath(env, "CGROUP_EXPORTER_NODE_NAME"); got != "spec.nodeName" {
 		t.Fatalf("CGROUP_EXPORTER_NODE_NAME fieldPath = %q", got)
+	}
+}
+
+func TestToolResourcesMergeDefaultsAndOverrides(t *testing.T) {
+	resources := toolResources(map[string]map[string]any{
+		"cpu": {
+			"limits": "250m",
+		},
+		"memory": {
+			"requests": "32Mi",
+		},
+	})
+	if got := fmt.Sprint(resources["cpu"]["requests"]); got != "10m" {
+		t.Fatalf("CPU request = %q, want default 10m", got)
+	}
+	if got := fmt.Sprint(resources["cpu"]["limits"]); got != "250m" {
+		t.Fatalf("CPU limit = %q, want override 250m", got)
+	}
+	if got := fmt.Sprint(resources["memory"]["requests"]); got != "32Mi" {
+		t.Fatalf("memory request = %q, want override 32Mi", got)
+	}
+	if got := fmt.Sprint(resources["memory"]["limits"]); got != "128Mi" {
+		t.Fatalf("memory limit = %q, want default 128Mi", got)
 	}
 }
 
