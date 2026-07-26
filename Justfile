@@ -60,20 +60,17 @@ build-versioned version:
 [unix]
 build-cross:
     mkdir -p dist .tmp/go-build-cache
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=darwin GOARCH=arm64 go build -o dist/kube-build-app-darwin-arm64 ./cmd/kube-build-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=darwin GOARCH=amd64 go build -o dist/kube-build-app-darwin-amd64 ./cmd/kube-build-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=linux GOARCH=amd64 go build -o dist/kube-build-app-linux-amd64 ./cmd/kube-build-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=linux GOARCH=arm64 go build -o dist/kube-build-app-linux-arm64 ./cmd/kube-build-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=windows GOARCH=amd64 go build -o dist/kube-build-app-windows-amd64.exe ./cmd/kube-build-app
+    commit="$(git rev-parse --short HEAD 2>/dev/null || printf unknown)"; date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; ldflags="-X kube-env/internal/appinfo.Version=$(tr -d '\n' < VERSION) -X kube-env/internal/appinfo.Commit=$commit -X kube-env/internal/appinfo.Date=$date"; \
+    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=darwin GOARCH=arm64 go build -ldflags "$ldflags" -o dist/kube-build-app-darwin-arm64 ./cmd/kube-build-app; \
+    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=darwin GOARCH=amd64 go build -ldflags "$ldflags" -o dist/kube-build-app-darwin-amd64 ./cmd/kube-build-app; \
+    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=linux GOARCH=amd64 go build -ldflags "$ldflags" -o dist/kube-build-app-linux-amd64 ./cmd/kube-build-app; \
+    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=linux GOARCH=arm64 go build -ldflags "$ldflags" -o dist/kube-build-app-linux-arm64 ./cmd/kube-build-app; \
+    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=windows GOARCH=amd64 go build -ldflags "$ldflags" -o dist/kube-build-app-windows-amd64.exe ./cmd/kube-build-app
 
 [windows]
 build-cross:
     New-Item -ItemType Directory -Force dist, .tmp/go-build-cache | Out-Null
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "darwin"; $env:GOARCH = "arm64"; go build -o dist/kube-build-app-darwin-arm64 ./cmd/kube-build-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "darwin"; $env:GOARCH = "amd64"; go build -o dist/kube-build-app-darwin-amd64 ./cmd/kube-build-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "linux"; $env:GOARCH = "amd64"; go build -o dist/kube-build-app-linux-amd64 ./cmd/kube-build-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "linux"; $env:GOARCH = "arm64"; go build -o dist/kube-build-app-linux-arm64 ./cmd/kube-build-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "windows"; $env:GOARCH = "amd64"; go build -o dist/kube-build-app-windows-amd64.exe ./cmd/kube-build-app
+    $commit = git rev-parse --short HEAD 2>$null; if ($LASTEXITCODE -ne 0) { $commit = "unknown" }; $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); $version = (Get-Content VERSION -Raw).Trim(); $ldflags = "-X kube-env/internal/appinfo.Version=$version -X kube-env/internal/appinfo.Commit=$commit -X kube-env/internal/appinfo.Date=$date"; $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "darwin"; $env:GOARCH = "arm64"; go build -ldflags $ldflags -o dist/kube-build-app-darwin-arm64 ./cmd/kube-build-app; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:GOOS = "darwin"; $env:GOARCH = "amd64"; go build -ldflags $ldflags -o dist/kube-build-app-darwin-amd64 ./cmd/kube-build-app; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:GOOS = "linux"; $env:GOARCH = "amd64"; go build -ldflags $ldflags -o dist/kube-build-app-linux-amd64 ./cmd/kube-build-app; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:GOOS = "linux"; $env:GOARCH = "arm64"; go build -ldflags $ldflags -o dist/kube-build-app-linux-arm64 ./cmd/kube-build-app; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:GOOS = "windows"; $env:GOARCH = "amd64"; go build -ldflags $ldflags -o dist/kube-build-app-windows-amd64.exe ./cmd/kube-build-app
 
 [unix]
 release version:
@@ -96,31 +93,18 @@ release version:
 
 [unix]
 build-cross-all:
-    mkdir -p dist .tmp/go-build-cache
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=darwin GOARCH=arm64 go build -o dist/kube-build-app-darwin-arm64 ./cmd/kube-build-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=darwin GOARCH=arm64 go build -o dist/kube-edit-app-darwin-arm64 ./cmd/kube-edit-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=darwin GOARCH=amd64 go build -o dist/kube-build-app-darwin-amd64 ./cmd/kube-build-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=darwin GOARCH=amd64 go build -o dist/kube-edit-app-darwin-amd64 ./cmd/kube-edit-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=linux GOARCH=amd64 go build -o dist/kube-build-app-linux-amd64 ./cmd/kube-build-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=linux GOARCH=amd64 go build -o dist/kube-edit-app-linux-amd64 ./cmd/kube-edit-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=linux GOARCH=arm64 go build -o dist/kube-build-app-linux-arm64 ./cmd/kube-build-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=linux GOARCH=arm64 go build -o dist/kube-edit-app-linux-arm64 ./cmd/kube-edit-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=windows GOARCH=amd64 go build -o dist/kube-build-app-windows-amd64.exe ./cmd/kube-build-app
-    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=windows GOARCH=amd64 go build -o dist/kube-edit-app-windows-amd64.exe ./cmd/kube-edit-app
+    just build-cross
+    commit="$(git rev-parse --short HEAD 2>/dev/null || printf unknown)"; date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; ldflags="-X kube-env/internal/appinfo.Version=$(tr -d '\n' < VERSION) -X kube-env/internal/appinfo.Commit=$commit -X kube-env/internal/appinfo.Date=$date"; \
+    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=darwin GOARCH=arm64 go build -ldflags "$ldflags" -o dist/kube-edit-app-darwin-arm64 ./cmd/kube-edit-app; \
+    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=darwin GOARCH=amd64 go build -ldflags "$ldflags" -o dist/kube-edit-app-darwin-amd64 ./cmd/kube-edit-app; \
+    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=linux GOARCH=amd64 go build -ldflags "$ldflags" -o dist/kube-edit-app-linux-amd64 ./cmd/kube-edit-app; \
+    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=linux GOARCH=arm64 go build -ldflags "$ldflags" -o dist/kube-edit-app-linux-arm64 ./cmd/kube-edit-app; \
+    GOCACHE="$PWD/.tmp/go-build-cache" GOOS=windows GOARCH=amd64 go build -ldflags "$ldflags" -o dist/kube-edit-app-windows-amd64.exe ./cmd/kube-edit-app
 
 [windows]
 build-cross-all:
-    New-Item -ItemType Directory -Force dist, .tmp/go-build-cache | Out-Null
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "darwin"; $env:GOARCH = "arm64"; go build -o dist/kube-build-app-darwin-arm64 ./cmd/kube-build-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "darwin"; $env:GOARCH = "arm64"; go build -o dist/kube-edit-app-darwin-arm64 ./cmd/kube-edit-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "darwin"; $env:GOARCH = "amd64"; go build -o dist/kube-build-app-darwin-amd64 ./cmd/kube-build-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "darwin"; $env:GOARCH = "amd64"; go build -o dist/kube-edit-app-darwin-amd64 ./cmd/kube-edit-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "linux"; $env:GOARCH = "amd64"; go build -o dist/kube-build-app-linux-amd64 ./cmd/kube-build-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "linux"; $env:GOARCH = "amd64"; go build -o dist/kube-edit-app-linux-amd64 ./cmd/kube-edit-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "linux"; $env:GOARCH = "arm64"; go build -o dist/kube-build-app-linux-arm64 ./cmd/kube-build-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "linux"; $env:GOARCH = "arm64"; go build -o dist/kube-edit-app-linux-arm64 ./cmd/kube-edit-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "windows"; $env:GOARCH = "amd64"; go build -o dist/kube-build-app-windows-amd64.exe ./cmd/kube-build-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "windows"; $env:GOARCH = "amd64"; go build -o dist/kube-edit-app-windows-amd64.exe ./cmd/kube-edit-app
+    just build-cross
+    $commit = git rev-parse --short HEAD 2>$null; if ($LASTEXITCODE -ne 0) { $commit = "unknown" }; $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); $version = (Get-Content VERSION -Raw).Trim(); $ldflags = "-X kube-env/internal/appinfo.Version=$version -X kube-env/internal/appinfo.Commit=$commit -X kube-env/internal/appinfo.Date=$date"; $env:GOCACHE = "$PWD\.tmp\go-build-cache"; $env:GOOS = "darwin"; $env:GOARCH = "arm64"; go build -ldflags $ldflags -o dist/kube-edit-app-darwin-arm64 ./cmd/kube-edit-app; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:GOOS = "darwin"; $env:GOARCH = "amd64"; go build -ldflags $ldflags -o dist/kube-edit-app-darwin-amd64 ./cmd/kube-edit-app; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:GOOS = "linux"; $env:GOARCH = "amd64"; go build -ldflags $ldflags -o dist/kube-edit-app-linux-amd64 ./cmd/kube-edit-app; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:GOOS = "linux"; $env:GOARCH = "arm64"; go build -ldflags $ldflags -o dist/kube-edit-app-linux-arm64 ./cmd/kube-edit-app; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:GOOS = "windows"; $env:GOARCH = "amd64"; go build -ldflags $ldflags -o dist/kube-edit-app-windows-amd64.exe ./cmd/kube-edit-app
 
 [unix]
 run-edit-app root listen="127.0.0.1:8080":
