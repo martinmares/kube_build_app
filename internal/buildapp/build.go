@@ -123,6 +123,7 @@ type appModel struct {
 	MaxUnavailable       any                  `yaml:"max_unavailable"`
 	Replicas             int                  `yaml:"replicas"`
 	Labels               map[string]any       `yaml:"labels"`
+	SelectorLabels       map[string]any       `yaml:"selector_labels"`
 	Annotations          map[string]any       `yaml:"annotations"`
 	PodAnnotations       map[string]any       `yaml:"pod_annotations"`
 	SecurityContext      map[string]any       `yaml:"security_context"`
@@ -2696,9 +2697,11 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 	if len(app.Annotations) > 0 {
 		metadata["annotations"] = app.Annotations
 	}
-	templateMetadata := map[string]any{
-		"labels": map[string]any{appLabel: app.Name},
+	templateLabels := map[string]any{appLabel: app.Name}
+	for key, value := range effectiveSelectorLabels(app) {
+		templateLabels[key] = value
 	}
+	templateMetadata := map[string]any{"labels": templateLabels}
 	podAnnotations := map[string]any{}
 	for key, value := range app.PodAnnotations {
 		podAnnotations[key] = value
@@ -2715,9 +2718,7 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 
 	spec := map[string]any{
 		"replicas": app.Replicas,
-		"selector": map[string]any{
-			"matchLabels": map[string]any{appLabel: app.Name},
-		},
+		"selector": map[string]any{"matchLabels": effectiveSelectorLabels(app)},
 		"strategy": renderStrategy(app.Strategy),
 		"template": map[string]any{
 			"metadata": templateMetadata,
@@ -2924,6 +2925,13 @@ func renderStrategy(value string) map[string]any {
 	}
 }
 
+func effectiveSelectorLabels(app appModel) map[string]any {
+	if len(app.SelectorLabels) > 0 {
+		return cloneMap(app.SelectorLabels)
+	}
+	return map[string]any{appLabel: app.Name}
+}
+
 func renderBudget(app appModel, namespace string) map[string]any {
 	if app.MinAvailable == nil && app.MaxUnavailable == nil {
 		return nil
@@ -2932,7 +2940,7 @@ func renderBudget(app appModel, namespace string) map[string]any {
 	for key, value := range app.Labels {
 		labels[key] = value
 	}
-	spec := map[string]any{"selector": map[string]any{"matchLabels": map[string]any{appLabel: app.Name}}}
+	spec := map[string]any{"selector": map[string]any{"matchLabels": effectiveSelectorLabels(app)}}
 	if app.MinAvailable != nil {
 		spec["minAvailable"] = app.MinAvailable
 	} else {
@@ -3907,7 +3915,7 @@ func renderServices(app appModel, namespace string, environment string) []render
 			metadata["labels"] = labels
 		}
 		spec := map[string]any{
-			"selector": map[string]any{appLabel: app.Name},
+			"selector": effectiveSelectorLabels(app),
 			"ports":    servicesByHost[name],
 		}
 		if headlessByHost[name] {

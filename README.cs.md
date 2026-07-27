@@ -156,6 +156,7 @@ kube-build-app summary -e test -R environments
 kube-build-app summary --summary-format json -e test -R environments
 kube-build-app inventory -e test -R environments
 kube-build-app list -e test -R environments
+kube-build-app import -f deployment.yml -o environments/test/apps/api.yml
 kube-build-app completion zsh
 ```
 
@@ -201,6 +202,72 @@ kube-build-app app add worker \
 ```
 
 Generator commandy nepřepisují existující soubory bez `--force`.
+
+### Import Deploymentu
+
+Z existujícího `apps/v1` Deploymentu lze vytvořit výchozí app model:
+
+```bash
+kube-build-app import \
+  --file deployment.yml \
+  --output environments/test/apps/api.yml
+```
+
+Vstup lze číst také ze stdin:
+
+```bash
+kubectl -n demo get deployment api -o yaml \
+  | kube-build-app import --file - --output environments/test/apps/api.yml
+```
+
+Při přihlášení do aktuálního Kubernetes contextu může `kube-build-app` spustit
+`kubectl` přímo. V tomto režimu načte Deployment a Services ve zdrojovém
+namespace:
+
+```bash
+kube-build-app import \
+  --namespace demo \
+  --deployment api \
+  --output environments/test/apps/api.yml
+```
+
+Import report se vytvoří pouze při explicitním zadání:
+
+```bash
+kube-build-app import \
+  --file deployment.yml \
+  --output environments/test/apps/api.yml \
+  --report api.import-report.json
+```
+
+Chování importu:
+
+- všechny Kubernetes containery importuje do `containers`; jejich roli sidecaru
+  nikdy neodhaduje
+- init containery, resources, environment reference, probes, scheduling a běžná
+  nastavení podu převádí do strukturovaných polí metamodelu
+- Kubernetes requests a limits zapisuje v kanonickém formátu metamodelu `from`
+  a `to`
+- clusterový import porovná selectory Services s labely pod template a
+  jednoznačné porty převede na pojmenované `ports` a
+  `expose_as[].service_name`
+- původní selector Deploymentu zachová přes `selector_labels`, takže
+  znovu vytvořený Deployment i generované Services používají původní selector
+- defaulty doplněné Kubernetes API vynechá, pokud má metamodel stejný výsledný
+  default; týká se to výchozího ServiceAccountu, probe thresholds a běžných
+  defaultů Deploymentu, podu a containeru
+- hodnoty zachová, pokud by jejich vynechání změnilo chování; například
+  `image_pull_policy: IfNotPresent` zůstává, protože metamodel má default
+  `Always`, a `replicas: 1` je explicitní, protože `0` znamená zastavenou aplikaci
+- nepodporovaná, ale znovu použitelná pole zachová přes `deployment_raw`,
+  `pod_raw` a container `raw`
+- offline import přes `--file` nebo stdin čte pouze Deployment, a proto z něj
+  nemůže odvodit Services
+- Ingresses, Routes, HPA ani ConfigMaps zatím neimportuje
+- reference na Secret importuje, ale hodnoty Secretů nikdy nepožaduje ani nečte
+
+Vygenerovaný model je kontrolovatelný výchozí bod migrace. Není důkazem, že lze
+původní objekt zrekonstruovat shodně po jednotlivých bajtech.
 
 Legacy root flagy zůstávají kvůli kompatibilitě:
 

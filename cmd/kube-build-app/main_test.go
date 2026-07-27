@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -115,6 +117,231 @@ func TestCobraCompletionCommand(t *testing.T) {
 	out := runCLI(t, "completion", "bash")
 	if !strings.Contains(out, "bash completion for kube-build-app") {
 		t.Fatalf("unexpected completion output:\n%s", out)
+	}
+}
+
+func TestCobraImportDeploymentWithExplicitReport(t *testing.T) {
+	tempDir := t.TempDir()
+	source := filepath.Join(tempDir, "deployment.yml")
+	output := filepath.Join(tempDir, "environments", "test", "apps", "api.yml")
+	report := filepath.Join(tempDir, "api.import-report.json")
+	deployment := `
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: source
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: registry.local/api:1
+`
+	if err := os.WriteFile(source, []byte(deployment), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	commandOutput := runCLI(t, "import", "--file", source, "--output", output, "--report", report)
+	if !strings.Contains(commandOutput, "Imported Deployment api -> "+output) ||
+		!strings.Contains(commandOutput, "Report: "+report) {
+		t.Fatalf("unexpected import output:\n%s", commandOutput)
+	}
+	appContent, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"name: api", "replicas: 2", "image: registry.local/api:1"} {
+		if !strings.Contains(string(appContent), expected) {
+			t.Fatalf("app output missing %q:\n%s", expected, appContent)
+		}
+	}
+	reportContent, err := os.ReadFile(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`"source": "` + source + `"`,
+		`"related_objects_read": false`,
+		`"secret_values_read": false`,
+	} {
+		if !strings.Contains(string(reportContent), expected) {
+			t.Fatalf("report missing %q:\n%s", expected, reportContent)
+		}
+	}
+
+	root := filepath.Join(tempDir, "environments")
+	envFile := filepath.Join(root, "test", "env.unsecured.json")
+	if err := os.WriteFile(envFile, []byte(`{"environment":{"NAMESPACE":"import-test"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(runCLI(t, "validate", "-e", "test", "-R", root)); got != "Validation OK" {
+		t.Fatalf("imported model does not validate: %s", got)
+	}
+	target := filepath.Join(tempDir, "deploy")
+	runCLI(t, "build", "-e", "test", "-R", root, "-t", target)
+	rendered, err := os.ReadFile(filepath.Join(target, "deployments", "api-deployment.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rendered), "image: registry.local/api:1") {
+		t.Fatalf("imported model did not render expected image:\n%s", rendered)
+	}
+}
+
+func TestCobraImportDoesNotCreateImplicitReportAndDoesNotOverwrite(t *testing.T) {
+	tempDir := t.TempDir()
+	source := filepath.Join(tempDir, "deployment.yml")
+	output := filepath.Join(tempDir, "api.yml")
+	deployment := `
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: api:1
+`
+	if err := os.WriteFile(source, []byte(deployment), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCLI(t, "import", "-f", source, "-o", output)
+	if _, err := os.Stat(filepath.Join(tempDir, "api.import-report.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("implicit report exists or stat failed: %v", err)
+	}
+	_, err := runCLIError("import", "-f", source, "-o", output)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("unexpected overwrite result: %v", err)
+	}
+}
+
+func TestCobraClusterImportReadsMatchingServices(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake kubectl shell script is Unix-specific")
+	}
+
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeKubectl := filepath.Join(binDir, "kubectl")
+	script := `#!/bin/sh
+case "$*" in
+  *"get deployment tsm-gateway -o yaml"*)
+    cat <<'YAML'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tsm-gateway
+  namespace: sandbox
+spec:
+  selector:
+    matchLabels:
+      app: tsm-gateway
+  template:
+    metadata:
+      labels:
+        app: tsm-gateway
+    spec:
+      containers:
+        - name: tsm-gateway
+          image: registry.local/tsm-gateway:2.4
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 100m
+              memory: 250Mi
+            limits:
+              cpu: "4"
+              memory: 1100Mi
+YAML
+    ;;
+  *"get services -o yaml"*)
+    cat <<'YAML'
+apiVersion: v1
+kind: ServiceList
+items:
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: tsm-gateway
+    spec:
+      selector:
+        app: tsm-gateway
+      ports:
+        - name: http
+          port: 80
+          targetPort: 8080
+YAML
+    ;;
+  *)
+    echo "unexpected kubectl arguments: $*" >&2
+    exit 2
+    ;;
+esac
+`
+	if err := os.WriteFile(fakeKubectl, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("KUBECONFIG", "")
+
+	output := filepath.Join(tempDir, "tsm-gateway.yml")
+	report := filepath.Join(tempDir, "tsm-gateway.import-report.json")
+	runCLI(t,
+		"import",
+		"--namespace", "sandbox",
+		"--deployment", "tsm-gateway",
+		"--output", output,
+		"--report", report,
+	)
+
+	content, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := string(content)
+	for _, expected := range []string{
+		"from: 100m",
+		`to: "4"`,
+		"- name: http",
+		"service_name: tsm-gateway",
+		"port: 80",
+	} {
+		if !strings.Contains(model, expected) {
+			t.Fatalf("cluster import missing %q:\n%s", expected, model)
+		}
+	}
+	if strings.Contains(model, "requests:") || strings.Contains(model, "limits:") {
+		t.Fatalf("cluster import emitted compatibility resource aliases:\n%s", model)
+	}
+
+	reportContent, err := os.ReadFile(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`"services": 1`, `"related_objects_read": true`} {
+		if !strings.Contains(string(reportContent), expected) {
+			t.Fatalf("cluster import report missing %q:\n%s", expected, reportContent)
+		}
 	}
 }
 

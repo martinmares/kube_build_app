@@ -113,6 +113,7 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.AddCommand(newListCommand(opts))
 	root.AddCommand(newSkeletonCommand(opts))
 	root.AddCommand(newAppCommand(opts))
+	root.AddCommand(newImportCommand())
 	root.AddCommand(newCompletionCommand(root))
 	return root
 }

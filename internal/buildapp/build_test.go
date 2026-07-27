@@ -101,6 +101,51 @@ containers:
 	}
 }
 
+func TestBuildUsesExplicitSelectorLabelsForDeploymentAndServices(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "selector-test"},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+selector_labels:
+  app: imported-api
+containers:
+  - name: api
+    image: api:1
+    ports:
+      - name: http
+        port: 8080
+        expose_as:
+          - service_name: api
+            port: 80
+`)
+
+	if _, err := Build(Options{Environment: "test", Root: root, Target: target}); err != nil {
+		t.Fatal(err)
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "selector", "matchLabels", "app"); got != "imported-api" {
+		t.Fatalf("deployment selector app = %q, want imported-api", got)
+	}
+	if got := digString(deployment, "spec", "selector", "matchLabels", appLabel); got != "" {
+		t.Fatalf("deployment selector unexpectedly contains generated label %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "metadata", "labels", appLabel); got != "api" {
+		t.Fatalf("pod template generated label = %q, want api", got)
+	}
+	service := loadYAML(t, filepath.Join(target, "services", "api-service.yml"))
+	if got := digString(service, "spec", "selector", "app"); got != "imported-api" {
+		t.Fatalf("service selector app = %q, want imported-api", got)
+	}
+	if got := digString(service, "spec", "selector", appLabel); got != "" {
+		t.Fatalf("service selector unexpectedly contains generated label %q", got)
+	}
+}
+
 func TestWriteRenderedObjectUsesConfiguredYAMLIndent(t *testing.T) {
 	object := map[string]any{
 		"spec": map[string]any{

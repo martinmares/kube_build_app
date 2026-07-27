@@ -168,6 +168,7 @@ kube-build-app summary -e test -R environments
 kube-build-app summary --summary-format json -e test -R environments
 kube-build-app inventory -e test -R environments
 kube-build-app list -e test -R environments
+kube-build-app import -f deployment.yml -o environments/test/apps/api.yml
 kube-build-app completion zsh
 ```
 
@@ -213,6 +214,72 @@ kube-build-app app add worker \
 ```
 
 Generator commands do not overwrite existing files unless `--force` is used.
+
+### Importing A Deployment
+
+Create an initial app model from an existing `apps/v1` Deployment:
+
+```bash
+kube-build-app import \
+  --file deployment.yml \
+  --output environments/test/apps/api.yml
+```
+
+The input can also come from stdin:
+
+```bash
+kubectl -n demo get deployment api -o yaml \
+  | kube-build-app import --file - --output environments/test/apps/api.yml
+```
+
+For an authenticated current Kubernetes context, `kube-build-app` can invoke
+`kubectl` directly. In this mode it reads the Deployment and Services in the
+source namespace:
+
+```bash
+kube-build-app import \
+  --namespace demo \
+  --deployment api \
+  --output environments/test/apps/api.yml
+```
+
+An import report is generated only when explicitly requested:
+
+```bash
+kube-build-app import \
+  --file deployment.yml \
+  --output environments/test/apps/api.yml \
+  --report api.import-report.json
+```
+
+Import behavior:
+
+- all Kubernetes containers are imported under `containers`; sidecar roles are
+  never guessed
+- init containers, resources, environment references, probes, scheduling and
+  common pod settings are converted into structured metamodel fields
+- Kubernetes resource requests and limits are written in the canonical
+  metamodel form `from` and `to`
+- cluster import matches Service selectors against pod-template labels and
+  converts unambiguous Service ports to named `ports` and
+  `expose_as[].service_name`
+- source Deployment selectors are preserved through `selector_labels`, so a
+  rebuilt Deployment and its generated Services use the original selector
+- Kubernetes API defaults are omitted when the metamodel has the same effective
+  default, including the default ServiceAccount, default probe thresholds and
+  common Deployment, pod and container defaults
+- values are retained when omission would change behavior; for example,
+  `image_pull_policy: IfNotPresent` is preserved because the metamodel defaults
+  to `Always`, and `replicas: 1` is explicit because `0` means stopped
+- unsupported but reusable Deployment, pod and container fields are preserved
+  through `deployment_raw`, `pod_raw` and container `raw`
+- offline `--file`/stdin import reads the Deployment only and therefore cannot
+  infer Services
+- Ingresses, Routes, HPAs and ConfigMaps are not imported yet
+- Secret references are imported, but Secret values are never requested or read
+
+The generated model is a reviewable migration starting point, not proof that
+the original object can be reconstructed byte-for-byte.
 
 Legacy-compatible root flags are still supported:
 
