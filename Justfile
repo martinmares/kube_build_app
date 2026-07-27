@@ -29,18 +29,19 @@ readme-smoke:
 
 [unix]
 build:
-    mkdir -p dist
-    mkdir -p .tmp/go-build-cache
-    GOCACHE="$PWD/.tmp/go-build-cache" go build -o dist/kube-build-app ./cmd/kube-build-app
-    GOCACHE="$PWD/.tmp/go-build-cache" go build -o dist/kube-edit-app ./cmd/kube-edit-app
-    GOCACHE="$PWD/.tmp/go-build-cache" go build -o dist/kube-ops-app ./cmd/kube-ops-app
+    mkdir -p dist .tmp/go-build-cache
+    version="$(tr -d '\r\n' < VERSION)"; \
+    commit="$(git rev-parse --short HEAD 2>/dev/null || printf unknown)"; \
+    date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+    ldflags="-X kube-env/internal/appinfo.Version=$version -X kube-env/internal/appinfo.Commit=$commit -X kube-env/internal/appinfo.Date=$date"; \
+    GOCACHE="$PWD/.tmp/go-build-cache" go build -ldflags "$ldflags" -o dist/kube-build-app ./cmd/kube-build-app; \
+    GOCACHE="$PWD/.tmp/go-build-cache" go build -ldflags "$ldflags" -o dist/kube-edit-app ./cmd/kube-edit-app; \
+    GOCACHE="$PWD/.tmp/go-build-cache" go build -ldflags "$ldflags" -o dist/kube-ops-app ./cmd/kube-ops-app
 
 [windows]
 build:
     New-Item -ItemType Directory -Force dist, .tmp/go-build-cache | Out-Null
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; go build -o dist/kube-build-app.exe ./cmd/kube-build-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; go build -o dist/kube-edit-app.exe ./cmd/kube-edit-app
-    $env:GOCACHE = "$PWD\.tmp\go-build-cache"; go build -o dist/kube-ops-app.exe ./cmd/kube-ops-app
+    $version = (Get-Content VERSION -Raw).Trim(); $commit = git rev-parse --short HEAD 2>$null; if ($LASTEXITCODE -ne 0) { $commit = "unknown" }; $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); $ldflags = "-X kube-env/internal/appinfo.Version=$version -X kube-env/internal/appinfo.Commit=$commit -X kube-env/internal/appinfo.Date=$date"; $env:GOCACHE = "$PWD\.tmp\go-build-cache"; go build -ldflags $ldflags -o dist/kube-build-app.exe ./cmd/kube-build-app; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; go build -ldflags $ldflags -o dist/kube-edit-app.exe ./cmd/kube-edit-app; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; go build -ldflags $ldflags -o dist/kube-ops-app.exe ./cmd/kube-ops-app
 
 [unix]
 build-versioned version:
