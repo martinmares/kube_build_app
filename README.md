@@ -168,16 +168,22 @@ kube-build-app summary -e test -R environments
 kube-build-app summary --summary-format json -e test -R environments
 kube-build-app inventory -e test -R environments
 kube-build-app list -e test -R environments
+kube-build-app scaffold app api -e test -R environments
 kube-build-app import -f deployment.yml -o environments/test/apps/api.yml
 kube-build-app completion zsh
 ```
 
 ### Generator Commands
 
+`scaffold` is a non-interactive generator for creating environment and app model
+files. It follows the same principle as framework scaffolding: it generates
+explicit, ordinary kube-build-app metamodel YAML that can be reviewed and
+edited afterwards.
+
 Create a starter environment:
 
 ```bash
-kube-build-app skeleton env \
+kube-build-app scaffold env \
   --root environments \
   --env dev \
   --namespace app-dev \
@@ -188,32 +194,316 @@ kube-build-app skeleton env \
 This creates:
 
 ```text
+environments/_scaffold.yml
 environments/dev/env.unsecured.json
 environments/dev/apps/_defaults.yml
+environments/dev/apps/_scaffold.yml
 ```
 
-Add a starter app model:
+The root `_scaffold.yml` is created only when it does not exist. Creating
+another environment, including with `--force`, never overwrites the shared
+repository scaffold configuration. The environment file is an initially empty
+override template.
+
+Create a minimal app model:
 
 ```bash
-kube-build-app app add api --root environments --environment dev
-```
-
-Generated app images use generic placeholders by default:
-
-```yaml
-image: "{{REGISTRY_URL}}/api:{{RELEASE_ID}}"
-```
-
-Override the image when needed:
-
-```bash
-kube-build-app app add worker \
+kube-build-app scaffold app api \
   --root environments \
   --environment dev \
-  --image 'custom/worker:1.0.0'
+  --cpu-from 100m \
+  --cpu-to 500m \
+  --memory-from 128Mi \
+  --memory-to 512Mi
 ```
 
-Generator commands do not overwrite existing files unless `--force` is used.
+The generated model uses the canonical resource format:
+
+```yaml
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{REGISTRY_URL}}/api:{{RELEASE_ID}}"
+    resources:
+      cpu:
+        from: 100m
+        to: 500m
+      memory:
+        from: 128Mi
+        to: 512Mi
+```
+
+The image, container name and replica count can be overridden:
+
+```bash
+kube-build-app scaffold app worker \
+  --root environments \
+  --environment dev \
+  --image 'custom/worker:1.0.0' \
+  --container worker \
+  --replicas 2
+```
+
+Use `--dry-run` to print the generated YAML without writing a file. Generator
+commands do not overwrite existing files unless `--force` is used.
+
+The older commands remain available as compatibility aliases:
+
+```bash
+kube-build-app skeleton env ...
+kube-build-app app add api ...
+```
+
+New automation should use `scaffold env` and `scaffold app`.
+
+#### Repository Scaffold Profiles
+
+Application startup conventions differ between repositories. A JIB image, a
+standalone JAR, a C++ application and an nginx-based utility may all use
+different wrapper scripts. Shared repository conventions belong in:
+
+```text
+<environments-root>/_scaffold.yml
+```
+
+An environment can optionally override them in:
+
+```text
+<environments-root>/<environment>/apps/_scaffold.yml
+```
+
+Both files are input only for `kube-build-app scaffold app`. They are not part
+of the build metamodel, are not merged with `_defaults.yml`, and changing them
+does not change already existing app models. The root file is outside the
+`apps` directory and the environment file begins with `_`, so neither is
+loaded as an app model.
+
+Global example:
+
+```yaml
+version: 1
+
+defaults:
+  replicas: 1
+  resources:
+    cpu:
+      from: 100m
+      to: 500m
+    memory:
+      from: 128Mi
+      to: 512Mi
+
+profiles:
+  java-jib:
+    runtime: java-jib
+    image: "{{REGISTRY_URL}}/${APP_NAME}:{{RELEASE_ID}}"
+    wrapper:
+      source: shared
+      path: /app/start-java.sh
+      arguments:
+        - /app/jib-classpath-file
+        - /app/jib-main-class-file
+    assets:
+      - file: spring_configs/${APP_NAME}.json.tpl
+        to: /app/${APP_NAME}.json.tpl
+        transform: true
+
+  java-jar:
+    runtime: java-jar
+    wrapper:
+      source: shared
+      path: /app/start-java.sh
+
+  cpp:
+    runtime: cpp
+    wrapper:
+      source: shared
+      path: /app/start-cpp.sh
+
+  binary:
+    runtime: binary
+    wrapper:
+      source: image
+      path: /usr/local/bin/${APP_NAME}
+```
+
+Environment-specific files should contain only real differences:
+
+```yaml
+version: 1
+profiles:
+  java-jib:
+    resources:
+      memory:
+        to: 2Gi
+```
+
+Use a profile:
+
+```bash
+kube-build-app scaffold app tsm-calendar \
+  --root environments \
+  --environment test \
+  --scaffold-profile java-jib
+```
+
+Profile composition order is:
+
+1. built-in CLI defaults
+2. root `_scaffold.yml` `defaults`
+3. environment `_scaffold.yml` `defaults`
+4. selected root profile
+5. selected environment profile
+6. explicitly specified CLI flags
+
+For a profile with the same name, scalar fields and individual resource values
+from the environment override the global values. Assets are replaced by their
+`to` path. Sidecars are recursively merged by `name`, allowing an environment
+to replace only an image while inheriting its global startup and resources.
+Assets and sidecars not matching an inherited key are appended.
+
+Profiles may also contain ordinary metamodel fragments that are copied into
+the generated model:
+
+```yaml
+profiles:
+  java-http:
+    app:
+      registry:
+        - secret_name: docker-registry
+      labels:
+        app.kubernetes.io/component: ${APP_NAME}
+    container_defaults:
+      envs:
+        - name: LOG_LEVEL
+          value: info
+      ports:
+        - name: http
+          port: 8080
+          expose_as:
+            - hostname: ${APP_NAME}
+              port: 80
+      probes:
+        preset: spring-actuator
+        port: 8080
+```
+
+`app` is merged at the application level. `container_defaults` is merged into
+the generated primary container. These sections use the existing build
+metamodel directly; they do not define another abstraction. Core generator
+fields are reserved: `app` cannot define `name`, `replicas`, `containers` or
+`sidecars`, and `container_defaults` cannot define `name`, `image`, `startup`,
+`assets` or `resources`.
+
+Only `${APP_NAME}` and `${CONTAINER_NAME}` are scaffold tokens. They are
+expanded while generating the file. Existing metamodel placeholders such as
+`{{REGISTRY_URL}}`, `{{RELEASE_ID}}`, `{{env:VAR}}` and `{{var:VAR}}` remain
+unchanged for their normal build or deployment phase.
+
+`runtime` is a scaffold hint and is never written to the generated app model.
+Supported values are `java-jib`, `java-jar`, `cpp`, `binary` and `custom`.
+Java heap sizing is deliberately not inferred from Kubernetes memory limits;
+configure `runtime.java` explicitly in the generated app model when required.
+Scaffold-specific configuration fields are decoded strictly, so unknown fields
+and common typos fail before any app file is written. Values inside `app` and
+`container_defaults` are ordinary build metamodel fragments and should be
+checked with `kube-build-app validate`.
+
+#### Wrapper Sources
+
+A profile or CLI invocation can select one of three wrapper sources:
+
+- `shared`: the wrapper target must already be provided by
+  `<environment>/shared.assets.yml`; no app asset is generated
+- `asset`: `wrapper.file` is relative to `<environment>/assets`; the generator
+  adds an app asset mapping to `wrapper.path`
+- `image`: the executable or script already exists in the container image; no
+  asset is generated
+
+Repository profile example for an app-owned wrapper:
+
+```yaml
+profiles:
+  nginx:
+    runtime: custom
+    wrapper:
+      source: asset
+      file: utils/start-nginx.sh
+      path: /app/start-nginx.sh
+```
+
+Equivalent CLI invocation:
+
+```bash
+kube-build-app scaffold app edge-proxy \
+  -e test -R environments \
+  --runtime custom \
+  --wrapper-source asset \
+  --wrapper-file utils/start-nginx.sh \
+  --wrapper-path /app/start-nginx.sh
+```
+
+By default, wrappers for `java-jib`, `java-jar`, `cpp` and `custom` are started
+through `/bin/sh`. A `binary` or `image` wrapper is executed directly. Use the
+repeatable `--wrapper-command` flag to specify another launcher and
+`--wrapper-arg` for wrapper arguments. The wrapper path becomes the first
+argument when a launcher is used.
+
+#### Assets And Sidecars
+
+Add app-owned assets with a repeatable argument:
+
+```bash
+kube-build-app scaffold app api \
+  -e test -R environments \
+  --asset config/api.yml=/app/config.yml \
+  --asset ssl/truststore.p12=/app/ssl/truststore.p12
+```
+
+The source is always relative to `<environment>/assets`; the destination must
+be an absolute container path. Absolute sources, `..` traversal, missing source
+files, symlinks resolving outside the assets directory and duplicate
+destinations are rejected.
+
+Simple sidecars can be added from the CLI:
+
+```bash
+kube-build-app scaffold app api \
+  -e test -R environments \
+  --sidecar metrics=registry.example.com/metrics:1 \
+  --sidecar audit=registry.example.com/audit:2
+```
+
+CLI sidecars receive resource defaults configurable through
+`--sidecar-cpu-from`, `--sidecar-cpu-to`, `--sidecar-memory-from` and
+`--sidecar-memory-to`. For a repository-standard sidecar with startup, env,
+mounts or other settings, place the complete existing sidecar metamodel
+fragment in the profile:
+
+```yaml
+profiles:
+  java-jib:
+    sidecars:
+      - name: cgroup-runtime-exporter
+        image: "{{REGISTRY_URL}}/cgroup-runtime-exporter:{{RELEASE_ID}}"
+        startup:
+          command:
+            - /usr/local/bin/cgroup-runtime-exporter
+        envs:
+          - name: CGROUP_EXPORTER_TARGET_PID_REGEXP
+            value: java
+        resources:
+          cpu:
+            from: 5m
+            to: 25m
+          memory:
+            from: 8Mi
+            to: 32Mi
+```
+
+The generated sidecar remains an ordinary `sidecars` metamodel entry. Scaffold
+profiles do not introduce a second runtime representation.
 
 ### Importing A Deployment
 
@@ -377,6 +667,21 @@ When only `tag` is present, the generated deployment uses:
 ```text
 registry.example.com/project/tsm-dms:2026.06.25.01
 ```
+
+When the release manifest contains `release_id`, `kube-build-app` also exposes
+it as the build-time variable `RELEASE_ID`. This avoids duplicating release
+metadata in a `.env` file:
+
+```yaml
+labels:
+  app.kubernetes.io/version: "{{env:RELEASE_ID}}"
+```
+
+If an external variable source also defines `RELEASE_ID`, its value must match
+the release manifest. A mismatch fails the build instead of producing
+inconsistent image and metadata versions. Without `--release-manifest`,
+`RELEASE_ID` continues to come only from the configured external variable
+sources.
 
 Image policy:
 
@@ -1209,7 +1514,102 @@ downward_api:
 
 Pod name is runtime/audit metadata only. Authorization should use the normalized workload identity `namespace/serviceAccount` from the projected token.
 
-### 16. Sidecars and Pod Options
+### 16. Runtime Assets
+
+Use `runtime_assets` to materialize authenticated binary or text files before
+the application containers start. The generated init container reads a
+projected token declared under `workload_identity`, downloads the files, and
+stores them in a shared `emptyDir` volume:
+
+```yaml
+workload_identity:
+  service_account:
+    create: true
+    automount: false
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+
+runtime_assets:
+  - name: java-runtime-config
+    source:
+      type: simple_config
+      base_url: https://config.example.test/simple-config-server
+      tenant: default
+      environment: test
+      label: release-2026.07 # optional Git label
+      token: simple-config
+      timeout_seconds: 30
+
+    volume:
+      name: runtime-config
+      mount_path: /app/runtime-config
+      medium: Memory
+      size_limit: 16Mi
+
+    fetcher:
+      image: registry.example.test/simple-idm-token-proxy:1.0.0
+      # command defaults to simple-idm-token-proxy
+      # image_pull_policy defaults to Always
+
+    # Omitted containers defaults to ["*"], meaning all primary containers.
+    containers:
+      - "*"
+
+    files:
+      - source: files/ssl/tsm-client-keystore.jks
+        target: tsm-client-keystore.jks
+        mode: "0440"
+        sha256: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+      - source: files/ssl/tsm-client-truststore.jks
+        target: tsm-client-truststore.jks
+        mode: "0440"
+```
+
+The `source.token` value is a reference to
+`workload_identity.tokens[].name`; it does not define another token or
+audience. An unknown token reference is a validation error.
+
+Defaults:
+
+- `source.type`: `simple_config`
+- `source.tenant`: `default`
+- `source.environment`: the environment passed through `-e`
+- `source.timeout_seconds`: `30`
+- `volume.name`: runtime asset group name
+- `containers`: `["*"]`
+- `files[].mode`: `"0440"`
+- fetcher resources: CPU `10m..100m`, memory `16Mi..128Mi`
+
+The wildcard selects primary `containers` only. Name a sidecar explicitly when
+it also needs the runtime volume. Application mounts are read-only; only the
+generated fetch init container receives a writable mount.
+
+The fetcher runs:
+
+```text
+simple-idm-token-proxy fetch
+```
+
+It sends the projected token directly to `simple-config-server`. It does not
+use a localhost proxy because ordinary sidecars start only after init
+containers have completed. A long-running application client may independently
+use `simple-idm-token-proxy serve` as a regular sidecar.
+
+Runtime assets are fetched once during Pod startup; they are not continuously
+synchronized. A remote file change therefore requires a Pod restart or
+rollout. Use `source.label` when deployment must be pinned to a reproducible Git
+revision.
+
+`runtime_assets` can be inherited from `apps/_defaults.yml`. An app can opt out
+with:
+
+```yaml
+runtime_assets: []
+```
+
+### 17. Sidecars and Pod Options
 
 Use app-level `sidecars` for helper containers that run in the same Pod but are not primary application containers:
 
@@ -1222,12 +1622,13 @@ workload_identity:
       audience: simple-config-server
 
 sidecars:
-  - name: simple-config-token-proxy
-    image: "{{TSM_REGISTRY_URL}}/simple-config-token-proxy:{{TSM_RELEASE_ID}}"
+  - name: simple-idm-token-proxy
+    image: "{{TSM_REGISTRY_URL}}/simple-idm-token-proxy:{{TSM_RELEASE_ID}}"
     startup:
       command:
-        - simple-config-token-proxy
+        - simple-idm-token-proxy
       arguments:
+        - serve
         - --listen
         - 127.0.0.1:9999
         - --upstream
@@ -1268,7 +1669,7 @@ sidecars:
 
 This renders Kubernetes `shareProcessNamespace: true`. Sidecar ports are not used for service generation; services are generated only from primary `containers`.
 
-### 17. Init Containers
+### 18. Init Containers
 
 Use app-level `init_containers` for generic Kubernetes init containers:
 
@@ -1313,7 +1714,7 @@ Supported init container fields intentionally mirror the common subset of regula
 
 Existing `tools` remain the preferred shortcut for exposing static utility binaries through generated init containers.
 
-### 18. Raw Escape Hatches
+### 19. Raw Escape Hatches
 
 Use `deployment_raw` for rare Deployment-level fields:
 
@@ -1333,7 +1734,7 @@ pod_raw:
 
 `deployment_raw` is recursively merged into the generated Deployment object. `pod_raw` is applied to `spec.template.spec`.
 
-### 19. Raw Container Fields
+### 20. Raw Container Fields
 
 Use raw passthrough only when the model does not expose a dedicated field:
 
@@ -1348,7 +1749,7 @@ containers:
 
 Dedicated model fields are preferred because they can be validated and represented in UI tooling.
 
-### 20. Cgroup Exporter Defaults
+### 21. Cgroup Exporter Defaults
 
 At container level you can enable automatic variable injection for cgroup exporter:
 
@@ -1372,7 +1773,7 @@ CGROUP_EXPORTER_MEMORY_LIMITS_MIB
 CGROUP_EXPORTER_NODE_NAME
 ```
 
-### 21. Ignored Apps
+### 22. Ignored Apps
 
 Exclude an app from build:
 

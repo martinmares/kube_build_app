@@ -156,16 +156,21 @@ kube-build-app summary -e test -R environments
 kube-build-app summary --summary-format json -e test -R environments
 kube-build-app inventory -e test -R environments
 kube-build-app list -e test -R environments
+kube-build-app scaffold app api -e test -R environments
 kube-build-app import -f deployment.yml -o environments/test/apps/api.yml
 kube-build-app completion zsh
 ```
 
 ### Generator Commandy
 
-Vytvoření základního environmentu:
+`scaffold` je neinteraktivní generátor souborů prostředí a aplikačních modelů.
+Používá stejný princip jako generátory ve frameworku: vytvoří explicitní běžný
+YAML metamodelu kube-build-app, který lze následně zkontrolovat a upravit.
+
+Vytvoření základního prostředí:
 
 ```bash
-kube-build-app skeleton env \
+kube-build-app scaffold env \
   --root environments \
   --env dev \
   --namespace app-dev \
@@ -176,32 +181,315 @@ kube-build-app skeleton env \
 Vytvoří:
 
 ```text
+environments/_scaffold.yml
 environments/dev/env.unsecured.json
 environments/dev/apps/_defaults.yml
+environments/dev/apps/_scaffold.yml
 ```
 
-Přidání základního app modelu:
+Kořenový `_scaffold.yml` se vytvoří pouze v případě, že dosud neexistuje.
+Založení dalšího prostředí jej nepřepíše ani při použití `--force`. Soubor
+konkrétního prostředí je na začátku prázdná šablona určená pro odchylky.
+
+Vytvoření minimálního aplikačního modelu:
 
 ```bash
-kube-build-app app add api --root environments --environment dev
-```
-
-Generovaný app image defaultně používá obecné placeholdery:
-
-```yaml
-image: "{{REGISTRY_URL}}/api:{{RELEASE_ID}}"
-```
-
-Image lze podle potřeby přepsat:
-
-```bash
-kube-build-app app add worker \
+kube-build-app scaffold app api \
   --root environments \
   --environment dev \
-  --image 'custom/worker:1.0.0'
+  --cpu-from 100m \
+  --cpu-to 500m \
+  --memory-from 128Mi \
+  --memory-to 512Mi
 ```
 
-Generator commandy nepřepisují existující soubory bez `--force`.
+Generovaný model používá kanonický formát prostředků:
+
+```yaml
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{REGISTRY_URL}}/api:{{RELEASE_ID}}"
+    resources:
+      cpu:
+        from: 100m
+        to: 500m
+      memory:
+        from: 128Mi
+        to: 512Mi
+```
+
+Image, název kontejneru a počet replik lze změnit:
+
+```bash
+kube-build-app scaffold app worker \
+  --root environments \
+  --environment dev \
+  --image 'custom/worker:1.0.0' \
+  --container worker \
+  --replicas 2
+```
+
+Argument `--dry-run` vypíše generovaný YAML bez zápisu souboru. Generátor
+nepřepisuje existující soubory bez argumentu `--force`.
+
+Původní příkazy zůstávají dostupné jako kompatibilní aliasy:
+
+```bash
+kube-build-app skeleton env ...
+kube-build-app app add api ...
+```
+
+Nová automatizace má používat `scaffold env` a `scaffold app`.
+
+#### Profily Pro Konkrétní Repozitář
+
+Způsob spouštění aplikací se mezi repozitáři liší. Image vytvořený pomocí JIB,
+samostatný JAR, C++ aplikace a utilita založená na nginx mohou používat odlišné
+spouštěcí wrappery. Společné konvence repozitáře patří do:
+
+```text
+<kořen-environments>/_scaffold.yml
+```
+
+Konkrétní prostředí je může volitelně změnit v:
+
+```text
+<kořen-environments>/<prostředí>/apps/_scaffold.yml
+```
+
+Oba soubory používá pouze příkaz `kube-build-app scaffold app`. Nejsou součástí
+build metamodelu, neslučují se s `_defaults.yml` a jejich změna nemění již
+existující aplikační modely. Kořenový soubor leží mimo adresář `apps` a soubor
+prostředí začíná znakem `_`, takže se žádný z nich nenačítá jako aplikační model.
+
+Globální příklad:
+
+```yaml
+version: 1
+
+defaults:
+  replicas: 1
+  resources:
+    cpu:
+      from: 100m
+      to: 500m
+    memory:
+      from: 128Mi
+      to: 512Mi
+
+profiles:
+  java-jib:
+    runtime: java-jib
+    image: "{{REGISTRY_URL}}/${APP_NAME}:{{RELEASE_ID}}"
+    wrapper:
+      source: shared
+      path: /app/start-java.sh
+      arguments:
+        - /app/jib-classpath-file
+        - /app/jib-main-class-file
+    assets:
+      - file: spring_configs/${APP_NAME}.json.tpl
+        to: /app/${APP_NAME}.json.tpl
+        transform: true
+
+  java-jar:
+    runtime: java-jar
+    wrapper:
+      source: shared
+      path: /app/start-java.sh
+
+  cpp:
+    runtime: cpp
+    wrapper:
+      source: shared
+      path: /app/start-cpp.sh
+
+  binary:
+    runtime: binary
+    wrapper:
+      source: image
+      path: /usr/local/bin/${APP_NAME}
+```
+
+Soubor konkrétního prostředí má obsahovat pouze skutečné odchylky:
+
+```yaml
+version: 1
+profiles:
+  java-jib:
+    resources:
+      memory:
+        to: 2Gi
+```
+
+Použití profilu:
+
+```bash
+kube-build-app scaffold app tsm-calendar \
+  --root environments \
+  --environment test \
+  --scaffold-profile java-jib
+```
+
+Pořadí skládání konfigurace je:
+
+1. výchozí hodnoty CLI
+2. sekce `defaults` v kořenovém `_scaffold.yml`
+3. sekce `defaults` v `_scaffold.yml` konkrétního prostředí
+4. vybraný globální profil
+5. vybraný profil konkrétního prostředí
+6. explicitně zadané argumenty CLI
+
+U profilu stejného názvu přepisují skalární hodnoty a jednotlivé hodnoty
+prostředků z konkrétního prostředí globální konfiguraci. Asset se nahrazuje
+podle cílové cesty `to`. Sidecary se rekurzivně slučují podle `name`, takže lze
+změnit pouze image a zdědit globální startup a resources. Assety a sidecary bez
+odpovídajícího zděděného klíče se připojí.
+
+Profily mohou obsahovat také běžné fragmenty metamodelu, které se vloží do
+generovaného modelu:
+
+```yaml
+profiles:
+  java-http:
+    app:
+      registry:
+        - secret_name: docker-registry
+      labels:
+        app.kubernetes.io/component: ${APP_NAME}
+    container_defaults:
+      envs:
+        - name: LOG_LEVEL
+          value: info
+      ports:
+        - name: http
+          port: 8080
+          expose_as:
+            - hostname: ${APP_NAME}
+              port: 80
+      probes:
+        preset: spring-actuator
+        port: 8080
+```
+
+Sekce `app` se sloučí na úrovni aplikace. `container_defaults` se sloučí do
+generovaného hlavního kontejneru. Obě sekce přímo používají existující build
+metamodel a nezavádějí další abstrakci. Základní položky generátoru jsou
+vyhrazené: `app` nesmí definovat `name`, `replicas`, `containers` ani `sidecars`
+a `container_defaults` nesmí definovat `name`, `image`, `startup`, `assets` ani
+`resources`.
+
+Scaffold zná pouze tokeny `${APP_NAME}` a `${CONTAINER_NAME}`. Nahradí je při
+generování souboru. Existující placeholdery metamodelu `{{REGISTRY_URL}}`,
+`{{RELEASE_ID}}`, `{{env:VAR}}` a `{{var:VAR}}` zůstávají beze změny pro
+standardní build nebo fázi nasazení.
+
+Hodnota `runtime` je pouze pokyn pro scaffold a do výsledného aplikačního modelu
+se nezapisuje. Podporované hodnoty jsou `java-jib`, `java-jar`, `cpp`, `binary`
+a `custom`. Velikost Java heap se z Kubernetes memory limitu záměrně
+neodvozuje. Pokud je potřeba, nastavte ve výsledném modelu explicitně
+`runtime.java`.
+Položky specifické pro scaffolding se načítají striktně, takže neznámé položky
+a běžné překlepy způsobí chybu ještě před zápisem aplikačního souboru. Obsah
+sekcí `app` a `container_defaults` je běžný fragment build metamodelu a má se
+kontrolovat příkazem `kube-build-app validate`.
+
+#### Zdroje Wrapperu
+
+Profil nebo CLI může zvolit jeden ze tří zdrojů wrapperu:
+
+- `shared`: cílovou cestu wrapperu již musí poskytovat
+  `<environment>/shared.assets.yml`; aplikační asset se nevygeneruje
+- `asset`: `wrapper.file` je relativní k `<environment>/assets`; generátor přidá
+  mapování aplikačního assetu do `wrapper.path`
+- `image`: spustitelný soubor nebo skript již existuje v image kontejneru;
+  žádný asset se nevygeneruje
+
+Příklad profilu s wrapperem vlastněným aplikací:
+
+```yaml
+profiles:
+  nginx:
+    runtime: custom
+    wrapper:
+      source: asset
+      file: utils/start-nginx.sh
+      path: /app/start-nginx.sh
+```
+
+Ekvivalentní volání CLI:
+
+```bash
+kube-build-app scaffold app edge-proxy \
+  -e test -R environments \
+  --runtime custom \
+  --wrapper-source asset \
+  --wrapper-file utils/start-nginx.sh \
+  --wrapper-path /app/start-nginx.sh
+```
+
+Wrappery pro `java-jib`, `java-jar`, `cpp` a `custom` se ve výchozím nastavení
+spouštějí pomocí `/bin/sh`. Wrapper typu `binary` nebo `image` se spouští přímo.
+Jiný spouštěcí program lze zadat opakovatelným argumentem `--wrapper-command`;
+argumenty wrapperu zadává `--wrapper-arg`. Při použití spouštěcího programu se
+cesta wrapperu stane prvním argumentem.
+
+#### Assety A Sidecary
+
+Assety vlastněné aplikací lze přidat opakovatelným argumentem:
+
+```bash
+kube-build-app scaffold app api \
+  -e test -R environments \
+  --asset config/api.yml=/app/config.yml \
+  --asset ssl/truststore.p12=/app/ssl/truststore.p12
+```
+
+Zdroj je vždy relativní k `<environment>/assets` a cíl musí být absolutní cesta
+v kontejneru. Generátor odmítne absolutní zdroj, průchod přes `..`, chybějící
+zdrojový soubor, symbolický odkaz směřující mimo adresář assetů a duplicitní
+cílovou cestu.
+
+Jednoduché sidecary lze přidat z CLI:
+
+```bash
+kube-build-app scaffold app api \
+  -e test -R environments \
+  --sidecar metrics=registry.example.com/metrics:1 \
+  --sidecar audit=registry.example.com/audit:2
+```
+
+Sidecary z CLI dostanou výchozí prostředky nastavitelné pomocí argumentů
+`--sidecar-cpu-from`, `--sidecar-cpu-to`, `--sidecar-memory-from` a
+`--sidecar-memory-to`. Standardní sidecar repozitáře se spouštěním, proměnnými,
+mounty nebo dalšími vlastnostmi je vhodné zapsat do profilu jako úplný fragment
+existujícího sidecar metamodelu:
+
+```yaml
+profiles:
+  java-jib:
+    sidecars:
+      - name: cgroup-runtime-exporter
+        image: "{{REGISTRY_URL}}/cgroup-runtime-exporter:{{RELEASE_ID}}"
+        startup:
+          command:
+            - /usr/local/bin/cgroup-runtime-exporter
+        envs:
+          - name: CGROUP_EXPORTER_TARGET_PID_REGEXP
+            value: java
+        resources:
+          cpu:
+            from: 5m
+            to: 25m
+          memory:
+            from: 8Mi
+            to: 32Mi
+```
+
+Vygenerovaný sidecar zůstává běžnou položkou metamodelu `sidecars`. Scaffold
+profily nezavádějí druhou reprezentaci pro běh aplikace.
 
 ### Import Deploymentu
 
@@ -365,6 +653,21 @@ Pokud je vyplněný pouze `tag`, výsledný deployment použije:
 ```text
 registry.example.com/project/tsm-dms:2026.06.25.01
 ```
+
+Pokud release manifest obsahuje `release_id`, `kube-build-app` ho také
+zpřístupní jako build-time proměnnou `RELEASE_ID`. Release metadata tak není
+nutné duplikovat v `.env` souboru:
+
+```yaml
+labels:
+  app.kubernetes.io/version: "{{env:RELEASE_ID}}"
+```
+
+Pokud externí zdroj proměnných rovněž definuje `RELEASE_ID`, musí se jeho
+hodnota shodovat s release manifestem. Při rozdílu build skončí chybou, aby
+nevznikla image a metadata s rozdílnými verzemi. Bez `--release-manifest`
+pochází `RELEASE_ID` nadále pouze z nakonfigurovaných externích zdrojů
+proměnných.
 
 Image policy:
 
@@ -1197,7 +1500,101 @@ downward_api:
 
 Pod name je jen runtime/audit metadata. Autorizace má používat normalizovanou workload identitu `namespace/serviceAccount` z projektovaného tokenu.
 
-### 16. Sidecars a Pod Options
+### 16. Runtime Assets
+
+`runtime_assets` slouží k přípravě autorizovaných binárních nebo textových
+souborů ještě před startem aplikačních containerů. Vygenerovaný init container
+použije projektovaný token deklarovaný ve `workload_identity`, stáhne soubory a
+uloží je do sdíleného `emptyDir` volume:
+
+```yaml
+workload_identity:
+  service_account:
+    create: true
+    automount: false
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+
+runtime_assets:
+  - name: java-runtime-config
+    source:
+      type: simple_config
+      base_url: https://config.example.test/simple-config-server
+      tenant: default
+      environment: test
+      label: release-2026.07 # volitelný Git label
+      token: simple-config
+      timeout_seconds: 30
+
+    volume:
+      name: runtime-config
+      mount_path: /app/runtime-config
+      medium: Memory
+      size_limit: 16Mi
+
+    fetcher:
+      image: registry.example.test/simple-idm-token-proxy:1.0.0
+      # command má výchozí hodnotu simple-idm-token-proxy
+      # image_pull_policy má výchozí hodnotu Always
+
+    # Vynechané containers znamená ["*"], tedy všechny primární containery.
+    containers:
+      - "*"
+
+    files:
+      - source: files/ssl/tsm-client-keystore.jks
+        target: tsm-client-keystore.jks
+        mode: "0440"
+        sha256: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+      - source: files/ssl/tsm-client-truststore.jks
+        target: tsm-client-truststore.jks
+        mode: "0440"
+```
+
+Hodnota `source.token` je reference na `workload_identity.tokens[].name`;
+nevytváří druhý token ani audience. Reference na neexistující token je
+validační chyba.
+
+Výchozí hodnoty:
+
+- `source.type`: `simple_config`
+- `source.tenant`: `default`
+- `source.environment`: prostředí předané přes `-e`
+- `source.timeout_seconds`: `30`
+- `volume.name`: název skupiny runtime assetů
+- `containers`: `["*"]`
+- `files[].mode`: `"0440"`
+- resources fetcheru: CPU `10m..100m`, memory `16Mi..128Mi`
+
+Wildcard vybírá jen primární `containers`. Pokud runtime volume potřebuje také
+sidecar, musí být uveden explicitně jeho název. Mount v aplikačním containeru
+je read-only; zapisovat do něj může pouze vygenerovaný fetch init container.
+
+Fetcher spouští:
+
+```text
+simple-idm-token-proxy fetch
+```
+
+Projektovaný token posílá přímo do `simple-config-server`. Localhost proxy
+nepoužívá, protože běžné sidecary startují až po dokončení init containerů.
+Dlouhodobě běžící aplikační klient může nezávisle používat
+`simple-idm-token-proxy serve` jako běžný sidecar.
+
+Runtime assety se stáhnou jednou při startu Podu; průběžně se nesynchronizují.
+Změna vzdáleného souboru proto vyžaduje restart nebo rollout Podu. Pokud musí
+být deployment svázaný s reprodukovatelnou Git revizí, použijte `source.label`.
+
+`runtime_assets` lze zdědit z `apps/_defaults.yml`. Konkrétní appka je může
+vypnout:
+
+```yaml
+runtime_assets: []
+```
+
+### 17. Sidecars a Pod Options
 
 App-level `sidecars` použijte pro pomocné containery, které běží ve stejném Podu, ale nejsou primární aplikační containery:
 
@@ -1210,12 +1607,13 @@ workload_identity:
       audience: simple-config-server
 
 sidecars:
-  - name: simple-config-token-proxy
-    image: "{{TSM_REGISTRY_URL}}/simple-config-token-proxy:{{TSM_RELEASE_ID}}"
+  - name: simple-idm-token-proxy
+    image: "{{TSM_REGISTRY_URL}}/simple-idm-token-proxy:{{TSM_RELEASE_ID}}"
     startup:
       command:
-        - simple-config-token-proxy
+        - simple-idm-token-proxy
       arguments:
+        - serve
         - --listen
         - 127.0.0.1:9999
         - --upstream
@@ -1256,7 +1654,7 @@ sidecars:
 
 Výsledkem je Kubernetes `shareProcessNamespace: true`. Porty sidecarů se nepoužívají pro generování Service; služby se generují jen z primárních `containers`.
 
-### 17. Init Containers
+### 18. Init Containers
 
 App-level `init_containers` použijte pro obecné Kubernetes init containery:
 
@@ -1301,7 +1699,7 @@ Podporovaná pole init containeru záměrně kopírují běžnou podmnožinu sta
 
 Existující `tools` zůstávají preferovaná zkratka pro vystavení statických utilit přes generované init containery.
 
-### 18. Raw Escape Hatches
+### 19. Raw Escape Hatches
 
 `deployment_raw` použijte pro vzácná Deployment-level pole:
 
@@ -1321,7 +1719,7 @@ pod_raw:
 
 `deployment_raw` se rekurzivně merguje do vygenerovaného Deployment objektu. `pod_raw` se aplikuje do `spec.template.spec`.
 
-### 19. Raw Container Fields
+### 20. Raw Container Fields
 
 Raw passthrough používejte jen tehdy, když model nemá dedikované pole:
 
@@ -1336,7 +1734,7 @@ containers:
 
 Dedikovaná modelová pole jsou lepší, protože se dají validovat a zobrazit v UI nástrojích.
 
-### 20. Cgroup Exporter Defaults
+### 21. Cgroup Exporter Defaults
 
 Na úrovni containeru lze zapnout automatické vkládání variable pro cgroup exporter:
 
@@ -1360,7 +1758,7 @@ CGROUP_EXPORTER_MEMORY_LIMITS_MIB
 CGROUP_EXPORTER_NODE_NAME
 ```
 
-### 21. Ignorované Appky
+### 22. Ignorované Appky
 
 Vynechání appky z buildu:
 
