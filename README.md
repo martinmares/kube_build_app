@@ -654,7 +654,17 @@ images:
     image: registry.example.com/project/tsm-dms
     tag: 2026.06.25.01
     digest: sha256:abcdef
+  - app_name: "*"
+    container_name: cgroup-runtime-exporter
+    image: registry.example.com/project/cgroup-runtime-exporter
+    tag: 2026.06.25.01
 ```
+
+Use `app_name: "*"` for a container or sidecar shared by multiple apps. An
+exact `<app_name>/<container_name>` entry takes precedence over the wildcard,
+so a single app can use a different image. An app-level entry without
+`container_name` remains a fallback for the app's primary containers and does
+not override sidecars.
 
 When `digest` is present, the generated deployment uses an immutable digest reference:
 
@@ -1483,6 +1493,26 @@ workload_identity:
 
 The generated deployment contains `serviceAccountName`, `automountServiceAccountToken: false`, a projected `serviceAccountToken` volume, and a read-only mount. When `service_account.create=true`, `kube-build-app` also generates a `ServiceAccount` manifest.
 
+Reference a declared token from a primary container, sidecar or explicit init
+container without repeating its effective file path:
+
+```yaml
+sidecars:
+  - name: simple-idm-token-proxy
+    image: registry.example.test/simple-idm-token-proxy:1.0.0
+    envs:
+      - name: SIMPLE_IDM_TOKEN_PROXY_TOKEN_FILE
+        workload_identity_token: simple-config
+```
+
+The example renders
+`SIMPLE_IDM_TOKEN_PROXY_TOKEN_FILE=/var/run/secrets/workload-identity/simple-config/token`.
+Custom `tokens[].mount_path` and `tokens[].path` values are respected.
+`workload_identity_token` is a reference to `tokens[].name`; an unknown
+reference or a combination with another environment value source is a
+validation error. The same reference can be inherited through
+`apps/_defaults.yml` and `container_envs`.
+
 Use `pod_info` for the common Downward API metadata mount:
 
 ```yaml
@@ -1583,8 +1613,11 @@ Defaults:
 - fetcher resources: CPU `10m..100m`, memory `16Mi..128Mi`
 
 The wildcard selects primary `containers` only. Name a sidecar explicitly when
-it also needs the runtime volume. Application mounts are read-only; only the
-generated fetch init container receives a writable mount.
+it also needs the runtime volume. These are container names within the current
+app, not application selectors. When `runtime_assets` is inherited from
+`apps/_defaults.yml`, every app inherits the group unless it overrides it with
+`runtime_assets: []`. Application mounts are read-only; only the generated
+fetch init container receives a writable mount.
 
 The fetcher runs:
 

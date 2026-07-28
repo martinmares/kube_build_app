@@ -1252,6 +1252,74 @@ containers:
 	}
 }
 
+func TestBuildReleaseManifestWildcardOverridesSharedSidecar(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	manifestPath := filepath.Join(root, "release.yml")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "nac-test"},
+	})
+	writeFile(t, manifestPath, `
+images:
+  - app_name: api
+    container_name: api
+    image: registry.release/api
+    tag: "2.4"
+  - app_name: worker
+    container_name: worker
+    image: registry.release/worker
+    tag: "2.4"
+  - app_name: "*"
+    container_name: cgroup-runtime-exporter
+    image: registry.release/cgroup-runtime-exporter
+    tag: "2.4"
+  - app_name: worker
+    container_name: cgroup-runtime-exporter
+    image: registry.release/worker-cgroup-runtime-exporter
+    tag: "2.4.1"
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
+sidecars:
+  - name: cgroup-runtime-exporter
+    image: registry.local/cgroup-runtime-exporter:latest
+    resources:
+      cpu: {from: "10m", to: "50m"}
+      memory: {from: "16Mi", to: "64Mi"}
+`)
+	for _, appName := range []string{"api", "worker"} {
+		writeFile(t, filepath.Join(envDir, "apps", appName+".yml"), fmt.Sprintf(`
+name: %s
+containers:
+  - name: %s
+    image: registry.local/%s:latest
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`, appName, appName, appName))
+	}
+
+	_, err := Build(Options{
+		Environment:     "test",
+		Root:            root,
+		Target:          target,
+		ReleaseManifest: manifestPath,
+		ImagePolicy:     "strict",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	api := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(api, "spec", "template", "spec", "containers", "1", "image"); got != "registry.release/cgroup-runtime-exporter:2.4" {
+		t.Fatalf("api sidecar image = %q, want wildcard image", got)
+	}
+	worker := loadYAML(t, filepath.Join(target, "deployments", "worker-deployment.yml"))
+	if got := digString(worker, "spec", "template", "spec", "containers", "1", "image"); got != "registry.release/worker-cgroup-runtime-exporter:2.4.1" {
+		t.Fatalf("worker sidecar image = %q, want exact override", got)
+	}
+}
+
 func TestBuildReleaseManifestProvidesReleaseIDBuildVariable(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
@@ -3561,6 +3629,125 @@ containers:
 	}
 	if got := envSecretName(env, "SECRET_PUBLIC_KEY"); got != "tsm-secrets" {
 		t.Fatalf("SECRET_PUBLIC_KEY secret name = %q, want tsm-secrets", got)
+	}
+}
+
+func TestBuildResolvesWorkloadIdentityTokenEnvReferences(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE": "tsm-test",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
+workload_identity:
+  service_account:
+    create: true
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+    - name: custom-token
+      audience: custom-service
+      mount_path: /var/run/custom-identity
+      path: credential.jwt
+
+container_envs:
+  - name: "*"
+    envs:
+      - name: DEFAULT_TOKEN_FILE
+        workload_identity_token: simple-config
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+init_containers:
+  - name: prepare
+    image: registry.example.test/prepare:1
+    envs:
+      - name: INIT_TOKEN_FILE
+        workload_identity_token: simple-config
+sidecars:
+  - name: token-proxy
+    image: registry.example.test/token-proxy:1
+    envs:
+      - name: PROXY_TOKEN_FILE
+        workload_identity_token: custom-token
+containers:
+  - name: api
+    image: registry.example.test/api:1
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	podSpec := digAny(deployment, "spec", "template", "spec").(map[string]any)
+	containers := podSpec["containers"].([]any)
+	api := namedObject(containers, "api")
+	if got := envValue(digSlice(api, "env"), "DEFAULT_TOKEN_FILE"); got != "/var/run/secrets/workload-identity/simple-config/token" {
+		t.Fatalf("DEFAULT_TOKEN_FILE = %q", got)
+	}
+	proxy := namedObject(containers, "token-proxy")
+	if got := envValue(digSlice(proxy, "env"), "PROXY_TOKEN_FILE"); got != "/var/run/custom-identity/credential.jwt" {
+		t.Fatalf("PROXY_TOKEN_FILE = %q", got)
+	}
+	initContainers := podSpec["initContainers"].([]any)
+	prepare := namedObject(initContainers, "prepare")
+	if got := envValue(digSlice(prepare, "env"), "INIT_TOKEN_FILE"); got != "/var/run/secrets/workload-identity/simple-config/token" {
+		t.Fatalf("INIT_TOKEN_FILE = %q", got)
+	}
+}
+
+func TestValidateRejectsUnknownWorkloadIdentityTokenEnvReference(t *testing.T) {
+	app := appModel{
+		Name: "api",
+		Containers: []containerSpec{
+			{
+				Name: "api",
+				Envs: []envVar{
+					{Name: "TOKEN_FILE", WorkloadIdentityToken: "missing"},
+				},
+			},
+		},
+	}
+
+	err := validateApps([]appModel{app})
+	if err == nil || !strings.Contains(err.Error(), `env "TOKEN_FILE" references unknown workload_identity token "missing"`) {
+		t.Fatalf("validateApps error = %v", err)
+	}
+}
+
+func TestValidateRejectsConflictingWorkloadIdentityTokenEnvSource(t *testing.T) {
+	app := appModel{
+		Name: "api",
+		WorkloadIdentity: workloadIdentitySpec{
+			Tokens: []workloadIdentityTokenSpec{
+				{Name: "simple-config", Audience: "simple-config-server"},
+			},
+		},
+		Sidecars: []containerSpec{
+			{
+				Name: "token-proxy",
+				Envs: []envVar{
+					{
+						Name:                  "TOKEN_FILE",
+						Value:                 "/tmp/token",
+						WorkloadIdentityToken: "simple-config",
+					},
+				},
+			},
+		},
+	}
+
+	err := validateApps([]appModel{app})
+	if err == nil || !strings.Contains(err.Error(), `env "TOKEN_FILE" combines workload_identity_token with another value source`) {
+		t.Fatalf("validateApps error = %v", err)
 	}
 }
 

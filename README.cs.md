@@ -640,7 +640,17 @@ images:
     image: registry.example.com/project/tsm-dms
     tag: 2026.06.25.01
     digest: sha256:abcdef
+  - app_name: "*"
+    container_name: cgroup-runtime-exporter
+    image: registry.example.com/project/cgroup-runtime-exporter
+    tag: 2026.06.25.01
 ```
+
+Pro container nebo sidecar sdílený více aplikacemi použijte `app_name: "*"`.
+Přesný záznam `<app_name>/<container_name>` má před wildcardem přednost, takže
+konkrétní aplikace může použít jinou image. App-level záznam bez
+`container_name` zůstává fallbackem pro primární containery aplikace a
+sidecary nepřepisuje.
 
 Pokud je vyplněný `digest`, výsledný deployment použije neměnnou digest referenci:
 
@@ -1469,6 +1479,26 @@ workload_identity:
 
 Výsledný deployment obsahuje `serviceAccountName`, `automountServiceAccountToken: false`, projektovaný `serviceAccountToken` volume a read-only mount. Pokud je `service_account.create=true`, `kube-build-app` zároveň vygeneruje `ServiceAccount` manifest.
 
+Na deklarovaný token lze odkázat z primárního kontejneru, sidecaru nebo
+explicitního initContaineru bez opakování jeho výsledné cesty:
+
+```yaml
+sidecars:
+  - name: simple-idm-token-proxy
+    image: registry.example.test/simple-idm-token-proxy:1.0.0
+    envs:
+      - name: SIMPLE_IDM_TOKEN_PROXY_TOKEN_FILE
+        workload_identity_token: simple-config
+```
+
+Příklad vygeneruje
+`SIMPLE_IDM_TOKEN_PROXY_TOKEN_FILE=/var/run/secrets/workload-identity/simple-config/token`.
+Vlastní hodnoty `tokens[].mount_path` a `tokens[].path` se respektují.
+`workload_identity_token` je reference na `tokens[].name`; neexistující
+reference nebo kombinace s jiným zdrojem hodnoty environment proměnné je
+validační chyba. Stejnou referenci lze zdědit přes `apps/_defaults.yml` a
+`container_envs`.
+
 Pro běžný Downward API mount s runtime informacemi o podu použijte `pod_info`:
 
 ```yaml
@@ -1569,8 +1599,11 @@ Výchozí hodnoty:
 - resources fetcheru: CPU `10m..100m`, memory `16Mi..128Mi`
 
 Wildcard vybírá jen primární `containers`. Pokud runtime volume potřebuje také
-sidecar, musí být uveden explicitně jeho název. Mount v aplikačním containeru
-je read-only; zapisovat do něj může pouze vygenerovaný fetch init container.
+sidecar, musí být uveden explicitně jeho název. Jde o názvy kontejnerů uvnitř
+aktuální appky, nikoliv o selektory aplikací. Pokud se `runtime_assets` zdědí z
+`apps/_defaults.yml`, skupinu zdědí každá appka, pokud ji nepřepíše pomocí
+`runtime_assets: []`. Mount v aplikačním containeru je read-only; zapisovat do
+něj může pouze vygenerovaný fetch init container.
 
 Fetcher spouští:
 

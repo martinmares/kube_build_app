@@ -545,14 +545,15 @@ type toolSpec struct {
 }
 
 type envVar struct {
-	Name         string `yaml:"name"`
-	Value        string `yaml:"value,omitempty"`
-	SecretName   string `yaml:"secret_name,omitempty"`
-	Key          string `yaml:"key,omitempty"`
-	ResourceName string `yaml:"resource_name,omitempty"`
-	Divisor      string `yaml:"divisor,omitempty"`
-	FieldPath    string `yaml:"field_path,omitempty"`
-	Remove       bool   `yaml:"remove,omitempty"`
+	Name                  string `yaml:"name"`
+	Value                 string `yaml:"value,omitempty"`
+	SecretName            string `yaml:"secret_name,omitempty"`
+	Key                   string `yaml:"key,omitempty"`
+	ResourceName          string `yaml:"resource_name,omitempty"`
+	Divisor               string `yaml:"divisor,omitempty"`
+	FieldPath             string `yaml:"field_path,omitempty"`
+	WorkloadIdentityToken string `yaml:"workload_identity_token,omitempty"`
+	Remove                bool   `yaml:"remove,omitempty"`
 }
 
 type containerEnvDefault struct {
@@ -1715,6 +1716,9 @@ func validateApps(apps []appModel) error {
 			if _, err := imagePullPolicy(container.ImagePullPolicy); err != nil {
 				return fmt.Errorf("%s: container %q: %w", app.Name, container.Name, err)
 			}
+			if err := validateWorkloadIdentityEnvReferences(app, container.Name, effectiveContainerEnvs(container), tokenNames); err != nil {
+				return err
+			}
 			for _, port := range container.Ports {
 				for _, expose := range port.ExposeAs {
 					if expose.ServiceName != "" && expose.Hostname != "" && expose.ServiceName != expose.Hostname {
@@ -1742,6 +1746,42 @@ func validateApps(apps []appModel) error {
 			if _, err := imagePullPolicy(container.ImagePullPolicy); err != nil {
 				return fmt.Errorf("%s: init container %q: %w", app.Name, container.Name, err)
 			}
+			if err := validateWorkloadIdentityEnvReferences(app, container.Name, effectiveInitContainerEnvs(container), tokenNames); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateWorkloadIdentityEnvReferences(app appModel, containerName string, items []envVar, tokenNames map[string]bool) error {
+	for _, item := range items {
+		tokenName := strings.TrimSpace(item.WorkloadIdentityToken)
+		if tokenName == "" {
+			continue
+		}
+		if item.Value != "" ||
+			item.SecretName != "" ||
+			item.Key != "" ||
+			item.ResourceName != "" ||
+			item.Divisor != "" ||
+			item.FieldPath != "" ||
+			item.Remove {
+			return fmt.Errorf(
+				"%s: container %q env %q combines workload_identity_token with another value source",
+				app.Name,
+				containerName,
+				item.Name,
+			)
+		}
+		if !tokenNames[tokenName] {
+			return fmt.Errorf(
+				"%s: container %q env %q references unknown workload_identity token %q",
+				app.Name,
+				containerName,
+				item.Name,
+				tokenName,
+			)
 		}
 	}
 	return nil
@@ -2118,7 +2158,7 @@ func applyImageOverrides(apps []appModel, opts Options) error {
 				}
 			}
 			for _, sidecar := range app.Sidecars {
-				if image := manifest.exactImageFor(app.Name, sidecar.Name); image != "" {
+				if image := manifest.sidecarImageFor(app.Name, sidecar.Name); image != "" {
 					images[imageKey{App: app.Name, Container: sidecar.Name}] = image
 				}
 			}
@@ -2237,7 +2277,17 @@ func (m releaseManifest) imageFor(appName string, containerName string) string {
 	if image := m.exactImageFor(appName, containerName); image != "" {
 		return image
 	}
+	if image := m.wildcardImageFor(containerName); image != "" {
+		return image
+	}
 	return m.defaultImageFor(appName)
+}
+
+func (m releaseManifest) sidecarImageFor(appName string, containerName string) string {
+	if image := m.exactImageFor(appName, containerName); image != "" {
+		return image
+	}
+	return m.wildcardImageFor(containerName)
 }
 
 func (m releaseManifest) exactImageFor(appName string, containerName string) string {
@@ -2245,6 +2295,18 @@ func (m releaseManifest) exactImageFor(appName string, containerName string) str
 	for i := range m.Images {
 		item := &m.Images[i]
 		if item.AppName == appName && item.ContainerName == containerName {
+			match = item
+			break
+		}
+	}
+	return releaseImageRef(match)
+}
+
+func (m releaseManifest) wildcardImageFor(containerName string) string {
+	var match *releaseImage
+	for i := range m.Images {
+		item := &m.Images[i]
+		if item.AppName == "*" && item.ContainerName == containerName {
 			match = item
 			break
 		}
@@ -2616,6 +2678,12 @@ func varsToNode(items []envVar) *yaml.Node {
 			itemNode.Content = append(itemNode.Content, scalarNode("divisor"), scalarNode(item.Divisor))
 		case item.FieldPath != "":
 			itemNode.Content = append(itemNode.Content, scalarNode("field_path"), scalarNode(item.FieldPath))
+		case item.WorkloadIdentityToken != "":
+			itemNode.Content = append(
+				itemNode.Content,
+				scalarNode("workload_identity_token"),
+				scalarNode(item.WorkloadIdentityToken),
+			)
 		default:
 			itemNode.Content = append(itemNode.Content, scalarNode("value"), scalarNode(item.Value))
 		}
@@ -2990,13 +3058,13 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 		containerAssets := append([]resolvedAsset{}, assets[container.Name]...)
 		containerAssets = append(containerAssets, workloadAssets...)
 		containerAssets = append(containerAssets, runtimeAssetMountAssets(app, container.Name, false)...)
-		containers = append(containers, renderContainer(container, containerAssets, sharedAssets, app.Tools))
+		containers = append(containers, renderContainer(app, container, containerAssets, sharedAssets, app.Tools))
 	}
 	for _, sidecar := range app.Sidecars {
 		sidecarAssets := append([]resolvedAsset{}, assets[sidecar.Name]...)
 		sidecarAssets = append(sidecarAssets, workloadAssets...)
 		sidecarAssets = append(sidecarAssets, runtimeAssetMountAssets(app, sidecar.Name, true)...)
-		containers = append(containers, renderContainer(sidecar, sidecarAssets, sharedAssets, app.Tools))
+		containers = append(containers, renderContainer(app, sidecar, sidecarAssets, sharedAssets, app.Tools))
 	}
 	initAssets := assets
 	if len(workloadAssets) > 0 {
@@ -3393,7 +3461,7 @@ func renderHostAliases(dns []hostAliasSpec) []any {
 	return out
 }
 
-func renderContainer(container containerSpec, assets []resolvedAsset, sharedAssets []resolvedAsset, tools []toolSpec) map[string]any {
+func renderContainer(app appModel, container containerSpec, assets []resolvedAsset, sharedAssets []resolvedAsset, tools []toolSpec) map[string]any {
 	mounts := renderVolumeMounts(append(append([]resolvedAsset{}, assets...), sharedAssets...))
 	mounts = append(mounts, renderToolVolumeMounts(tools)...)
 	out := map[string]any{
@@ -3414,7 +3482,7 @@ func renderContainer(container containerSpec, assets []resolvedAsset, sharedAsse
 	}
 	vars := effectiveContainerEnvs(container)
 	if len(vars) > 0 {
-		out["env"] = renderVars(vars)
+		out["env"] = renderVars(app, vars)
 	}
 	if envFrom := renderEnvFrom(container.EnvFrom); len(envFrom) > 0 {
 		out["envFrom"] = envFrom
@@ -3623,12 +3691,12 @@ func renderInitContainers(app appModel, assets map[string][]resolvedAsset, tools
 	}
 	out = append(out, runtimeFetchers...)
 	for _, container := range app.InitContainers {
-		out = append(out, renderInitContainer(container, assets[container.Name], tools))
+		out = append(out, renderInitContainer(app, container, assets[container.Name], tools))
 	}
 	return out, nil
 }
 
-func renderInitContainer(container initContainerSpec, assets []resolvedAsset, tools []toolSpec) map[string]any {
+func renderInitContainer(app appModel, container initContainerSpec, assets []resolvedAsset, tools []toolSpec) map[string]any {
 	mounts := renderVolumeMounts(assets)
 	mounts = append(mounts, renderToolVolumeMounts(tools)...)
 	out := map[string]any{
@@ -3652,7 +3720,7 @@ func renderInitContainer(container initContainerSpec, assets []resolvedAsset, to
 		out["securityContext"] = cloneMap(container.SecurityContext)
 	}
 	if vars := effectiveInitContainerEnvs(container); len(vars) > 0 {
-		out["env"] = renderVars(vars)
+		out["env"] = renderVars(app, vars)
 	}
 	if envFrom := renderEnvFrom(container.EnvFrom); len(envFrom) > 0 {
 		out["envFrom"] = envFrom
@@ -4587,7 +4655,7 @@ func renderRoute(serviceName string, namespace string, port serviceExternalPort,
 	}
 }
 
-func renderVars(items []envVar) []map[string]any {
+func renderVars(app appModel, items []envVar) []map[string]any {
 	out := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		env := map[string]any{"name": item.Name}
@@ -4612,12 +4680,24 @@ func renderVars(items []envVar) []map[string]any {
 					"fieldPath": item.FieldPath,
 				},
 			}
+		case item.WorkloadIdentityToken != "":
+			token, ok := findWorkloadIdentityToken(app, strings.TrimSpace(item.WorkloadIdentityToken))
+			if ok {
+				env["value"] = effectiveWorkloadTokenFile(token)
+			}
 		default:
 			env["value"] = item.Value
 		}
 		out = append(out, env)
 	}
 	return out
+}
+
+func effectiveWorkloadTokenFile(token workloadIdentityTokenSpec) string {
+	return filepath.ToSlash(filepath.Join(
+		effectiveWorkloadTokenMountPath(token),
+		effectiveWorkloadTokenPath(token),
+	))
 }
 
 func effectiveContainerEnvs(container containerSpec) []envVar {
