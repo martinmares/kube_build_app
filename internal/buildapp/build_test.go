@@ -1419,6 +1419,103 @@ containers:
 	}
 }
 
+func TestLoadReleaseManifestAcceptsOCIToolboxMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "release.yml")
+	writeFile(t, path, `
+release_id: RE_2026.07.28.01
+created_at: 2026-07-28T18:00:00Z
+bundle:
+  name: stable
+  revision: abc123
+registry_base: registry.example.com/release
+platform: linux/amd64
+images:
+  - id: api
+    app_name: api
+    container_name: application
+    source:
+      image: registry-source.example.com/team/api
+      tag: build-1
+      digest: sha256:source
+    image: registry.example.com/release/api
+    tag: RE_2026.07.28.01
+    digest: sha256:target
+    extra_tags: [stable]
+    platform: linux/amd64
+extra_tags: [stable]
+`)
+
+	manifest, err := loadReleaseManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Bundle == nil || manifest.Bundle.Name != "stable" || manifest.Bundle.Revision != "abc123" {
+		t.Fatalf("bundle = %#v", manifest.Bundle)
+	}
+	if manifest.Platform != "linux/amd64" || manifest.Images[0].Platform != "linux/amd64" {
+		t.Fatalf("platform = %q, image platform = %q", manifest.Platform, manifest.Images[0].Platform)
+	}
+	if manifest.Images[0].Source == nil || manifest.Images[0].Source.Digest != "sha256:source" {
+		t.Fatalf("source = %#v", manifest.Images[0].Source)
+	}
+	if got := manifest.imageFor("api", "application"); got != "registry.example.com/release/api@sha256:target" {
+		t.Fatalf("image = %q", got)
+	}
+}
+
+func TestLoadReleaseManifestRejectsUnknownField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "release.yml")
+	writeFile(t, path, `
+release_id: release-1
+unexpected: true
+`)
+
+	_, err := loadReleaseManifest(path)
+	if err == nil || !strings.Contains(err.Error(), "field unexpected not found") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadReleaseManifestRejectsDuplicateSelector(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "release.yml")
+	writeFile(t, path, `
+images:
+  - id: api
+    app_name: api
+    container_name: application
+    image: registry.example.com/release/api
+    digest: sha256:first
+  - id: api-copy
+    app_name: api
+    container_name: application
+    image: registry.example.com/release/api-copy
+    digest: sha256:second
+`)
+
+	_, err := loadReleaseManifest(path)
+	if err == nil || !strings.Contains(err.Error(), `duplicate image selector "api"/"application"`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadReleaseManifestRejectsConflictingPlatform(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "release.yml")
+	writeFile(t, path, `
+platform: linux/amd64
+images:
+  - app_name: api
+    container_name: api
+    image: registry.example.com/release/api
+    digest: sha256:target
+    platform: linux/arm64
+`)
+
+	_, err := loadReleaseManifest(path)
+	if err == nil || !strings.Contains(err.Error(), `platform "linux/arm64" conflicts with manifest platform "linux/amd64"`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestBuildGeneratesGenericInitContainers(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -2444,16 +2445,35 @@ func normalizeImagePolicy(policy string) string {
 
 type releaseManifest struct {
 	ReleaseID    string         `yaml:"release_id"`
+	CreatedAt    string         `yaml:"created_at"`
+	Bundle       *releaseBundle `yaml:"bundle"`
 	RegistryBase string         `yaml:"registry_base"`
+	Platform     string         `yaml:"platform"`
 	Images       []releaseImage `yaml:"images"`
+	ExtraTags    []string       `yaml:"extra_tags"`
+}
+
+type releaseBundle struct {
+	Name     string `yaml:"name"`
+	Revision string `yaml:"revision"`
 }
 
 type releaseImage struct {
-	AppName       string `yaml:"app_name"`
-	ContainerName string `yaml:"container_name"`
-	Image         string `yaml:"image"`
-	Tag           string `yaml:"tag"`
-	Digest        string `yaml:"digest"`
+	ID            string         `yaml:"id"`
+	AppName       string         `yaml:"app_name"`
+	ContainerName string         `yaml:"container_name"`
+	Source        *releaseSource `yaml:"source"`
+	Image         string         `yaml:"image"`
+	Tag           string         `yaml:"tag"`
+	Digest        string         `yaml:"digest"`
+	ExtraTags     []string       `yaml:"extra_tags"`
+	Platform      string         `yaml:"platform"`
+}
+
+type releaseSource struct {
+	Image  string `yaml:"image"`
+	Tag    string `yaml:"tag"`
+	Digest string `yaml:"digest"`
 }
 
 func loadReleaseManifest(path string) (releaseManifest, error) {
@@ -2464,11 +2484,92 @@ func loadReleaseManifest(path string) (releaseManifest, error) {
 	if err != nil {
 		return releaseManifest{}, err
 	}
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+	decoder.KnownFields(true)
 	var manifest releaseManifest
-	if err := yaml.Unmarshal(content, &manifest); err != nil {
+	if err := decoder.Decode(&manifest); err != nil {
+		return releaseManifest{}, fmt.Errorf("%s: %w", path, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return releaseManifest{}, fmt.Errorf("%s: multiple YAML documents are not allowed", path)
+		}
+		return releaseManifest{}, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := manifest.normalizeAndValidate(); err != nil {
 		return releaseManifest{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return manifest, nil
+}
+
+func (m *releaseManifest) normalizeAndValidate() error {
+	m.ReleaseID = strings.TrimSpace(m.ReleaseID)
+	m.CreatedAt = strings.TrimSpace(m.CreatedAt)
+	m.RegistryBase = strings.TrimSpace(m.RegistryBase)
+	m.Platform = strings.TrimSpace(m.Platform)
+	if m.Bundle != nil {
+		m.Bundle.Name = strings.TrimSpace(m.Bundle.Name)
+		m.Bundle.Revision = strings.TrimSpace(m.Bundle.Revision)
+		if m.Bundle.Name == "" {
+			return errors.New("bundle.name is required when bundle metadata is present")
+		}
+	}
+
+	ids := map[string]struct{}{}
+	selectors := map[imageKey]struct{}{}
+	for i := range m.Images {
+		item := &m.Images[i]
+		item.ID = strings.TrimSpace(item.ID)
+		item.AppName = strings.TrimSpace(item.AppName)
+		item.ContainerName = strings.TrimSpace(item.ContainerName)
+		item.Image = strings.TrimSpace(item.Image)
+		item.Tag = strings.TrimSpace(item.Tag)
+		item.Digest = strings.TrimSpace(item.Digest)
+		item.Platform = strings.TrimSpace(item.Platform)
+
+		if item.AppName == "" {
+			return fmt.Errorf("images[%d].app_name is required", i)
+		}
+		if item.AppName == "*" && item.ContainerName == "" {
+			return fmt.Errorf("images[%d].container_name is required for a wildcard app_name", i)
+		}
+		if item.Image == "" {
+			return fmt.Errorf("images[%d].image is required", i)
+		}
+		if item.ID != "" {
+			if _, exists := ids[item.ID]; exists {
+				return fmt.Errorf("duplicate image id %q", item.ID)
+			}
+			ids[item.ID] = struct{}{}
+		}
+		selector := imageKey{App: item.AppName, Container: item.ContainerName}
+		if _, exists := selectors[selector]; exists {
+			return fmt.Errorf("duplicate image selector %q/%q", item.AppName, item.ContainerName)
+		}
+		selectors[selector] = struct{}{}
+
+		if item.Platform != "" && m.Platform != "" && item.Platform != m.Platform {
+			return fmt.Errorf(
+				"images[%d].platform %q conflicts with manifest platform %q",
+				i,
+				item.Platform,
+				m.Platform,
+			)
+		}
+		if item.Source != nil {
+			item.Source.Image = strings.TrimSpace(item.Source.Image)
+			item.Source.Tag = strings.TrimSpace(item.Source.Tag)
+			item.Source.Digest = strings.TrimSpace(item.Source.Digest)
+			if item.Source.Image == "" {
+				return fmt.Errorf("images[%d].source.image is required when source metadata is present", i)
+			}
+			if item.Source.Digest == "" {
+				return fmt.Errorf("images[%d].source.digest is required when source metadata is present", i)
+			}
+		}
+	}
+	return nil
 }
 
 func (m releaseManifest) imageFor(appName string, containerName string) string {
