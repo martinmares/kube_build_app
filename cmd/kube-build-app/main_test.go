@@ -406,6 +406,12 @@ func TestSkeletonEnvAndAppAdd(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "dev", "apps", "_defaults.yml")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(root, "dev", "apps", "_scaffold.yml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "_scaffold.yml")); err != nil {
+		t.Fatal(err)
+	}
 
 	out = runCLI(t, "app", "add", "api", "-e", "dev", "--root", root)
 	if !strings.Contains(out, "Created app model:") {
@@ -417,9 +423,9 @@ func TestSkeletonEnvAndAppAdd(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"name: api",
-		`image: "{{REGISTRY_URL}}/api:{{RELEASE_ID}}"`,
-		`requests: "100m"`,
-		`limits: "512Mi"`,
+		"{{REGISTRY_URL}}/api:{{RELEASE_ID}}",
+		"from: 100m",
+		"to: 512Mi",
 	} {
 		if !strings.Contains(string(appContent), expected) {
 			t.Fatalf("app skeleton missing %q:\n%s", expected, appContent)
@@ -435,7 +441,7 @@ func TestAppAddImageOverrideAndNoClobber(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), `image: "custom/worker:1"`) {
+	if !strings.Contains(string(content), "image: custom/worker:1") {
 		t.Fatalf("app image override missing:\n%s", content)
 	}
 	out, err := runCLIError("app", "add", "worker", "-e", "dev", "--root", root)
@@ -444,6 +450,368 @@ func TestAppAddImageOverrideAndNoClobber(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("unexpected no-clobber error: %v\n%s", err, out)
+	}
+}
+
+func TestScaffoldAppMergesGlobalAndEnvironmentProfiles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "environments")
+	runCLI(t, "scaffold", "env", "--root", root, "--env", "dev")
+	envDir := filepath.Join(root, "dev")
+	writeTestFile(t, filepath.Join(envDir, "assets", "utils", "start-java.sh"), "#!/bin/sh\nexec java \"$@\"\n")
+	writeTestFile(t, filepath.Join(envDir, "assets", "config", "global.yml"), "source: global\n")
+	writeTestFile(t, filepath.Join(envDir, "assets", "config", "local.yml"), "source: local\n")
+	writeTestFile(t, filepath.Join(envDir, "shared.assets.yml"), `
+assets:
+  - file: assets/utils/start-java.sh
+    to: /app/start-java.sh
+`)
+	writeTestFile(t, filepath.Join(root, "_scaffold.yml"), `
+version: 1
+defaults:
+  replicas: 3
+  resources:
+    cpu: {from: 50m, to: 500m}
+    memory: {from: 128Mi, to: 512Mi}
+profiles:
+  java-jib:
+    runtime: java-jib
+    app:
+      registry:
+        - secret_name: registry-secret
+      labels:
+        app.kubernetes.io/component: ${APP_NAME}
+    container_defaults:
+      envs:
+        - name: PROFILE_SOURCE
+          value: global
+      ports:
+        - name: http
+          port: 8080
+          expose_as:
+            - hostname: ${APP_NAME}
+              port: 80
+      probes:
+        preset: spring-actuator
+        port: 8080
+    wrapper:
+      source: shared
+      path: /app/start-java.sh
+      arguments:
+        - /app/jib-classpath-file
+    assets:
+      - file: config/global.yml
+        to: /app/config.yml
+    sidecars:
+      - name: metrics
+        image: registry.local/metrics:global
+        startup:
+          command: [/bin/metrics]
+        resources:
+          cpu: {from: 5m, to: 25m}
+          memory: {from: 8Mi, to: 32Mi}
+`)
+	writeTestFile(t, filepath.Join(envDir, "apps", "_scaffold.yml"), `
+version: 1
+profiles:
+  java-jib:
+    resources:
+      cpu:
+        to: 900m
+    assets:
+      - file: config/local.yml
+        to: /app/config.yml
+    sidecars:
+      - name: metrics
+        image: registry.local/metrics:local
+`)
+
+	runCLI(t,
+		"scaffold", "app", "api",
+		"-e", "dev",
+		"--root", root,
+		"--scaffold-profile", "java-jib",
+	)
+	content, err := os.ReadFile(filepath.Join(envDir, "apps", "api.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := string(content)
+	for _, expected := range []string{
+		"replicas: 3",
+		"secret_name: registry-secret",
+		"app.kubernetes.io/component: api",
+		"name: PROFILE_SOURCE",
+		"value: global",
+		"hostname: api",
+		"preset: spring-actuator",
+		"from: 50m",
+		"to: 900m",
+		"from: 128Mi",
+		"to: 512Mi",
+		"file: assets/config/local.yml",
+		"image: registry.local/metrics:local",
+		"command:",
+		"- /bin/metrics",
+		"from: 5m",
+		"- /app/start-java.sh",
+	} {
+		if !strings.Contains(model, expected) {
+			t.Fatalf("merged scaffold model missing %q:\n%s", expected, model)
+		}
+	}
+	if strings.Contains(model, "assets/config/global.yml") || strings.Contains(model, "metrics:global") {
+		t.Fatalf("environment override did not replace global values:\n%s", model)
+	}
+	if got := strings.TrimSpace(runCLI(t, "validate", "-e", "dev", "-R", root)); got != "Validation OK" {
+		t.Fatalf("model with scaffold fragments does not validate: %s", got)
+	}
+}
+
+func TestScaffoldEnvDoesNotOverwriteGlobalConfig(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "environments")
+	runCLI(t, "scaffold", "env", "--root", root, "--env", "dev")
+	globalPath := filepath.Join(root, "_scaffold.yml")
+	custom := "version: 1\nprofiles:\n  custom: {runtime: custom}\n"
+	writeTestFile(t, globalPath, custom)
+
+	runCLI(t, "scaffold", "env", "--root", root, "--env", "prod")
+	content, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != custom {
+		t.Fatalf("creating another environment overwrote global scaffold:\n%s", content)
+	}
+	localContent, err := os.ReadFile(filepath.Join(root, "prod", "apps", "_scaffold.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(localContent), "Optional overrides") {
+		t.Fatalf("environment scaffold is not an override template:\n%s", localContent)
+	}
+}
+
+func TestScaffoldAppUsesRepositoryProfileAndBuilds(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "environments")
+	runCLI(t, "scaffold", "env", "--root", root, "--env", "dev", "--namespace", "app-dev")
+	envDir := filepath.Join(root, "dev")
+	writeTestFile(t, filepath.Join(envDir, "assets", "utils", "start-java.sh"), "#!/bin/sh\nexec java \"$@\"\n")
+	writeTestFile(t, filepath.Join(envDir, "assets", "config", "api.json.tpl"), "{}\n")
+	writeTestFile(t, filepath.Join(envDir, "shared.assets.yml"), `
+assets:
+  - file: assets/utils/start-java.sh
+    to: /app/start-java.sh
+`)
+	writeTestFile(t, filepath.Join(envDir, "apps", "_scaffold.yml"), `
+version: 1
+defaults:
+  replicas: 2
+  resources:
+    cpu: {from: 50m, to: 300m}
+    memory: {from: 96Mi, to: 384Mi}
+profiles:
+  java-jib:
+    runtime: java-jib
+    image: "{{REGISTRY_URL}}/${APP_NAME}:{{RELEASE_ID}}"
+    wrapper:
+      source: shared
+      path: /app/start-java.sh
+      arguments:
+        - /app/jib-classpath-file
+        - /app/jib-main-class-file
+    assets:
+      - file: config/${APP_NAME}.json.tpl
+        to: /app/${APP_NAME}.json.tpl
+        transform: true
+    sidecars:
+      - name: ${APP_NAME}-metrics
+        image: "{{REGISTRY_URL}}/metrics:{{RELEASE_ID}}"
+        envs:
+          - name: TARGET_CONTAINER
+            value: ${CONTAINER_NAME}
+        resources:
+          cpu: {from: 10m, to: 50m}
+          memory: {from: 16Mi, to: 64Mi}
+`)
+
+	output := runCLI(t,
+		"scaffold", "app", "api",
+		"-e", "dev",
+		"--root", root,
+		"--scaffold-profile", "java-jib",
+	)
+	if !strings.Contains(output, "Created app model:") {
+		t.Fatalf("unexpected scaffold output:\n%s", output)
+	}
+	appPath := filepath.Join(envDir, "apps", "api.yml")
+	content, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := string(content)
+	for _, expected := range []string{
+		"name: api",
+		"replicas: 2",
+		"image: '{{REGISTRY_URL}}/api:{{RELEASE_ID}}'",
+		"- /app/start-java.sh",
+		"- /app/jib-classpath-file",
+		"file: assets/config/api.json.tpl",
+		"to: /app/api.json.tpl",
+		"name: api-metrics",
+		"value: api",
+		"from: 50m",
+		"to: 384Mi",
+	} {
+		if !strings.Contains(model, expected) {
+			t.Fatalf("scaffold model missing %q:\n%s", expected, model)
+		}
+	}
+	if strings.Contains(model, "file: assets/utils/start-java.sh") {
+		t.Fatalf("shared wrapper was duplicated as an app asset:\n%s", model)
+	}
+	if got := strings.TrimSpace(runCLI(t, "validate", "-e", "dev", "-R", root)); got != "Validation OK" {
+		t.Fatalf("scaffolded model does not validate: %s", got)
+	}
+	target := filepath.Join(t.TempDir(), "deploy")
+	runCLI(t, "build", "-e", "dev", "-R", root, "-t", target)
+	deployment, err := os.ReadFile(filepath.Join(target, "deployments", "api-deployment.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"name: api-metrics", "mountPath: /app/start-java.sh"} {
+		if !strings.Contains(string(deployment), expected) {
+			t.Fatalf("built deployment missing %q:\n%s", expected, deployment)
+		}
+	}
+}
+
+func TestScaffoldAppAssetWrapperAndCLIAsset(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "environments")
+	runCLI(t, "scaffold", "env", "--root", root, "--env", "dev")
+	envDir := filepath.Join(root, "dev")
+	writeTestFile(t, filepath.Join(envDir, "assets", "utils", "start-worker.sh"), "#!/bin/sh\nexec worker\n")
+	writeTestFile(t, filepath.Join(envDir, "assets", "config", "worker.yml"), "listen: 8080\n")
+
+	runCLI(t,
+		"scaffold", "app", "worker",
+		"-e", "dev",
+		"--root", root,
+		"--runtime", "binary",
+		"--wrapper-source", "asset",
+		"--wrapper-file", "utils/start-worker.sh",
+		"--wrapper-path", "/app/start-worker.sh",
+		"--asset", "config/worker.yml=/app/config.yml",
+		"--sidecar", "audit=registry.local/audit:1",
+	)
+	content, err := os.ReadFile(filepath.Join(envDir, "apps", "worker.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := string(content)
+	for _, expected := range []string{
+		"- /app/start-worker.sh",
+		"file: assets/utils/start-worker.sh",
+		"file: assets/config/worker.yml",
+		"name: audit",
+		"image: registry.local/audit:1",
+		"from: 10m",
+	} {
+		if !strings.Contains(model, expected) {
+			t.Fatalf("scaffold model missing %q:\n%s", expected, model)
+		}
+	}
+}
+
+func TestScaffoldAppDryRunAndSafetyChecks(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "environments")
+	runCLI(t, "scaffold", "env", "--root", root, "--env", "dev")
+	envDir := filepath.Join(root, "dev")
+	writeTestFile(t, filepath.Join(envDir, "assets", "config.yml"), "enabled: true\n")
+
+	output := runCLI(t,
+		"scaffold", "app", "preview",
+		"-e", "dev",
+		"--root", root,
+		"--dry-run",
+		"--asset", "config.yml=/app/config.yml",
+	)
+	if !strings.Contains(output, "name: preview") {
+		t.Fatalf("dry-run did not print model:\n%s", output)
+	}
+	if _, err := os.Stat(filepath.Join(envDir, "apps", "preview.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dry-run wrote app file or stat failed: %v", err)
+	}
+
+	_, err := runCLIError(
+		"scaffold", "app", "unsafe",
+		"-e", "dev",
+		"--root", root,
+		"--asset", "../secret=/app/secret",
+	)
+	if err == nil || !strings.Contains(err.Error(), "escapes <environment>/assets") {
+		t.Fatalf("unexpected traversal result: %v", err)
+	}
+
+	if runtime.GOOS != "windows" {
+		outside := filepath.Join(t.TempDir(), "outside-secret")
+		writeTestFile(t, outside, "secret\n")
+		if err := os.Symlink(outside, filepath.Join(envDir, "assets", "linked-secret")); err != nil {
+			t.Fatal(err)
+		}
+		_, err = runCLIError(
+			"scaffold", "app", "unsafe-link",
+			"-e", "dev",
+			"--root", root,
+			"--asset", "linked-secret=/app/secret",
+		)
+		if err == nil || !strings.Contains(err.Error(), "resolves outside <environment>/assets") {
+			t.Fatalf("unexpected symlink escape result: %v", err)
+		}
+	}
+
+	_, err = runCLIError(
+		"scaffold", "app", "missing-shared",
+		"-e", "dev",
+		"--root", root,
+		"--wrapper-source", "shared",
+		"--wrapper-path", "/app/missing.sh",
+	)
+	if err == nil || !strings.Contains(err.Error(), "is not provided by shared.assets.yml") {
+		t.Fatalf("unexpected shared wrapper result: %v", err)
+	}
+}
+
+func TestScaffoldConfigRejectsUnknownFields(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "environments")
+	runCLI(t, "scaffold", "env", "--root", root, "--env", "dev")
+	writeTestFile(t, filepath.Join(root, "dev", "apps", "_scaffold.yml"), `
+version: 1
+profiles:
+  broken:
+    runtime: custom
+    wraper:
+      source: image
+      path: /app/start.sh
+`)
+
+	_, err := runCLIError(
+		"scaffold", "app", "api",
+		"-e", "dev",
+		"--root", root,
+		"--scaffold-profile", "broken",
+	)
+	if err == nil || !strings.Contains(err.Error(), `field wraper not found`) {
+		t.Fatalf("unexpected unknown field result: %v", err)
+	}
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

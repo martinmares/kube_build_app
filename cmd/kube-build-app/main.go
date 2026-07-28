@@ -47,9 +47,6 @@ type cliOptions struct {
 	skeletonRegistry string
 	skeletonRelease  string
 	force            bool
-	appName          string
-	appImage         string
-	appContainer     string
 }
 
 func main() {
@@ -112,6 +109,7 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.AddCommand(newInventoryCommand(opts))
 	root.AddCommand(newListCommand(opts))
 	root.AddCommand(newSkeletonCommand(opts))
+	root.AddCommand(newScaffoldCommand(opts))
 	root.AddCommand(newAppCommand(opts))
 	root.AddCommand(newImportCommand())
 	root.AddCommand(newCompletionCommand(root))
@@ -144,18 +142,16 @@ func newAppCommand(opts *cliOptions) *cobra.Command {
 		Use:   "app",
 		Short: "Manage app model files",
 	}
+	scaffoldOpts := defaultScaffoldAppOptions()
 	addCmd := &cobra.Command{
 		Use:   "add NAME",
-		Short: "Generate a starter app model",
+		Short: "Generate a starter app model (compatibility alias for scaffold app)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.appName = args[0]
-			return runAppAdd(cmd, opts)
+			return runScaffoldApp(cmd, opts, scaffoldOpts, args[0], "app add")
 		},
 	}
-	addCmd.Flags().StringVar(&opts.appImage, "image", "", "container image; defaults to {{REGISTRY_URL}}/<app>:{{RELEASE_ID}}")
-	addCmd.Flags().StringVar(&opts.appContainer, "container", "", "container name; defaults to app name")
-	addCmd.Flags().BoolVar(&opts.force, "force", false, "overwrite existing app file")
+	bindScaffoldAppFlags(addCmd, scaffoldOpts)
 	cmd.AddCommand(addCmd)
 	return cmd
 }
@@ -353,51 +349,25 @@ container_envs: []
 	if err := writeFileNoClobber(defaultsPath, defaults, opts.force); err != nil {
 		return fmt.Errorf("skeleton env failed: %w", err)
 	}
+	globalScaffoldPath := filepath.Join(opts.root, "_scaffold.yml")
+	if err := writeFileIfMissing(globalScaffoldPath, defaultGlobalScaffoldConfigContent()); err != nil {
+		return fmt.Errorf("skeleton env failed: %w", err)
+	}
+	scaffoldPath := filepath.Join(appsDir, "_scaffold.yml")
+	if err := writeFileNoClobber(scaffoldPath, defaultEnvironmentScaffoldConfigContent(), opts.force); err != nil {
+		return fmt.Errorf("skeleton env failed: %w", err)
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Created environment skeleton: %s\n", envDir)
 	return nil
 }
 
-func runAppAdd(cmd *cobra.Command, opts *cliOptions) error {
-	envName := strings.TrimSpace(opts.envName)
-	if envName == "" {
-		return errors.New("app add failed: --environment/-e is required")
+func writeFileIfMissing(path string, content []byte) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
-	appName := strings.TrimSpace(opts.appName)
-	if appName == "" {
-		return errors.New("app add failed: app name is required")
-	}
-	containerName := strings.TrimSpace(opts.appContainer)
-	if containerName == "" {
-		containerName = appName
-	}
-	image := strings.TrimSpace(opts.appImage)
-	if image == "" {
-		image = "{{REGISTRY_URL}}/" + appName + ":{{RELEASE_ID}}"
-	}
-	appsDir := filepath.Join(opts.root, envName, "apps")
-	if err := os.MkdirAll(appsDir, 0o755); err != nil {
-		return fmt.Errorf("app add failed: %w", err)
-	}
-	path := filepath.Join(appsDir, appName+".yml")
-	content := fmt.Sprintf(`name: %s
-replicas: 1
-
-containers:
-  - name: %s
-    image: "%s"
-    resources:
-      cpu:
-        requests: "100m"
-        limits: "500m"
-      memory:
-        requests: "128Mi"
-        limits: "512Mi"
-`, appName, containerName, image)
-	if err := writeFileNoClobber(path, []byte(content), opts.force); err != nil {
-		return fmt.Errorf("app add failed: %w", err)
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Created app model: %s\n", path)
-	return nil
+	return os.WriteFile(path, content, 0o644)
 }
 
 func writeFileNoClobber(path string, content []byte, force bool) error {
