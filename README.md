@@ -1280,6 +1280,31 @@ mounts:
 ### 9. Shared Assets
 
 Use `<environment>/shared.assets.yml` for assets mounted into multiple apps.
+Assign `name` when another metamodel block needs to reference the asset:
+
+```yaml
+assets:
+  - name: internal-ca
+    file: assets/ssl/internal-ca.pem
+    to: /var/run/certs/internal-ca.pem
+```
+
+Shared asset names are optional, but defined names must be unique Kubernetes
+DNS labels. Fields ending in `_ref_name` resolve another declaration by its
+`name`; fields ending in `_ref_names` contain a list of such references.
+
+The reference contract intentionally removed ambiguous keys:
+
+| Removed key | Replacement |
+|---|---|
+| `envs[].workload_identity_token` | `workload_identity_token_ref_name` |
+| `runtime_assets[].source.token` | `workload_identity_token_ref_name` |
+| `runtime_assets[].apps` | `app_ref_names` |
+| `runtime_assets[].containers` | `container_ref_names` |
+| `container_envs[].name` | `container_ref_name` |
+| `replica-profiles.yml defaults.profile` | `replica_profile_ref_name` |
+
+Using a removed key fails validation with a migration message.
 
 An app can opt out:
 
@@ -1502,15 +1527,16 @@ sidecars:
     image: registry.example.test/simple-idm-token-proxy:1.0.0
     envs:
       - name: SIMPLE_IDM_TOKEN_PROXY_TOKEN_FILE
-        workload_identity_token: simple-config
+        workload_identity_token_ref_name: simple-config
 ```
 
 The example renders
 `SIMPLE_IDM_TOKEN_PROXY_TOKEN_FILE=/var/run/secrets/workload-identity/simple-config/token`.
 Custom `tokens[].mount_path` and `tokens[].path` values are respected.
-`workload_identity_token` is a reference to `tokens[].name`; an unknown
-reference or a combination with another environment value source is a
-validation error. The same reference can be inherited through
+`workload_identity_token_ref_name` is a reference to `tokens[].name`; an
+unknown reference or a combination with another environment value source is a
+validation error. The `_ref_name` suffix intentionally makes symbolic
+metamodel references visible. The same reference can be inherited through
 `apps/_defaults.yml` and `container_envs`.
 
 Use `pod_info` for the common Downward API metadata mount:
@@ -1568,7 +1594,8 @@ runtime_assets:
       tenant: default
       environment: test
       label: release-2026.07 # optional Git label
-      token: simple-config
+      workload_identity_token_ref_name: simple-config
+      ca_shared_asset_ref_name: internal-ca
       timeout_seconds: 30
 
     volume:
@@ -1582,8 +1609,12 @@ runtime_assets:
       # command defaults to simple-idm-token-proxy
       # image_pull_policy defaults to Always
 
-    # Omitted containers defaults to ["*"], meaning all primary containers.
-    containers:
+    # Optional when inherited from _defaults.yml.
+    app_ref_names:
+      - api
+
+    # Omitted container_ref_names defaults to ["*"]: all primary containers.
+    container_ref_names:
       - "*"
 
     files:
@@ -1597,9 +1628,36 @@ runtime_assets:
         mode: "0440"
 ```
 
-The `source.token` value is a reference to
+`source.workload_identity_token_ref_name` references
 `workload_identity.tokens[].name`; it does not define another token or
 audience. An unknown token reference is a validation error.
+
+Give reusable entries in `<environment>/shared.assets.yml` a stable `name`.
+`source.ca_shared_asset_ref_name` resolves that name to the asset's canonical
+`to` path. The generated fetch init container mounts the matching asset and
+passes the resolved path through `--ca-file`. The fetcher adds the PEM bundle
+to its normal trust roots; TLS verification remains enabled.
+
+```yaml
+# <environment>/shared.assets.yml
+assets:
+  - name: internal-ca
+    file: assets/ssl/internal-ca.pem
+    to: /var/run/certs/internal-ca.pem
+```
+
+The same path can be exported to a container without duplicating it:
+
+```yaml
+envs:
+  - name: SSL_CERT_FILE
+    shared_asset_ref_name: internal-ca
+```
+
+`source.ca_file` remains an explicit escape hatch for an unnamed shared asset.
+It must be absolute and exactly match a shared asset `to` path.
+`source.ca_file` and `source.ca_shared_asset_ref_name` are mutually exclusive,
+and neither can be combined with `source.insecure_upstream_tls`.
 
 Defaults:
 
@@ -1608,16 +1666,17 @@ Defaults:
 - `source.environment`: the environment passed through `-e`
 - `source.timeout_seconds`: `30`
 - `volume.name`: runtime asset group name
-- `containers`: `["*"]`
+- `app_ref_names`: all apps
+- `container_ref_names`: `["*"]`
 - `files[].mode`: `"0440"`
 - fetcher resources: CPU `10m..100m`, memory `16Mi..128Mi`
 
-The wildcard selects primary `containers` only. Name a sidecar explicitly when
-it also needs the runtime volume. These are container names within the current
-app, not application selectors. When `runtime_assets` is inherited from
-`apps/_defaults.yml`, every app inherits the group unless it overrides it with
-`runtime_assets: []`. Application mounts are read-only; only the generated
-fetch init container receives a writable mount.
+`app_ref_names` restricts a group inherited from `_defaults.yml` to named apps.
+The `container_ref_names` wildcard selects primary `containers` only. Name a
+sidecar explicitly when it also needs the runtime volume. Unknown app,
+container, token or shared asset references are validation errors. Application
+mounts are read-only; only the generated fetch init container receives a
+writable mount.
 
 The fetcher runs:
 
@@ -1835,12 +1894,12 @@ vars:
     value: INFO
 
 container_envs:
-  - name: "*"
+  - container_ref_name: "*"
     envs:
       - name: GLOBAL_FLAG
         value: "true"
 
-  - name: api
+  - container_ref_name: api
     envs:
       - name: JAVA_OPTS
         value: "-Xms256m"
@@ -1850,8 +1909,8 @@ Semantics:
 
 - generic map keys are recursively merged, app values win
 - `vars` are matched by `name`; app-level item fully replaces default item
-- `container_envs` are applied by `container.name`
-- `name: "*"` applies to all containers first
+- `container_envs` are applied by `container_ref_name`
+- `container_ref_name: "*"` applies to all containers first
 - concrete container defaults are applied next
 - local `containers[].envs` are applied last
 - matching variables are fully replaced by `name`
@@ -1882,7 +1941,7 @@ Use environment-level profiles to override replicas without editing app files:
 
 ```yaml
 defaults:
-  profile: normal
+  replica_profile_ref_name: normal
 
 profiles:
   normal:

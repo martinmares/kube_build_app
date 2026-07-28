@@ -1266,6 +1266,31 @@ mounts:
 ### 9. Shared Assets
 
 `<environment>/shared.assets.yml` slouží pro assety mountované do více appek.
+Pokud má na asset odkazovat jiný blok metamodelu, přiřaďte mu `name`:
+
+```yaml
+assets:
+  - name: internal-ca
+    file: assets/ssl/internal-ca.pem
+    to: /var/run/certs/internal-ca.pem
+```
+
+Jméno shared assetu je nepovinné, ale každé uvedené jméno musí být unikátní
+Kubernetes DNS label. Pole končící na `_ref_name` vyhledá jinou deklaraci podle
+jejího `name`; pole končící na `_ref_names` obsahuje seznam takových referencí.
+
+Referenční kontrakt záměrně odstranil nejednoznačné klíče:
+
+| Odstraněný klíč | Náhrada |
+|---|---|
+| `envs[].workload_identity_token` | `workload_identity_token_ref_name` |
+| `runtime_assets[].source.token` | `workload_identity_token_ref_name` |
+| `runtime_assets[].apps` | `app_ref_names` |
+| `runtime_assets[].containers` | `container_ref_names` |
+| `container_envs[].name` | `container_ref_name` |
+| `replica-profiles.yml defaults.profile` | `replica_profile_ref_name` |
+
+Použití odstraněného klíče ukončí validaci s migrační zprávou.
 
 Appka je může vypnout:
 
@@ -1488,16 +1513,17 @@ sidecars:
     image: registry.example.test/simple-idm-token-proxy:1.0.0
     envs:
       - name: SIMPLE_IDM_TOKEN_PROXY_TOKEN_FILE
-        workload_identity_token: simple-config
+        workload_identity_token_ref_name: simple-config
 ```
 
 Příklad vygeneruje
 `SIMPLE_IDM_TOKEN_PROXY_TOKEN_FILE=/var/run/secrets/workload-identity/simple-config/token`.
 Vlastní hodnoty `tokens[].mount_path` a `tokens[].path` se respektují.
-`workload_identity_token` je reference na `tokens[].name`; neexistující
-reference nebo kombinace s jiným zdrojem hodnoty environment proměnné je
-validační chyba. Stejnou referenci lze zdědit přes `apps/_defaults.yml` a
-`container_envs`.
+`workload_identity_token_ref_name` je reference na `tokens[].name`;
+neexistující reference nebo kombinace s jiným zdrojem hodnoty environment
+proměnné je validační chyba. Přípona `_ref_name` záměrně zviditelňuje
+symbolické reference metamodelu. Stejnou referenci lze zdědit přes
+`apps/_defaults.yml` a `container_envs`.
 
 Pro běžný Downward API mount s runtime informacemi o podu použijte `pod_info`:
 
@@ -1554,7 +1580,8 @@ runtime_assets:
       tenant: default
       environment: test
       label: release-2026.07 # volitelný Git label
-      token: simple-config
+      workload_identity_token_ref_name: simple-config
+      ca_shared_asset_ref_name: internal-ca
       timeout_seconds: 30
 
     volume:
@@ -1568,8 +1595,12 @@ runtime_assets:
       # command má výchozí hodnotu simple-idm-token-proxy
       # image_pull_policy má výchozí hodnotu Always
 
-    # Vynechané containers znamená ["*"], tedy všechny primární containery.
-    containers:
+    # Volitelné při zdědění z _defaults.yml.
+    app_ref_names:
+      - api
+
+    # Vynechané container_ref_names znamená ["*"]: všechny primární containery.
+    container_ref_names:
       - "*"
 
     files:
@@ -1583,9 +1614,36 @@ runtime_assets:
         mode: "0440"
 ```
 
-Hodnota `source.token` je reference na `workload_identity.tokens[].name`;
-nevytváří druhý token ani audience. Reference na neexistující token je
-validační chyba.
+`source.workload_identity_token_ref_name` odkazuje na
+`workload_identity.tokens[].name`; nevytváří druhý token ani audience.
+Reference na neexistující token je validační chyba.
+
+Opakovaně použitelným položkám v `<environment>/shared.assets.yml` přiřaďte
+stabilní `name`. `source.ca_shared_asset_ref_name` toto jméno přeloží na
+kanonickou cestu `to`. Vygenerovaný fetch init container odpovídající asset
+připojí a předá jeho cestu fetcheru pomocí `--ca-file`. Fetcher přidá PEM bundle
+ke svým běžným důvěryhodným kořenům; ověřování TLS zůstává zapnuté.
+
+```yaml
+# <environment>/shared.assets.yml
+assets:
+  - name: internal-ca
+    file: assets/ssl/internal-ca.pem
+    to: /var/run/certs/internal-ca.pem
+```
+
+Stejnou cestu lze bez jejího opakování exportovat do containeru:
+
+```yaml
+envs:
+  - name: SSL_CERT_FILE
+    shared_asset_ref_name: internal-ca
+```
+
+`source.ca_file` zůstává explicitní únikovou variantou pro nepojmenovaný shared
+asset. Musí jít o absolutní cestu přesně odpovídající některé hodnotě `to`.
+`source.ca_file` a `source.ca_shared_asset_ref_name` se vzájemně vylučují a ani
+jedno nelze kombinovat se `source.insecure_upstream_tls`.
 
 Výchozí hodnoty:
 
@@ -1594,16 +1652,17 @@ Výchozí hodnoty:
 - `source.environment`: prostředí předané přes `-e`
 - `source.timeout_seconds`: `30`
 - `volume.name`: název skupiny runtime assetů
-- `containers`: `["*"]`
+- `app_ref_names`: všechny appky
+- `container_ref_names`: `["*"]`
 - `files[].mode`: `"0440"`
 - resources fetcheru: CPU `10m..100m`, memory `16Mi..128Mi`
 
-Wildcard vybírá jen primární `containers`. Pokud runtime volume potřebuje také
-sidecar, musí být uveden explicitně jeho název. Jde o názvy kontejnerů uvnitř
-aktuální appky, nikoliv o selektory aplikací. Pokud se `runtime_assets` zdědí z
-`apps/_defaults.yml`, skupinu zdědí každá appka, pokud ji nepřepíše pomocí
-`runtime_assets: []`. Mount v aplikačním containeru je read-only; zapisovat do
-něj může pouze vygenerovaný fetch init container.
+`app_ref_names` omezuje skupinu zděděnou z `_defaults.yml` na pojmenované
+appky. Wildcard v `container_ref_names` vybírá jen primární `containers`. Pokud
+runtime volume potřebuje také sidecar, musí být uveden explicitně jeho název.
+Neexistující reference na appku, container, token nebo shared asset je
+validační chyba. Mount v aplikačním containeru je read-only; zapisovat do něj
+může pouze vygenerovaný fetch init container.
 
 Fetcher spouští:
 
@@ -1820,12 +1879,12 @@ vars:
     value: INFO
 
 container_envs:
-  - name: "*"
+  - container_ref_name: "*"
     envs:
       - name: GLOBAL_FLAG
         value: "true"
 
-  - name: api
+  - container_ref_name: api
     envs:
       - name: JAVA_OPTS
         value: "-Xms256m"
@@ -1835,8 +1894,8 @@ Semantika:
 
 - obecné map klíče se rekurzivně mergují, app hodnoty vítězí
 - `vars` se párují podle `name`; app položka plně nahradí default položku
-- `container_envs` se aplikují podle `container.name`
-- `name: "*"` se aplikuje na všechny containery jako první
+- `container_envs` se aplikují podle `container_ref_name`
+- `container_ref_name: "*"` se aplikuje na všechny containery jako první
 - concrete container defaults se aplikují potom
 - lokální `containers[].envs` se aplikují poslední
 - shodné variables se plně nahrazují podle `name`
@@ -1867,7 +1926,7 @@ Env-level profily umožní změnit repliky bez editace app souborů:
 
 ```yaml
 defaults:
-  profile: normal
+  replica_profile_ref_name: normal
 
 profiles:
   normal:
