@@ -629,22 +629,37 @@ kube-build-app build -e test \
 
 Mezi selektorem a image používáme `=`, ne `:`, protože container image reference sama používá `:` pro tagy a `@sha256:...` pro digesty.
 
-Release manifest je určený pro řízené release pipeline. `kube-build-app` umí přímo použít manifest generovaný nástrojem `simple-release-management`:
+Release manifest je určený pro řízené release pipeline. `kube-build-app` umí přímo použít neměnný manifest generovaný přes `oci-toolbox bundle publish` nebo `oci-toolbox release reconstruct`:
 
 ```yaml
-release_id: 2026.06.25.01
+release_id: RE_2026.07.28.01
+created_at: 2026-07-28T18:00:00Z
+bundle:
+  name: stable
+  revision: abc123
 registry_base: registry.example.com/project
+platform: linux/amd64
 images:
-  - app_name: tsm-dms
-    container_name: tsm-dms
-    image: registry.example.com/project/tsm-dms
-    tag: 2026.06.25.01
-    digest: sha256:abcdef
+  - id: api
+    app_name: api
+    container_name: api
+    source:
+      image: registry-source.example.com/team/api
+      tag: build-1
+      digest: sha256:source
+    image: registry.example.com/project/api
+    tag: RE_2026.07.28.01
+    digest: sha256:target
+    extra_tags: [stable]
+    platform: linux/amd64
   - app_name: "*"
     container_name: cgroup-runtime-exporter
     image: registry.example.com/project/cgroup-runtime-exporter
-    tag: 2026.06.25.01
+    tag: RE_2026.07.28.01
+extra_tags: [stable]
 ```
+
+Parser je striktní a rozumí auditním metadatům zapisovaným nástrojem `oci-toolbox`: `created_at`, `bundle`, `platform`, image `id`, `source` a `extra_tags`. Pro rendering používá pouze `app_name`, `container_name`, cílové `image`, `digest` a `tag`. Duplicitní selectory a ID jsou odmítnuty stejně jako per-image platforma, která je v konfliktu s top-level platformou.
 
 Pro container nebo sidecar sdílený více aplikacemi použijte `app_name: "*"`.
 Přesný záznam `<app_name>/<container_name>` má před wildcardem přednost, takže

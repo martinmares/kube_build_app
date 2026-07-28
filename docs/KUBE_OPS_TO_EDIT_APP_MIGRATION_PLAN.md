@@ -9,7 +9,7 @@ The standalone `kube-ops-app` direction overlaps too much with responsibilities 
 - `kube-edit-app` is the environment repository workbench: edit, review, build preview, changed files, safe Git-oriented workflow and read-only supporting diagnostics.
 - `kube-build-app` is the deterministic render engine.
 - ArgoCD remains the sync/reconcile engine for rendered manifests.
-- release/image bundle and digest domain belongs to `simple-release-management`, not this repository.
+- release/image bundle and digest publication belongs to Git-managed manifests and `oci-toolbox`, not this repository.
 
 The useful outcome of the `kube-ops-app` prototype is not a new product binary. It is a set of small concepts that can be migrated into `kube-edit-app` where they improve the existing workbench.
 
