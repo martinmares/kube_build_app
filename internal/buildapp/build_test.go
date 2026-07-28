@@ -2354,7 +2354,7 @@ func TestBuildAppliesReplicaProfile(t *testing.T) {
 	})
 	writeFile(t, filepath.Join(envDir, "replica-profiles.yml"), `
 defaults:
-  profile: maintenance
+  replica_profile_ref_name: maintenance
 profiles:
   maintenance:
     all: 1
@@ -2580,7 +2580,7 @@ func TestInventoryContainsProfilesAndMTLSPaths(t *testing.T) {
 	writeFile(t, filepath.Join(envDir, "assets", "inventory.cfg"), "value=1\n")
 	writeFile(t, filepath.Join(envDir, "replica-profiles.yml"), `
 defaults:
-  profile: normal
+  replica_profile_ref_name: normal
 profiles:
   normal:
     apps:
@@ -2609,7 +2609,7 @@ containers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := digString(payload, "profiles", "defaults", "profile"); got != "normal" {
+	if got := digString(payload, "profiles", "defaults", "replica_profile_ref_name"); got != "normal" {
 		t.Fatalf("profile default = %q, want normal", got)
 	}
 	items := payload["items"].([]map[string]any)
@@ -3520,14 +3520,14 @@ func TestBuildAppliesContainerEnvDefaultsOverrideAndRemove(t *testing.T) {
 	})
 	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
 container_envs:
-  - name: "*"
+  - container_ref_name: "*"
     envs:
       - name: GLOBAL_FLAG
         value: "true"
       - name: SHARED_SECRET
         secret_name: shared-secret
         key: shared-key
-  - name: "api"
+  - container_ref_name: "api"
     envs:
       - name: SERVICE_ONLY
         value: "service-default"
@@ -3654,10 +3654,10 @@ workload_identity:
       path: credential.jwt
 
 container_envs:
-  - name: "*"
+  - container_ref_name: "*"
     envs:
       - name: DEFAULT_TOKEN_FILE
-        workload_identity_token: simple-config
+        workload_identity_token_ref_name: simple-config
 `)
 	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
 name: api
@@ -3666,13 +3666,13 @@ init_containers:
     image: registry.example.test/prepare:1
     envs:
       - name: INIT_TOKEN_FILE
-        workload_identity_token: simple-config
+        workload_identity_token_ref_name: simple-config
 sidecars:
   - name: token-proxy
     image: registry.example.test/token-proxy:1
     envs:
       - name: PROXY_TOKEN_FILE
-        workload_identity_token: custom-token
+        workload_identity_token_ref_name: custom-token
 containers:
   - name: api
     image: registry.example.test/api:1
@@ -3711,13 +3711,13 @@ func TestValidateRejectsUnknownWorkloadIdentityTokenEnvReference(t *testing.T) {
 			{
 				Name: "api",
 				Envs: []envVar{
-					{Name: "TOKEN_FILE", WorkloadIdentityToken: "missing"},
+					{Name: "TOKEN_FILE", WorkloadIdentityTokenRefName: "missing"},
 				},
 			},
 		},
 	}
 
-	err := validateApps([]appModel{app})
+	err := validateApps([]appModel{app}, nil)
 	if err == nil || !strings.Contains(err.Error(), `env "TOKEN_FILE" references unknown workload_identity token "missing"`) {
 		t.Fatalf("validateApps error = %v", err)
 	}
@@ -3736,17 +3736,17 @@ func TestValidateRejectsConflictingWorkloadIdentityTokenEnvSource(t *testing.T) 
 				Name: "token-proxy",
 				Envs: []envVar{
 					{
-						Name:                  "TOKEN_FILE",
-						Value:                 "/tmp/token",
-						WorkloadIdentityToken: "simple-config",
+						Name:                         "TOKEN_FILE",
+						Value:                        "/tmp/token",
+						WorkloadIdentityTokenRefName: "simple-config",
 					},
 				},
 			},
 		},
 	}
 
-	err := validateApps([]appModel{app})
-	if err == nil || !strings.Contains(err.Error(), `env "TOKEN_FILE" combines workload_identity_token with another value source`) {
+	err := validateApps([]appModel{app}, nil)
+	if err == nil || !strings.Contains(err.Error(), `env "TOKEN_FILE" combines a reference with another value source`) {
 		t.Fatalf("validateApps error = %v", err)
 	}
 }
@@ -3760,6 +3760,17 @@ func TestBuildGeneratesAuthenticatedRuntimeAssetsFetcher(t *testing.T) {
 			"NAMESPACE": "tsm-test",
 		},
 	})
+	writeFile(t, filepath.Join(envDir, "assets", "ssl", "internal-ca.pem"), `
+-----BEGIN CERTIFICATE-----
+test
+-----END CERTIFICATE-----
+`)
+	writeFile(t, filepath.Join(envDir, "shared.assets.yml"), `
+assets:
+  - name: internal-ca
+    file: assets/ssl/internal-ca.pem
+    to: /var/run/certs/internal-ca.pem
+`)
 	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
 workload_identity:
   service_account:
@@ -3773,7 +3784,8 @@ runtime_assets:
     source:
       base_url: https://config.example.test/simple-config-server
       label: release-1
-      token: simple-config
+      workload_identity_token_ref_name: simple-config
+      ca_shared_asset_ref_name: internal-ca
     volume:
       name: runtime-config
       mount_path: /app/runtime-config
@@ -3790,10 +3802,12 @@ runtime_assets:
         target: ssl/client-truststore.jks
 
 container_envs:
-  - name: "*"
+  - container_ref_name: "*"
     envs:
       - name: SSL_KEYSTORE
         value: /app/runtime-config/client-keystore.jks
+      - name: SSL_CERT_FILE
+        shared_asset_ref_name: internal-ca
 `)
 	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
 name: api
@@ -3853,8 +3867,14 @@ containers:
 	if got := namedObject(digSlice(fetcher, "volumeMounts"), "simple-config-token"); got == nil || got["mountPath"] != "/var/run/secrets/workload-identity/simple-config" {
 		t.Fatalf("fetcher token mount missing: %#v", digSlice(fetcher, "volumeMounts"))
 	}
+	if got := mountAtPath(digSlice(fetcher, "volumeMounts"), "/var/run/certs/internal-ca.pem"); got == nil || got["readOnly"] != true || got["subPath"] != "internal-ca.pem" {
+		t.Fatalf("fetcher CA mount missing: %#v", digSlice(fetcher, "volumeMounts"))
+	}
 
 	args := digSlice(fetcher, "args")
+	if got := argumentValue(args, "--ca-file"); got != "/var/run/certs/internal-ca.pem" {
+		t.Fatalf("fetcher --ca-file = %q", got)
+	}
 	filesJSON := argumentValue(args, "--files-json")
 	var files []map[string]any
 	if err := json.Unmarshal([]byte(filesJSON), &files); err != nil {
@@ -3875,12 +3895,79 @@ containers:
 	if got := envValue(digSlice(api, "env"), "SSL_KEYSTORE"); got != "/app/runtime-config/client-keystore.jks" {
 		t.Fatalf("SSL_KEYSTORE = %q", got)
 	}
+	if got := envValue(digSlice(api, "env"), "SSL_CERT_FILE"); got != "/var/run/certs/internal-ca.pem" {
+		t.Fatalf("SSL_CERT_FILE = %q", got)
+	}
 	metrics := namedObject(containers, "metrics")
 	if got := namedObject(digSlice(metrics, "volumeMounts"), "runtime-config"); got != nil {
 		t.Fatalf("wildcard runtime asset unexpectedly mounted into sidecar: %#v", got)
 	}
 	if got := namedObject(digSlice(metrics, "volumeMounts"), "simple-config-token"); got == nil {
 		t.Fatalf("workload identity token not mounted into sidecar")
+	}
+}
+
+func TestBuildRejectsRuntimeAssetCAFileWithoutMatchingSharedAsset(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "tsm-test"},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+workload_identity:
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+runtime_assets:
+  - name: runtime-config
+    source:
+      base_url: https://config.example.test
+      workload_identity_token_ref_name: simple-config
+      ca_file: /var/run/certs/missing.pem
+    volume:
+      name: runtime-config
+      mount_path: /app/runtime-config
+    fetcher:
+      image: registry.example.test/fetcher:1
+    files:
+      - source: files/config.yml
+        target: config.yml
+containers:
+  - name: api
+    image: registry.example.test/api:1
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err == nil || !strings.Contains(err.Error(), `source.ca_file "/var/run/certs/missing.pem" does not match any shared asset target`) {
+		t.Fatalf("Build error = %v", err)
+	}
+}
+
+func TestBuildRejectsDuplicateSharedAssetRefName(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "tsm-test"},
+	})
+	writeFile(t, filepath.Join(envDir, "assets", "first.pem"), "first")
+	writeFile(t, filepath.Join(envDir, "assets", "second.pem"), "second")
+	writeFile(t, filepath.Join(envDir, "shared.assets.yml"), `
+assets:
+  - name: internal-ca
+    file: assets/first.pem
+    to: /var/run/certs/first.pem
+  - name: internal-ca
+    file: assets/second.pem
+    to: /var/run/certs/second.pem
+`)
+	writeMinimalApp(t, envDir, "api.yml", "name: api\n")
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err == nil || !strings.Contains(err.Error(), `duplicate shared asset name "internal-ca"`) {
+		t.Fatalf("Build error = %v", err)
 	}
 }
 
@@ -3891,18 +3978,18 @@ func TestValidateRejectsRuntimeAssetsWithUnknownToken(t *testing.T) {
 			{
 				Name: "runtime-config",
 				Source: runtimeAssetSourceSpec{
-					Type:           "simple_config",
-					BaseURL:        "https://config.example.test",
-					Tenant:         "default",
-					Environment:    "test",
-					Token:          "missing",
-					TimeoutSeconds: 30,
+					Type:                         "simple_config",
+					BaseURL:                      "https://config.example.test",
+					Tenant:                       "default",
+					Environment:                  "test",
+					WorkloadIdentityTokenRefName: "missing",
+					TimeoutSeconds:               30,
 				},
 				Volume: runtimeAssetVolumeSpec{
 					Name:      "runtime-config",
 					MountPath: "/app/runtime-config",
 				},
-				Containers: []string{"*"},
+				ContainerRefNames: []string{"*"},
 				Files: []runtimeAssetFileSpec{
 					{Source: "files/config.yml", Target: "config.yml", Mode: "0440"},
 				},
@@ -3910,8 +3997,258 @@ func TestValidateRejectsRuntimeAssetsWithUnknownToken(t *testing.T) {
 			},
 		},
 	}
-	err := validateApps([]appModel{app})
+	err := validateApps([]appModel{app}, nil)
 	if err == nil || !strings.Contains(err.Error(), `unknown workload_identity token "missing"`) {
+		t.Fatalf("validateApps error = %v", err)
+	}
+}
+
+func TestValidateRejectsRuntimeAssetWithBothCASelectors(t *testing.T) {
+	app := appModel{
+		Name: "api",
+		RuntimeAssets: []runtimeAssetSpec{
+			{
+				Name: "runtime-config",
+				Source: runtimeAssetSourceSpec{
+					Type:                         "simple_config",
+					BaseURL:                      "https://config.example.test",
+					Tenant:                       "default",
+					Environment:                  "test",
+					WorkloadIdentityTokenRefName: "simple-config",
+					CAFile:                       "/var/run/certs/internal-ca.pem",
+					CASharedAssetRefName:         "internal-ca",
+					TimeoutSeconds:               30,
+				},
+				Volume:            runtimeAssetVolumeSpec{Name: "runtime-config", MountPath: "/app/runtime-config"},
+				ContainerRefNames: []string{"*"},
+				Files:             []runtimeAssetFileSpec{{Source: "files/config.yml", Target: "config.yml", Mode: "0440"}},
+				Fetcher:           runtimeAssetFetcherSpec{Image: "registry.example.test/fetcher:1", Command: "simple-idm-token-proxy"},
+			},
+		},
+	}
+
+	err := validateRuntimeAssets(
+		app,
+		map[string]bool{"simple-config": true},
+		map[string]bool{"internal-ca": true},
+		map[string]bool{"/var/run/certs/internal-ca.pem": true},
+	)
+	if err == nil || !strings.Contains(err.Error(), "source.ca_file cannot be combined with source.ca_shared_asset_ref_name") {
+		t.Fatalf("validateRuntimeAssets error = %v", err)
+	}
+}
+
+func TestValidateRejectsRuntimeAssetCAFileWithInsecureTLS(t *testing.T) {
+	app := appModel{
+		Name: "api",
+		RuntimeAssets: []runtimeAssetSpec{
+			{
+				Name: "runtime-config",
+				Source: runtimeAssetSourceSpec{
+					Type:                         "simple_config",
+					BaseURL:                      "https://config.example.test",
+					Tenant:                       "default",
+					Environment:                  "test",
+					WorkloadIdentityTokenRefName: "simple-config",
+					CAFile:                       "/var/run/certs/internal-ca.pem",
+					TimeoutSeconds:               30,
+					InsecureUpstreamTLS:          true,
+				},
+				Volume: runtimeAssetVolumeSpec{
+					Name:      "runtime-config",
+					MountPath: "/app/runtime-config",
+				},
+				ContainerRefNames: []string{"*"},
+				Files: []runtimeAssetFileSpec{
+					{Source: "files/config.yml", Target: "config.yml", Mode: "0440"},
+				},
+				Fetcher: runtimeAssetFetcherSpec{
+					Image:   "registry.example.test/fetcher:1",
+					Command: "simple-idm-token-proxy",
+				},
+			},
+		},
+	}
+
+	err := validateRuntimeAssets(
+		app,
+		map[string]bool{"simple-config": true},
+		nil,
+		map[string]bool{"/var/run/certs/internal-ca.pem": true},
+	)
+	if err == nil || !strings.Contains(err.Error(), "source.ca_file cannot be combined with source.insecure_upstream_tls") {
+		t.Fatalf("validateRuntimeAssets error = %v", err)
+	}
+}
+
+func TestBuildFiltersDefaultRuntimeAssetsByAppRefNames(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "tsm-test"},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
+workload_identity:
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+runtime_assets:
+  - name: runtime-config
+    app_ref_names: [" api "]
+    container_ref_names: ["*"]
+    source:
+      base_url: https://config.example.test
+      workload_identity_token_ref_name: simple-config
+    volume:
+      mount_path: /app/runtime-config
+    fetcher:
+      image: registry.example.test/fetcher:1
+    files:
+      - source: files/config.yml
+        target: config.yml
+`)
+	writeMinimalApp(t, envDir, "api.yml", "name: api\n")
+	writeMinimalApp(t, envDir, "worker.yml", "name: worker\n")
+
+	if _, err := Build(Options{Environment: "test", Root: root, Target: target}); err != nil {
+		t.Fatal(err)
+	}
+
+	api := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	apiInit := digSlice(api, "spec", "template", "spec", "initContainers")
+	if namedObject(apiInit, "runtime-assets-runtime-config") == nil {
+		t.Fatalf("api runtime asset fetcher missing: %#v", apiInit)
+	}
+	worker := loadYAML(t, filepath.Join(target, "deployments", "worker-deployment.yml"))
+	if got := digAny(worker, "spec", "template", "spec", "initContainers"); got != nil {
+		t.Fatalf("worker unexpectedly inherited runtime asset fetcher: %#v", got)
+	}
+}
+
+func TestRuntimeAssetReferenceMigrationErrors(t *testing.T) {
+	legacyApps := []string{"api"}
+	legacyContainers := []string{"api"}
+	tests := []struct {
+		name string
+		item runtimeAssetSpec
+		want string
+	}{
+		{
+			name: "apps",
+			item: runtimeAssetSpec{Name: "runtime-config", LegacyApps: &legacyApps},
+			want: "uses removed key apps; use app_ref_names",
+		},
+		{
+			name: "containers",
+			item: runtimeAssetSpec{Name: "runtime-config", LegacyContainers: &legacyContainers},
+			want: "uses removed key containers; use container_ref_names",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apps := []appModel{{Name: "api", RuntimeAssets: []runtimeAssetSpec{tt.item}}}
+			err := prepareRuntimeAssetsForApps(apps, "test")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("prepareRuntimeAssetsForApps error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeAssetRejectsUnknownAppRefName(t *testing.T) {
+	apps := []appModel{{
+		Name: "api",
+		RuntimeAssets: []runtimeAssetSpec{{
+			Name:        "runtime-config",
+			AppRefNames: []string{"missing"},
+		}},
+	}}
+	err := prepareRuntimeAssetsForApps(apps, "test")
+	if err == nil || !strings.Contains(err.Error(), `app_ref_names references unknown app "missing"`) {
+		t.Fatalf("prepareRuntimeAssetsForApps error = %v", err)
+	}
+}
+
+func TestContainerEnvDefaultsRejectRemovedNameSelector(t *testing.T) {
+	root, err := parseYAMLMapping(`
+container_envs:
+  - name: "*"
+    envs:
+      - name: FLAG
+        value: "true"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = parseContainerEnvDefaults(mappingValue(root, "container_envs"))
+	if err == nil || !strings.Contains(err.Error(), "container_envs[].name was removed; use container_ref_name") {
+		t.Fatalf("parseContainerEnvDefaults error = %v", err)
+	}
+}
+
+func TestReplicaProfilesRejectRemovedDefaultProfileKey(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "tsm-test"},
+	})
+	writeFile(t, filepath.Join(envDir, "replica-profiles.yml"), `
+defaults:
+  profile: normal
+profiles:
+  normal:
+    all: 1
+`)
+	writeMinimalApp(t, envDir, "api.yml", "name: api\n")
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err == nil || !strings.Contains(err.Error(), "defaults.profile was removed; use defaults.replica_profile_ref_name") {
+		t.Fatalf("Build error = %v", err)
+	}
+}
+
+func TestValidateRejectsRemovedReferenceKeys(t *testing.T) {
+	app := appModel{
+		Name: "api",
+		WorkloadIdentity: workloadIdentitySpec{
+			Tokens: []workloadIdentityTokenSpec{{Name: "simple-config", Audience: "simple-config-server"}},
+		},
+		Containers: []containerSpec{{
+			Name: "api",
+			Envs: []envVar{{
+				Name:                        "TOKEN_FILE",
+				LegacyWorkloadIdentityToken: "simple-config",
+			}},
+		}},
+	}
+	err := validateApps([]appModel{app}, nil)
+	if err == nil || !strings.Contains(err.Error(), "uses removed key workload_identity_token; use workload_identity_token_ref_name") {
+		t.Fatalf("validateApps error = %v", err)
+	}
+
+	app.Containers[0].Envs = nil
+	app.RuntimeAssets = []runtimeAssetSpec{{
+		Name: "runtime-config",
+		Source: runtimeAssetSourceSpec{
+			Type:           "simple_config",
+			BaseURL:        "https://config.example.test",
+			Tenant:         "default",
+			Environment:    "test",
+			LegacyToken:    "simple-config",
+			TimeoutSeconds: 30,
+		},
+		Volume: runtimeAssetVolumeSpec{Name: "runtime-config", MountPath: "/app/runtime-config"},
+		Files:  []runtimeAssetFileSpec{{Source: "files/config.yml", Target: "config.yml", Mode: "0440"}},
+		Fetcher: runtimeAssetFetcherSpec{
+			Image:   "registry.example.test/fetcher:1",
+			Command: "simple-idm-token-proxy",
+		},
+		ContainerRefNames: []string{"*"},
+	}}
+	err = validateApps([]appModel{app}, nil)
+	if err == nil || !strings.Contains(err.Error(), "uses removed key source.token; use source.workload_identity_token_ref_name") {
 		t.Fatalf("validateApps error = %v", err)
 	}
 }
@@ -3920,6 +4257,16 @@ func namedObject(items []any, name string) map[string]any {
 	for _, item := range items {
 		object, ok := item.(map[string]any)
 		if ok && object["name"] == name {
+			return object
+		}
+	}
+	return nil
+}
+
+func mountAtPath(items []any, mountPath string) map[string]any {
+	for _, item := range items {
+		object, ok := item.(map[string]any)
+		if ok && object["mountPath"] == mountPath {
 			return object
 		}
 	}

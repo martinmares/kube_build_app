@@ -188,23 +188,29 @@ type workloadIdentityTokenSpec struct {
 }
 
 type runtimeAssetSpec struct {
-	Name       string                  `yaml:"name"`
-	Source     runtimeAssetSourceSpec  `yaml:"source"`
-	Volume     runtimeAssetVolumeSpec  `yaml:"volume"`
-	Containers []string                `yaml:"containers"`
-	Files      []runtimeAssetFileSpec  `yaml:"files"`
-	Fetcher    runtimeAssetFetcherSpec `yaml:"fetcher"`
+	Name              string                  `yaml:"name"`
+	Source            runtimeAssetSourceSpec  `yaml:"source"`
+	Volume            runtimeAssetVolumeSpec  `yaml:"volume"`
+	AppRefNames       []string                `yaml:"app_ref_names"`
+	ContainerRefNames []string                `yaml:"container_ref_names"`
+	LegacyApps        *[]string               `yaml:"apps"`
+	LegacyContainers  *[]string               `yaml:"containers"`
+	Files             []runtimeAssetFileSpec  `yaml:"files"`
+	Fetcher           runtimeAssetFetcherSpec `yaml:"fetcher"`
 }
 
 type runtimeAssetSourceSpec struct {
-	Type                string `yaml:"type"`
-	BaseURL             string `yaml:"base_url"`
-	Tenant              string `yaml:"tenant"`
-	Environment         string `yaml:"environment"`
-	Label               string `yaml:"label"`
-	Token               string `yaml:"token"`
-	TimeoutSeconds      int    `yaml:"timeout_seconds"`
-	InsecureUpstreamTLS bool   `yaml:"insecure_upstream_tls"`
+	Type                         string `yaml:"type"`
+	BaseURL                      string `yaml:"base_url"`
+	Tenant                       string `yaml:"tenant"`
+	Environment                  string `yaml:"environment"`
+	Label                        string `yaml:"label"`
+	WorkloadIdentityTokenRefName string `yaml:"workload_identity_token_ref_name"`
+	CASharedAssetRefName         string `yaml:"ca_shared_asset_ref_name"`
+	CAFile                       string `yaml:"ca_file"`
+	LegacyToken                  string `yaml:"token"`
+	TimeoutSeconds               int    `yaml:"timeout_seconds"`
+	InsecureUpstreamTLS          bool   `yaml:"insecure_upstream_tls"`
 }
 
 type runtimeAssetVolumeSpec struct {
@@ -481,6 +487,7 @@ type mountSpec struct {
 }
 
 type resolvedAsset struct {
+	RefName       string
 	VolumeName    string
 	ConfigMapKey  string
 	ContainerName string
@@ -497,8 +504,17 @@ type resolvedAsset struct {
 	RawMount      map[string]any
 }
 
+type sharedAssetSpec struct {
+	Name       string `yaml:"name"`
+	File       string `yaml:"file"`
+	To         string `yaml:"to"`
+	Binary     bool   `yaml:"binary"`
+	Transform  bool   `yaml:"transform"`
+	HelmEscape *bool  `yaml:"helm_escape"`
+}
+
 type sharedAssetsFile struct {
-	Assets []assetSpec `yaml:"assets"`
+	Assets []sharedAssetSpec `yaml:"assets"`
 }
 
 type portSpec struct {
@@ -545,20 +561,23 @@ type toolSpec struct {
 }
 
 type envVar struct {
-	Name                  string `yaml:"name"`
-	Value                 string `yaml:"value,omitempty"`
-	SecretName            string `yaml:"secret_name,omitempty"`
-	Key                   string `yaml:"key,omitempty"`
-	ResourceName          string `yaml:"resource_name,omitempty"`
-	Divisor               string `yaml:"divisor,omitempty"`
-	FieldPath             string `yaml:"field_path,omitempty"`
-	WorkloadIdentityToken string `yaml:"workload_identity_token,omitempty"`
-	Remove                bool   `yaml:"remove,omitempty"`
+	Name                         string `yaml:"name"`
+	Value                        string `yaml:"value,omitempty"`
+	SecretName                   string `yaml:"secret_name,omitempty"`
+	Key                          string `yaml:"key,omitempty"`
+	ResourceName                 string `yaml:"resource_name,omitempty"`
+	Divisor                      string `yaml:"divisor,omitempty"`
+	FieldPath                    string `yaml:"field_path,omitempty"`
+	WorkloadIdentityTokenRefName string `yaml:"workload_identity_token_ref_name,omitempty"`
+	SharedAssetRefName           string `yaml:"shared_asset_ref_name,omitempty"`
+	LegacyWorkloadIdentityToken  string `yaml:"workload_identity_token,omitempty"`
+	Remove                       bool   `yaml:"remove,omitempty"`
 }
 
 type containerEnvDefault struct {
-	Name string   `yaml:"name"`
-	Envs []envVar `yaml:"envs"`
+	ContainerRefName string   `yaml:"container_ref_name"`
+	LegacyName       string   `yaml:"name"`
+	Envs             []envVar `yaml:"envs"`
 }
 
 type startupSpec struct {
@@ -644,7 +663,7 @@ func Build(opts Options) (Result, error) {
 		return Result{}, err
 	}
 	applyScaleDown(apps, opts.Down)
-	if err := validateApps(apps); err != nil {
+	if err := validateApps(apps, sharedAssets); err != nil {
 		return Result{}, err
 	}
 	sharedAssetsWave := 0
@@ -952,10 +971,14 @@ func Inventory(opts Options) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	sharedAssets, err := loadSharedAssets(envDir, vars, opts)
+	if err != nil {
+		return nil, err
+	}
 	if err := applyImageOverrides(apps, opts); err != nil {
 		return nil, err
 	}
-	if err := validateApps(apps); err != nil {
+	if err := validateApps(apps, sharedAssets); err != nil {
 		return nil, err
 	}
 
@@ -1040,6 +1063,10 @@ func Validate(opts Options) error {
 	if err != nil {
 		return err
 	}
+	sharedAssets, err := loadSharedAssets(envDir, vars, opts)
+	if err != nil {
+		return err
+	}
 	if err := applyImageOverrides(apps, opts); err != nil {
 		return err
 	}
@@ -1047,7 +1074,7 @@ func Validate(opts Options) error {
 		return err
 	}
 	applyScaleDown(apps, opts.Down)
-	return validateApps(apps)
+	return validateApps(apps, sharedAssets)
 }
 
 func ListApps(opts Options) ([]string, error) {
@@ -1191,6 +1218,10 @@ func loadPreparedApps(opts Options, applyProfileAndDown bool) ([]appModel, strin
 	if err != nil {
 		return nil, "", nil, err
 	}
+	sharedAssets, err := loadSharedAssets(envDir, vars, opts)
+	if err != nil {
+		return nil, "", nil, err
+	}
 	if err := applyImageOverrides(apps, opts); err != nil {
 		return nil, "", nil, err
 	}
@@ -1200,7 +1231,7 @@ func loadPreparedApps(opts Options, applyProfileAndDown bool) ([]appModel, strin
 		}
 		applyScaleDown(apps, opts.Down)
 	}
-	if err := validateApps(apps); err != nil {
+	if err := validateApps(apps, sharedAssets); err != nil {
 		return nil, "", nil, err
 	}
 	return apps, envDir, vars, nil
@@ -1620,10 +1651,69 @@ func loadApps(appFiles []string, defaultsPath string, vars map[string]string, en
 		if app.Kind == "" {
 			app.Kind = "Deployment"
 		}
-		normalizeRuntimeAssets(&app, environment)
 		apps = append(apps, app)
 	}
+	if err := prepareRuntimeAssetsForApps(apps, environment); err != nil {
+		return nil, err
+	}
 	return apps, nil
+}
+
+func prepareRuntimeAssetsForApps(apps []appModel, environment string) error {
+	appNames := make(map[string]bool, len(apps))
+	for _, app := range apps {
+		appNames[app.Name] = true
+	}
+	for appIndex := range apps {
+		app := &apps[appIndex]
+		filtered := make([]runtimeAssetSpec, 0, len(app.RuntimeAssets))
+		for _, item := range app.RuntimeAssets {
+			if item.LegacyApps != nil {
+				return fmt.Errorf(
+					"%s: runtime_assets %q uses removed key apps; use app_ref_names",
+					app.Name,
+					item.Name,
+				)
+			}
+			if item.LegacyContainers != nil {
+				return fmt.Errorf(
+					"%s: runtime_assets %q uses removed key containers; use container_ref_names",
+					app.Name,
+					item.Name,
+				)
+			}
+			for _, refName := range item.AppRefNames {
+				refName = strings.TrimSpace(refName)
+				if refName != "*" && !appNames[refName] {
+					return fmt.Errorf(
+						"%s: runtime_assets %q app_ref_names references unknown app %q",
+						app.Name,
+						item.Name,
+						refName,
+					)
+				}
+			}
+			if runtimeAssetAppliesToApp(item, app.Name) {
+				filtered = append(filtered, item)
+			}
+		}
+		app.RuntimeAssets = filtered
+		normalizeRuntimeAssets(app, environment)
+	}
+	return nil
+}
+
+func runtimeAssetAppliesToApp(item runtimeAssetSpec, appName string) bool {
+	if len(item.AppRefNames) == 0 {
+		return true
+	}
+	for _, refName := range item.AppRefNames {
+		refName = strings.TrimSpace(refName)
+		if refName == "*" || refName == appName {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeRuntimeAssets(app *appModel, environment string) {
@@ -1644,8 +1734,8 @@ func normalizeRuntimeAssets(app *appModel, environment string) {
 		if strings.TrimSpace(item.Volume.Name) == "" {
 			item.Volume.Name = item.Name
 		}
-		if len(item.Containers) == 0 {
-			item.Containers = []string{"*"}
+		if len(item.ContainerRefNames) == 0 {
+			item.ContainerRefNames = []string{"*"}
 		}
 		if strings.TrimSpace(item.Fetcher.Command) == "" {
 			item.Fetcher.Command = "simple-idm-token-proxy"
@@ -1658,7 +1748,15 @@ func normalizeRuntimeAssets(app *appModel, environment string) {
 	}
 }
 
-func validateApps(apps []appModel) error {
+func validateApps(apps []appModel, sharedAssets []resolvedAsset) error {
+	sharedAssetNames := make(map[string]bool, len(sharedAssets))
+	sharedAssetMountPaths := make(map[string]bool, len(sharedAssets))
+	for _, asset := range sharedAssets {
+		if asset.RefName != "" {
+			sharedAssetNames[asset.RefName] = true
+		}
+		sharedAssetMountPaths[asset.To] = true
+	}
 	for _, app := range apps {
 		if err := validateTools(app); err != nil {
 			return err
@@ -1676,7 +1774,7 @@ func validateApps(apps []appModel) error {
 			}
 			tokenNames[token.Name] = true
 		}
-		if err := validateRuntimeAssets(app, tokenNames); err != nil {
+		if err := validateRuntimeAssets(app, tokenNames, sharedAssetNames, sharedAssetMountPaths); err != nil {
 			return err
 		}
 		for _, mount := range app.DownwardAPI.Mounts {
@@ -1716,7 +1814,7 @@ func validateApps(apps []appModel) error {
 			if _, err := imagePullPolicy(container.ImagePullPolicy); err != nil {
 				return fmt.Errorf("%s: container %q: %w", app.Name, container.Name, err)
 			}
-			if err := validateWorkloadIdentityEnvReferences(app, container.Name, effectiveContainerEnvs(container), tokenNames); err != nil {
+			if err := validateEnvReferences(app, container.Name, effectiveContainerEnvs(container), tokenNames, sharedAssetNames); err != nil {
 				return err
 			}
 			for _, port := range container.Ports {
@@ -1746,7 +1844,7 @@ func validateApps(apps []appModel) error {
 			if _, err := imagePullPolicy(container.ImagePullPolicy); err != nil {
 				return fmt.Errorf("%s: init container %q: %w", app.Name, container.Name, err)
 			}
-			if err := validateWorkloadIdentityEnvReferences(app, container.Name, effectiveInitContainerEnvs(container), tokenNames); err != nil {
+			if err := validateEnvReferences(app, container.Name, effectiveInitContainerEnvs(container), tokenNames, sharedAssetNames); err != nil {
 				return err
 			}
 		}
@@ -1754,10 +1852,19 @@ func validateApps(apps []appModel) error {
 	return nil
 }
 
-func validateWorkloadIdentityEnvReferences(app appModel, containerName string, items []envVar, tokenNames map[string]bool) error {
+func validateEnvReferences(app appModel, containerName string, items []envVar, tokenNames, sharedAssetNames map[string]bool) error {
 	for _, item := range items {
-		tokenName := strings.TrimSpace(item.WorkloadIdentityToken)
-		if tokenName == "" {
+		if legacy := strings.TrimSpace(item.LegacyWorkloadIdentityToken); legacy != "" {
+			return fmt.Errorf(
+				"%s: container %q env %q uses removed key workload_identity_token; use workload_identity_token_ref_name",
+				app.Name,
+				containerName,
+				item.Name,
+			)
+		}
+		tokenRefName := strings.TrimSpace(item.WorkloadIdentityTokenRefName)
+		sharedAssetRefName := strings.TrimSpace(item.SharedAssetRefName)
+		if tokenRefName == "" && sharedAssetRefName == "" {
 			continue
 		}
 		if item.Value != "" ||
@@ -1766,28 +1873,49 @@ func validateWorkloadIdentityEnvReferences(app appModel, containerName string, i
 			item.ResourceName != "" ||
 			item.Divisor != "" ||
 			item.FieldPath != "" ||
+			(tokenRefName != "" && sharedAssetRefName != "") ||
 			item.Remove {
 			return fmt.Errorf(
-				"%s: container %q env %q combines workload_identity_token with another value source",
+				"%s: container %q env %q combines a reference with another value source",
 				app.Name,
 				containerName,
 				item.Name,
 			)
 		}
-		if !tokenNames[tokenName] {
+		if tokenRefName != "" && !tokenNames[tokenRefName] {
 			return fmt.Errorf(
 				"%s: container %q env %q references unknown workload_identity token %q",
 				app.Name,
 				containerName,
 				item.Name,
-				tokenName,
+				tokenRefName,
+			)
+		}
+		if sharedAssetRefName == "" {
+			continue
+		}
+		if app.DisableSharedAssets {
+			return fmt.Errorf(
+				"%s: container %q env %q uses shared_asset_ref_name while disable_shared_assets is true",
+				app.Name,
+				containerName,
+				item.Name,
+			)
+		}
+		if !sharedAssetNames[sharedAssetRefName] {
+			return fmt.Errorf(
+				"%s: container %q env %q references unknown shared asset %q",
+				app.Name,
+				containerName,
+				item.Name,
+				sharedAssetRefName,
 			)
 		}
 	}
 	return nil
 }
 
-func validateRuntimeAssets(app appModel, tokenNames map[string]bool) error {
+func validateRuntimeAssets(app appModel, tokenNames, sharedAssetNames, sharedAssetMountPaths map[string]bool) error {
 	names := map[string]bool{}
 	volumeNames := reservedVolumeNames(app)
 	mountPaths := map[string]bool{}
@@ -1819,15 +1947,82 @@ func validateRuntimeAssets(app appModel, tokenNames map[string]bool) error {
 		if strings.TrimSpace(item.Source.Environment) == "" {
 			return fmt.Errorf("%s: runtime_assets %q source.environment is required", app.Name, name)
 		}
-		tokenName := strings.TrimSpace(item.Source.Token)
-		if tokenName == "" {
-			return fmt.Errorf("%s: runtime_assets %q source.token is required", app.Name, name)
+		if legacy := strings.TrimSpace(item.Source.LegacyToken); legacy != "" {
+			return fmt.Errorf(
+				"%s: runtime_assets %q uses removed key source.token; use source.workload_identity_token_ref_name",
+				app.Name,
+				name,
+			)
 		}
-		if !tokenNames[tokenName] {
-			return fmt.Errorf("%s: runtime_assets %q references unknown workload_identity token %q", app.Name, name, tokenName)
+		tokenRefName := strings.TrimSpace(item.Source.WorkloadIdentityTokenRefName)
+		if tokenRefName == "" {
+			return fmt.Errorf("%s: runtime_assets %q source.workload_identity_token_ref_name is required", app.Name, name)
+		}
+		if !tokenNames[tokenRefName] {
+			return fmt.Errorf("%s: runtime_assets %q references unknown workload_identity token %q", app.Name, name, tokenRefName)
 		}
 		if item.Source.TimeoutSeconds < 1 {
 			return fmt.Errorf("%s: runtime_assets %q source.timeout_seconds must be greater than 0", app.Name, name)
+		}
+		caFile := strings.TrimSpace(item.Source.CAFile)
+		caSharedAssetRefName := strings.TrimSpace(item.Source.CASharedAssetRefName)
+		if caFile != "" && caSharedAssetRefName != "" {
+			return fmt.Errorf(
+				"%s: runtime_assets %q source.ca_file cannot be combined with source.ca_shared_asset_ref_name",
+				app.Name,
+				name,
+			)
+		}
+		if caFile != "" {
+			if err := validateAbsoluteMountPath(caFile); err != nil {
+				return fmt.Errorf("%s: runtime_assets %q source.ca_file: %w", app.Name, name, err)
+			}
+			if app.DisableSharedAssets {
+				return fmt.Errorf(
+					"%s: runtime_assets %q source.ca_file cannot be used while disable_shared_assets is true",
+					app.Name,
+					name,
+				)
+			}
+			if !sharedAssetMountPaths[caFile] {
+				return fmt.Errorf(
+					"%s: runtime_assets %q source.ca_file %q does not match any shared asset target",
+					app.Name,
+					name,
+					caFile,
+				)
+			}
+			if item.Source.InsecureUpstreamTLS {
+				return fmt.Errorf(
+					"%s: runtime_assets %q source.ca_file cannot be combined with source.insecure_upstream_tls",
+					app.Name,
+					name,
+				)
+			}
+		}
+		if caSharedAssetRefName != "" {
+			if app.DisableSharedAssets {
+				return fmt.Errorf(
+					"%s: runtime_assets %q source.ca_shared_asset_ref_name cannot be used while disable_shared_assets is true",
+					app.Name,
+					name,
+				)
+			}
+			if !sharedAssetNames[caSharedAssetRefName] {
+				return fmt.Errorf(
+					"%s: runtime_assets %q references unknown shared asset %q",
+					app.Name,
+					name,
+					caSharedAssetRefName,
+				)
+			}
+			if item.Source.InsecureUpstreamTLS {
+				return fmt.Errorf(
+					"%s: runtime_assets %q source.ca_shared_asset_ref_name cannot be combined with source.insecure_upstream_tls",
+					app.Name,
+					name,
+				)
+			}
 		}
 
 		volumeName := strings.TrimSpace(item.Volume.Name)
@@ -1883,12 +2078,12 @@ func validateRuntimeAssets(app appModel, tokenNames map[string]bool) error {
 			}
 		}
 
-		for _, selector := range item.Containers {
+		for _, selector := range item.ContainerRefNames {
 			if selector == "*" {
 				continue
 			}
 			if !appHasRuntimeContainer(app, selector) {
-				return fmt.Errorf("%s: runtime_assets %q references unknown container %q", app.Name, name, selector)
+				return fmt.Errorf("%s: runtime_assets %q container_ref_names references unknown container %q", app.Name, name, selector)
 			}
 		}
 	}
@@ -2080,13 +2275,16 @@ func applyReplicaProfile(apps []appModel, envDir string, opts Options) error {
 	if err := yaml.Unmarshal(content, &parsed); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
+	if strings.TrimSpace(parsed.Defaults.LegacyProfile) != "" {
+		return fmt.Errorf("%s: defaults.profile was removed; use defaults.replica_profile_ref_name", path)
+	}
 
 	profileName := strings.TrimSpace(opts.Profile)
 	if profileName == "" {
 		profileName = strings.TrimSpace(os.Getenv("REPLICA_PROFILE"))
 	}
 	if profileName == "" {
-		profileName = strings.TrimSpace(parsed.Defaults.Profile)
+		profileName = strings.TrimSpace(parsed.Defaults.ProfileRefName)
 	}
 	if profileName == "" {
 		return nil
@@ -2345,7 +2543,8 @@ type replicaProfilesFile struct {
 }
 
 type replicaProfileDefaults struct {
-	Profile string `yaml:"profile"`
+	ProfileRefName string `yaml:"replica_profile_ref_name"`
+	LegacyProfile  string `yaml:"profile"`
 }
 
 type replicaProfileSpec struct {
@@ -2561,6 +2760,14 @@ func parseContainerEnvDefaults(node *yaml.Node) ([]containerEnvDefault, error) {
 	if err := node.Decode(&items); err != nil {
 		return nil, err
 	}
+	for _, item := range items {
+		if strings.TrimSpace(item.LegacyName) != "" {
+			return nil, errors.New("container_envs[].name was removed; use container_ref_name")
+		}
+		if strings.TrimSpace(item.ContainerRefName) == "" {
+			return nil, errors.New("container_envs[].container_ref_name is required")
+		}
+	}
 	return items, nil
 }
 
@@ -2580,12 +2787,12 @@ func applyContainerEnvDefaults(root *yaml.Node, defaults []containerEnvDefault) 
 		containerName := scalarMappingValue(containerNode, "name")
 		effective := []envVar{}
 		for _, item := range defaults {
-			if item.Name == "*" {
+			if item.ContainerRefName == "*" {
 				effective = mergeVars(effective, item.Envs)
 			}
 		}
 		for _, item := range defaults {
-			if item.Name != "*" && item.Name == containerName {
+			if item.ContainerRefName != "*" && item.ContainerRefName == containerName {
 				effective = mergeVars(effective, item.Envs)
 			}
 		}
@@ -2678,11 +2885,23 @@ func varsToNode(items []envVar) *yaml.Node {
 			itemNode.Content = append(itemNode.Content, scalarNode("divisor"), scalarNode(item.Divisor))
 		case item.FieldPath != "":
 			itemNode.Content = append(itemNode.Content, scalarNode("field_path"), scalarNode(item.FieldPath))
-		case item.WorkloadIdentityToken != "":
+		case item.LegacyWorkloadIdentityToken != "":
 			itemNode.Content = append(
 				itemNode.Content,
 				scalarNode("workload_identity_token"),
-				scalarNode(item.WorkloadIdentityToken),
+				scalarNode(item.LegacyWorkloadIdentityToken),
+			)
+		case item.WorkloadIdentityTokenRefName != "":
+			itemNode.Content = append(
+				itemNode.Content,
+				scalarNode("workload_identity_token_ref_name"),
+				scalarNode(item.WorkloadIdentityTokenRefName),
+			)
+		case item.SharedAssetRefName != "":
+			itemNode.Content = append(
+				itemNode.Content,
+				scalarNode("shared_asset_ref_name"),
+				scalarNode(item.SharedAssetRefName),
 			)
 		default:
 			itemNode.Content = append(itemNode.Content, scalarNode("value"), scalarNode(item.Value))
@@ -3073,7 +3292,7 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 			initAssets[container.Name] = append(initAssets[container.Name], workloadAssets...)
 		}
 	}
-	initContainers, err := renderInitContainers(app, initAssets, app.Tools)
+	initContainers, err := renderInitContainers(app, initAssets, sharedAssets, app.Tools)
 	if err != nil {
 		return nil, err
 	}
@@ -3482,7 +3701,7 @@ func renderContainer(app appModel, container containerSpec, assets []resolvedAss
 	}
 	vars := effectiveContainerEnvs(container)
 	if len(vars) > 0 {
-		out["env"] = renderVars(app, vars)
+		out["env"] = renderVars(app, vars, sharedAssets)
 	}
 	if envFrom := renderEnvFrom(container.EnvFrom); len(envFrom) > 0 {
 		out["envFrom"] = envFrom
@@ -3556,7 +3775,7 @@ func runtimeAssetMountAssets(app appModel, containerName string, sidecar bool) [
 }
 
 func runtimeAssetAppliesToContainer(item runtimeAssetSpec, containerName string, sidecar bool) bool {
-	for _, selector := range item.Containers {
+	for _, selector := range item.ContainerRefNames {
 		if selector == "*" && !sidecar {
 			return true
 		}
@@ -3567,12 +3786,13 @@ func runtimeAssetAppliesToContainer(item runtimeAssetSpec, containerName string,
 	return false
 }
 
-func renderRuntimeAssetInitContainers(app appModel) ([]map[string]any, error) {
+func renderRuntimeAssetInitContainers(app appModel, sharedAssets []resolvedAsset) ([]map[string]any, error) {
 	out := make([]map[string]any, 0, len(app.RuntimeAssets))
 	for _, item := range app.RuntimeAssets {
-		token, ok := findWorkloadIdentityToken(app, item.Source.Token)
+		tokenRefName := item.Source.WorkloadIdentityTokenRefName
+		token, ok := findWorkloadIdentityToken(app, tokenRefName)
 		if !ok {
-			return nil, fmt.Errorf("%s: runtime_assets %q references unknown workload_identity token %q", app.Name, item.Name, item.Source.Token)
+			return nil, fmt.Errorf("%s: runtime_assets %q references unknown workload_identity token %q", app.Name, item.Name, tokenRefName)
 		}
 		filesJSON, err := runtimeAssetFilesJSON(item)
 		if err != nil {
@@ -3596,6 +3816,44 @@ func renderRuntimeAssetInitContainers(app appModel) ([]map[string]any, error) {
 		if item.Source.InsecureUpstreamTLS {
 			arguments = append(arguments, "--insecure-upstream-tls")
 		}
+		volumeMounts := []any{
+			map[string]any{
+				"name":      item.Volume.Name,
+				"mountPath": item.Volume.MountPath,
+			},
+			map[string]any{
+				"name":      token.Name + "-token",
+				"mountPath": tokenMountPath,
+				"readOnly":  true,
+			},
+		}
+		caFile := strings.TrimSpace(item.Source.CAFile)
+		caAssetRefName := strings.TrimSpace(item.Source.CASharedAssetRefName)
+		var caAsset resolvedAsset
+		var hasCAAsset bool
+		if caAssetRefName != "" {
+			caAsset, hasCAAsset = sharedAssetForRefName(sharedAssets, caAssetRefName)
+			if hasCAAsset {
+				caFile = caAsset.To
+			}
+		} else if caFile != "" {
+			caAsset, hasCAAsset = sharedAssetForMountPath(sharedAssets, caFile)
+		}
+		if caFile != "" {
+			if !hasCAAsset {
+				if caAssetRefName != "" {
+					return nil, fmt.Errorf(
+						"%s: runtime_assets %q source.ca_shared_asset_ref_name references unknown shared asset %q",
+						app.Name,
+						item.Name,
+						caAssetRefName,
+					)
+				}
+				return nil, fmt.Errorf("%s: runtime_assets %q source.ca_file %q does not match any shared asset target", app.Name, item.Name, caFile)
+			}
+			volumeMounts = append(volumeMounts, renderVolumeMounts([]resolvedAsset{caAsset})...)
+			arguments = append(arguments, "--ca-file", caFile)
+		}
 		fetcher := map[string]any{
 			"name":            "runtime-assets-" + item.Name,
 			"image":           item.Fetcher.Image,
@@ -3603,17 +3861,7 @@ func renderRuntimeAssetInitContainers(app appModel) ([]map[string]any, error) {
 			"command":         []string{item.Fetcher.Command},
 			"args":            arguments,
 			"resources":       renderResources(runtimeAssetFetcherResources(item.Fetcher.Resources)),
-			"volumeMounts": []any{
-				map[string]any{
-					"name":      item.Volume.Name,
-					"mountPath": item.Volume.MountPath,
-				},
-				map[string]any{
-					"name":      token.Name + "-token",
-					"mountPath": tokenMountPath,
-					"readOnly":  true,
-				},
-			},
+			"volumeMounts":    volumeMounts,
 		}
 		if len(item.Fetcher.SecurityContext) > 0 {
 			fetcher["securityContext"] = cloneMap(item.Fetcher.SecurityContext)
@@ -3621,6 +3869,24 @@ func renderRuntimeAssetInitContainers(app appModel) ([]map[string]any, error) {
 		out = append(out, fetcher)
 	}
 	return out, nil
+}
+
+func sharedAssetForMountPath(sharedAssets []resolvedAsset, mountPath string) (resolvedAsset, bool) {
+	for _, asset := range sharedAssets {
+		if asset.To == mountPath {
+			return asset, true
+		}
+	}
+	return resolvedAsset{}, false
+}
+
+func sharedAssetForRefName(sharedAssets []resolvedAsset, refName string) (resolvedAsset, bool) {
+	for _, asset := range sharedAssets {
+		if asset.RefName == refName {
+			return asset, true
+		}
+	}
+	return resolvedAsset{}, false
 }
 
 func runtimeAssetFilesJSON(item runtimeAssetSpec) (string, error) {
@@ -3683,21 +3949,21 @@ func runtimeAssetFetcherResources(overrides map[string]map[string]any) map[strin
 	return resources
 }
 
-func renderInitContainers(app appModel, assets map[string][]resolvedAsset, tools []toolSpec) ([]map[string]any, error) {
+func renderInitContainers(app appModel, assets map[string][]resolvedAsset, sharedAssets []resolvedAsset, tools []toolSpec) ([]map[string]any, error) {
 	out := renderToolInitContainers(app.Tools)
-	runtimeFetchers, err := renderRuntimeAssetInitContainers(app)
+	runtimeFetchers, err := renderRuntimeAssetInitContainers(app, sharedAssets)
 	if err != nil {
 		return nil, err
 	}
 	out = append(out, runtimeFetchers...)
 	for _, container := range app.InitContainers {
-		out = append(out, renderInitContainer(app, container, assets[container.Name], tools))
+		out = append(out, renderInitContainer(app, container, assets[container.Name], sharedAssets, tools))
 	}
 	return out, nil
 }
 
-func renderInitContainer(app appModel, container initContainerSpec, assets []resolvedAsset, tools []toolSpec) map[string]any {
-	mounts := renderVolumeMounts(assets)
+func renderInitContainer(app appModel, container initContainerSpec, assets, sharedAssets []resolvedAsset, tools []toolSpec) map[string]any {
+	mounts := renderVolumeMounts(append(append([]resolvedAsset{}, assets...), sharedAssets...))
 	mounts = append(mounts, renderToolVolumeMounts(tools)...)
 	out := map[string]any{
 		"name":            container.Name,
@@ -3720,7 +3986,7 @@ func renderInitContainer(app appModel, container initContainerSpec, assets []res
 		out["securityContext"] = cloneMap(container.SecurityContext)
 	}
 	if vars := effectiveInitContainerEnvs(container); len(vars) > 0 {
-		out["env"] = renderVars(app, vars)
+		out["env"] = renderVars(app, vars, sharedAssets)
 	}
 	if envFrom := renderEnvFrom(container.EnvFrom); len(envFrom) > 0 {
 		out["envFrom"] = envFrom
@@ -4014,11 +4280,29 @@ func loadSharedAssets(envDir string, vars map[string]string, opts Options) ([]re
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	out := make([]resolvedAsset, 0, len(parsed.Assets))
+	refNames := map[string]bool{}
 	for _, item := range parsed.Assets {
-		asset, err := resolveAsset("shared", "shared", item, envDir, vars, opts)
+		refName := strings.TrimSpace(item.Name)
+		if refName != "" {
+			if !isDNSLabel(refName) {
+				return nil, fmt.Errorf("%s: shared asset name %q must be a Kubernetes DNS label", path, refName)
+			}
+			if refNames[refName] {
+				return nil, fmt.Errorf("%s: duplicate shared asset name %q", path, refName)
+			}
+			refNames[refName] = true
+		}
+		asset, err := resolveAsset("shared", "shared", assetSpec{
+			File:       item.File,
+			To:         item.To,
+			Binary:     item.Binary,
+			Transform:  item.Transform,
+			HelmEscape: item.HelmEscape,
+		}, envDir, vars, opts)
 		if err != nil {
 			return nil, err
 		}
+		asset.RefName = refName
 		out = append(out, asset)
 	}
 	return out, nil
@@ -4655,7 +4939,7 @@ func renderRoute(serviceName string, namespace string, port serviceExternalPort,
 	}
 }
 
-func renderVars(app appModel, items []envVar) []map[string]any {
+func renderVars(app appModel, items []envVar, sharedAssets []resolvedAsset) []map[string]any {
 	out := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		env := map[string]any{"name": item.Name}
@@ -4680,10 +4964,15 @@ func renderVars(app appModel, items []envVar) []map[string]any {
 					"fieldPath": item.FieldPath,
 				},
 			}
-		case item.WorkloadIdentityToken != "":
-			token, ok := findWorkloadIdentityToken(app, strings.TrimSpace(item.WorkloadIdentityToken))
+		case item.WorkloadIdentityTokenRefName != "":
+			token, ok := findWorkloadIdentityToken(app, strings.TrimSpace(item.WorkloadIdentityTokenRefName))
 			if ok {
 				env["value"] = effectiveWorkloadTokenFile(token)
+			}
+		case item.SharedAssetRefName != "":
+			asset, ok := sharedAssetForRefName(sharedAssets, strings.TrimSpace(item.SharedAssetRefName))
+			if ok {
+				env["value"] = asset.To
 			}
 		default:
 			env["value"] = item.Value
