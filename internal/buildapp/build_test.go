@@ -1252,6 +1252,105 @@ containers:
 	}
 }
 
+func TestBuildReleaseManifestProvidesReleaseIDBuildVariable(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	manifestPath := filepath.Join(root, "release.yml")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "nac-test"},
+	})
+	writeFile(t, manifestPath, `
+release_id: "2.4"
+images:
+  - app_name: api
+    container_name: api
+    image: registry.release/api
+    tag: "2.4"
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+labels:
+  app.kubernetes.io/version: "{{env:RELEASE_ID}}"
+containers:
+  - name: api
+    image: registry.local/api:latest
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "metadata", "labels", "app.kubernetes.io/version"); got != "2.4" {
+		t.Fatalf("version label = %q, want 2.4", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "image"); got != "registry.release/api:2.4" {
+		t.Fatalf("image = %q, want registry.release/api:2.4", got)
+	}
+}
+
+func TestBuildReleaseManifestAcceptsMatchingExternalReleaseID(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	manifestPath := filepath.Join(root, "release.yml")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":  "nac-test",
+			"RELEASE_ID": "2.4",
+		},
+	})
+	writeFile(t, manifestPath, `release_id: "2.4"`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+labels:
+  app.kubernetes.io/version: "{{env:RELEASE_ID}}"
+containers:
+  - name: api
+    image: registry.local/api:latest
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	if _, err := Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuildReleaseManifestRejectsConflictingExternalReleaseID(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	manifestPath := filepath.Join(root, "release.yml")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":  "nac-test",
+			"RELEASE_ID": "2.3",
+		},
+	})
+	writeFile(t, manifestPath, `release_id: "2.4"`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+containers:
+  - name: api
+    image: registry.local/api:latest
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath})
+	if err == nil || !strings.Contains(err.Error(), `release manifest release_id "2.4" conflicts with build variable RELEASE_ID "2.3"`) {
+		t.Fatalf("err = %v, want RELEASE_ID conflict", err)
+	}
+}
+
 func TestBuildGeneratesGenericInitContainers(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
@@ -3463,6 +3562,191 @@ containers:
 	if got := envSecretName(env, "SECRET_PUBLIC_KEY"); got != "tsm-secrets" {
 		t.Fatalf("SECRET_PUBLIC_KEY secret name = %q, want tsm-secrets", got)
 	}
+}
+
+func TestBuildGeneratesAuthenticatedRuntimeAssetsFetcher(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE": "tsm-test",
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
+workload_identity:
+  service_account:
+    create: true
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+
+runtime_assets:
+  - name: java-runtime-config
+    source:
+      base_url: https://config.example.test/simple-config-server
+      label: release-1
+      token: simple-config
+    volume:
+      name: runtime-config
+      mount_path: /app/runtime-config
+      medium: Memory
+      size_limit: 16Mi
+    fetcher:
+      image: registry.example.test/simple-idm-token-proxy:1.0.0
+    files:
+      - source: files/ssl/client-keystore.jks
+        target: client-keystore.jks
+        mode: "0440"
+        sha256: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - source: files/ssl/client-truststore.jks
+        target: ssl/client-truststore.jks
+
+container_envs:
+  - name: "*"
+    envs:
+      - name: SSL_KEYSTORE
+        value: /app/runtime-config/client-keystore.jks
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+sidecars:
+  - name: metrics
+    image: registry.example.test/metrics:1
+    resources:
+      cpu: {from: "10m", to: "50m"}
+      memory: {from: "16Mi", to: "64Mi"}
+containers:
+  - name: api
+    image: registry.example.test/api:1
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	podSpec := digAny(deployment, "spec", "template", "spec").(map[string]any)
+	volumes := podSpec["volumes"].([]any)
+	runtimeVolume := namedObject(volumes, "runtime-config")
+	if runtimeVolume == nil {
+		t.Fatalf("runtime-config volume missing: %#v", volumes)
+	}
+	if got := digString(runtimeVolume, "emptyDir", "medium"); got != "Memory" {
+		t.Fatalf("runtime volume medium = %q, want Memory", got)
+	}
+	if got := digString(runtimeVolume, "emptyDir", "sizeLimit"); got != "16Mi" {
+		t.Fatalf("runtime volume sizeLimit = %q, want 16Mi", got)
+	}
+
+	initContainers := podSpec["initContainers"].([]any)
+	fetcher := namedObject(initContainers, "runtime-assets-java-runtime-config")
+	if fetcher == nil {
+		t.Fatalf("runtime fetcher missing: %#v", initContainers)
+	}
+	if got := digString(fetcher, "image"); got != "registry.example.test/simple-idm-token-proxy:1.0.0" {
+		t.Fatalf("fetcher image = %q", got)
+	}
+	if got := digString(fetcher, "command", "0"); got != "simple-idm-token-proxy" {
+		t.Fatalf("fetcher command = %q", got)
+	}
+	if got := digString(fetcher, "resources", "requests", "cpu"); got != "10m" {
+		t.Fatalf("fetcher CPU request = %q", got)
+	}
+	if got := digString(fetcher, "resources", "limits", "memory"); got != "128Mi" {
+		t.Fatalf("fetcher memory limit = %q", got)
+	}
+	if got := namedObject(digSlice(fetcher, "volumeMounts"), "runtime-config"); got == nil || got["mountPath"] != "/app/runtime-config" {
+		t.Fatalf("fetcher runtime mount missing: %#v", digSlice(fetcher, "volumeMounts"))
+	}
+	if got := namedObject(digSlice(fetcher, "volumeMounts"), "simple-config-token"); got == nil || got["mountPath"] != "/var/run/secrets/workload-identity/simple-config" {
+		t.Fatalf("fetcher token mount missing: %#v", digSlice(fetcher, "volumeMounts"))
+	}
+
+	args := digSlice(fetcher, "args")
+	filesJSON := argumentValue(args, "--files-json")
+	var files []map[string]any
+	if err := json.Unmarshal([]byte(filesJSON), &files); err != nil {
+		t.Fatalf("invalid fetcher files JSON %q: %v", filesJSON, err)
+	}
+	if got := files[0]["source"]; got != "/api/v1/tenants/default/envs/test/assets/release-1/files/ssl/client-keystore.jks" {
+		t.Fatalf("first source = %q", got)
+	}
+	if got := files[1]["mode"]; got != "0440" {
+		t.Fatalf("default file mode = %q, want 0440", got)
+	}
+
+	containers := podSpec["containers"].([]any)
+	api := namedObject(containers, "api")
+	if got := namedObject(digSlice(api, "volumeMounts"), "runtime-config"); got == nil || got["readOnly"] != true {
+		t.Fatalf("main container runtime mount missing or writable: %#v", digSlice(api, "volumeMounts"))
+	}
+	if got := envValue(digSlice(api, "env"), "SSL_KEYSTORE"); got != "/app/runtime-config/client-keystore.jks" {
+		t.Fatalf("SSL_KEYSTORE = %q", got)
+	}
+	metrics := namedObject(containers, "metrics")
+	if got := namedObject(digSlice(metrics, "volumeMounts"), "runtime-config"); got != nil {
+		t.Fatalf("wildcard runtime asset unexpectedly mounted into sidecar: %#v", got)
+	}
+	if got := namedObject(digSlice(metrics, "volumeMounts"), "simple-config-token"); got == nil {
+		t.Fatalf("workload identity token not mounted into sidecar")
+	}
+}
+
+func TestValidateRejectsRuntimeAssetsWithUnknownToken(t *testing.T) {
+	app := appModel{
+		Name: "api",
+		RuntimeAssets: []runtimeAssetSpec{
+			{
+				Name: "runtime-config",
+				Source: runtimeAssetSourceSpec{
+					Type:           "simple_config",
+					BaseURL:        "https://config.example.test",
+					Tenant:         "default",
+					Environment:    "test",
+					Token:          "missing",
+					TimeoutSeconds: 30,
+				},
+				Volume: runtimeAssetVolumeSpec{
+					Name:      "runtime-config",
+					MountPath: "/app/runtime-config",
+				},
+				Containers: []string{"*"},
+				Files: []runtimeAssetFileSpec{
+					{Source: "files/config.yml", Target: "config.yml", Mode: "0440"},
+				},
+				Fetcher: runtimeAssetFetcherSpec{Image: "registry.example.test/fetcher:1", Command: "simple-idm-token-proxy"},
+			},
+		},
+	}
+	err := validateApps([]appModel{app})
+	if err == nil || !strings.Contains(err.Error(), `unknown workload_identity token "missing"`) {
+		t.Fatalf("validateApps error = %v", err)
+	}
+}
+
+func namedObject(items []any, name string) map[string]any {
+	for _, item := range items {
+		object, ok := item.(map[string]any)
+		if ok && object["name"] == name {
+			return object
+		}
+	}
+	return nil
+}
+
+func argumentValue(arguments []any, name string) string {
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == name {
+			value, _ := arguments[index+1].(string)
+			return value
+		}
+	}
+	return ""
 }
 
 func writeJSON(t *testing.T, path string, value any) {

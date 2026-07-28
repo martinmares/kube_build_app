@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -137,6 +138,7 @@ type appModel struct {
 	PodRaw               map[string]any       `yaml:"pod_raw"`
 	Autoscaling          autoscalingSpec      `yaml:"autoscaling"`
 	RolloutOn            rolloutOnSpec        `yaml:"rollout_on"`
+	RuntimeAssets        []runtimeAssetSpec   `yaml:"runtime_assets"`
 	Tools                []toolSpec           `yaml:"tools"`
 	InitContainers       []initContainerSpec  `yaml:"init_containers"`
 	Registry             []registrySpec       `yaml:"registry"`
@@ -183,6 +185,48 @@ type workloadIdentityTokenSpec struct {
 	MountPath         string `yaml:"mount_path"`
 	Path              string `yaml:"path"`
 	ExpirationSeconds int    `yaml:"expiration_seconds"`
+}
+
+type runtimeAssetSpec struct {
+	Name       string                  `yaml:"name"`
+	Source     runtimeAssetSourceSpec  `yaml:"source"`
+	Volume     runtimeAssetVolumeSpec  `yaml:"volume"`
+	Containers []string                `yaml:"containers"`
+	Files      []runtimeAssetFileSpec  `yaml:"files"`
+	Fetcher    runtimeAssetFetcherSpec `yaml:"fetcher"`
+}
+
+type runtimeAssetSourceSpec struct {
+	Type                string `yaml:"type"`
+	BaseURL             string `yaml:"base_url"`
+	Tenant              string `yaml:"tenant"`
+	Environment         string `yaml:"environment"`
+	Label               string `yaml:"label"`
+	Token               string `yaml:"token"`
+	TimeoutSeconds      int    `yaml:"timeout_seconds"`
+	InsecureUpstreamTLS bool   `yaml:"insecure_upstream_tls"`
+}
+
+type runtimeAssetVolumeSpec struct {
+	Name      string `yaml:"name"`
+	MountPath string `yaml:"mount_path"`
+	Medium    string `yaml:"medium"`
+	SizeLimit string `yaml:"size_limit"`
+}
+
+type runtimeAssetFileSpec struct {
+	Source string `yaml:"source" json:"source"`
+	Target string `yaml:"target" json:"target"`
+	Mode   string `yaml:"mode" json:"mode"`
+	SHA256 string `yaml:"sha256" json:"sha256,omitempty"`
+}
+
+type runtimeAssetFetcherSpec struct {
+	Image           string                    `yaml:"image"`
+	ImagePullPolicy string                    `yaml:"image_pull_policy"`
+	Command         string                    `yaml:"command"`
+	Resources       map[string]map[string]any `yaml:"resources"`
+	SecurityContext map[string]any            `yaml:"security_context"`
 }
 
 type podInfoSpec struct {
@@ -554,7 +598,7 @@ func Build(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("apps directory not found: %s", appsDir)
 	}
 
-	vars, err := loadVars(envDir, opts)
+	vars, err := loadBuildVars(envDir, opts)
 	if err != nil {
 		return Result{}, err
 	}
@@ -588,7 +632,7 @@ func Build(opts Options) (Result, error) {
 		}
 	}
 
-	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars)
+	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars, opts.Environment)
 	if err != nil {
 		return Result{}, err
 	}
@@ -895,7 +939,7 @@ func Inventory(opts Options) (map[string]any, error) {
 	if !isDir(appsDir) {
 		return nil, fmt.Errorf("apps directory not found: %s", appsDir)
 	}
-	vars, err := loadVars(envDir, opts)
+	vars, err := loadBuildVars(envDir, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -903,7 +947,7 @@ func Inventory(opts Options) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars)
+	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars, opts.Environment)
 	if err != nil {
 		return nil, err
 	}
@@ -983,7 +1027,7 @@ func Validate(opts Options) error {
 	if !isDir(appsDir) {
 		return fmt.Errorf("apps directory not found: %s", appsDir)
 	}
-	vars, err := loadVars(envDir, opts)
+	vars, err := loadBuildVars(envDir, opts)
 	if err != nil {
 		return err
 	}
@@ -991,7 +1035,7 @@ func Validate(opts Options) error {
 	if err != nil {
 		return err
 	}
-	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars)
+	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars, opts.Environment)
 	if err != nil {
 		return err
 	}
@@ -1134,7 +1178,7 @@ func loadPreparedApps(opts Options, applyProfileAndDown bool) ([]appModel, strin
 	if !isDir(appsDir) {
 		return nil, "", nil, fmt.Errorf("apps directory not found: %s", appsDir)
 	}
-	vars, err := loadVars(envDir, opts)
+	vars, err := loadBuildVars(envDir, opts)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -1142,7 +1186,7 @@ func loadPreparedApps(opts Options, applyProfileAndDown bool) ([]appModel, strin
 	if err != nil {
 		return nil, "", nil, err
 	}
-	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars)
+	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars, opts.Environment)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -1346,6 +1390,34 @@ func loadVars(envDir string, opts Options) (map[string]string, error) {
 	return vars, nil
 }
 
+func loadBuildVars(envDir string, opts Options) (map[string]string, error) {
+	vars, err := loadVars(envDir, opts)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(opts.ReleaseManifest) == "" {
+		return vars, nil
+	}
+
+	manifest, err := loadReleaseManifest(opts.ReleaseManifest)
+	if err != nil {
+		return nil, err
+	}
+	releaseID := strings.TrimSpace(manifest.ReleaseID)
+	if releaseID == "" {
+		return vars, nil
+	}
+	if current := strings.TrimSpace(vars["RELEASE_ID"]); current != "" && current != releaseID {
+		return nil, fmt.Errorf(
+			"release manifest release_id %q conflicts with build variable RELEASE_ID %q",
+			releaseID,
+			current,
+		)
+	}
+	vars["RELEASE_ID"] = releaseID
+	return vars, nil
+}
+
 func effectiveVarsSources(opts Options) ([]string, string, bool, error) {
 	if strings.TrimSpace(opts.EnvFile) != "" {
 		if opts.DecryptSecured {
@@ -1537,7 +1609,7 @@ func loadVarsLegacy(envDir string) (map[string]string, error) {
 	return vars, nil
 }
 
-func loadApps(appFiles []string, defaultsPath string, vars map[string]string) ([]appModel, error) {
+func loadApps(appFiles []string, defaultsPath string, vars map[string]string, environment string) ([]appModel, error) {
 	apps := make([]appModel, 0, len(appFiles))
 	for _, appFile := range appFiles {
 		app, err := loadApp(appFile, defaultsPath, vars)
@@ -1547,9 +1619,42 @@ func loadApps(appFiles []string, defaultsPath string, vars map[string]string) ([
 		if app.Kind == "" {
 			app.Kind = "Deployment"
 		}
+		normalizeRuntimeAssets(&app, environment)
 		apps = append(apps, app)
 	}
 	return apps, nil
+}
+
+func normalizeRuntimeAssets(app *appModel, environment string) {
+	for index := range app.RuntimeAssets {
+		item := &app.RuntimeAssets[index]
+		if strings.TrimSpace(item.Source.Type) == "" {
+			item.Source.Type = "simple_config"
+		}
+		if strings.TrimSpace(item.Source.Tenant) == "" {
+			item.Source.Tenant = "default"
+		}
+		if strings.TrimSpace(item.Source.Environment) == "" {
+			item.Source.Environment = environment
+		}
+		if item.Source.TimeoutSeconds == 0 {
+			item.Source.TimeoutSeconds = 30
+		}
+		if strings.TrimSpace(item.Volume.Name) == "" {
+			item.Volume.Name = item.Name
+		}
+		if len(item.Containers) == 0 {
+			item.Containers = []string{"*"}
+		}
+		if strings.TrimSpace(item.Fetcher.Command) == "" {
+			item.Fetcher.Command = "simple-idm-token-proxy"
+		}
+		for fileIndex := range item.Files {
+			if strings.TrimSpace(item.Files[fileIndex].Mode) == "" {
+				item.Files[fileIndex].Mode = "0440"
+			}
+		}
+	}
 }
 
 func validateApps(apps []appModel) error {
@@ -1557,6 +1662,7 @@ func validateApps(apps []appModel) error {
 		if err := validateTools(app); err != nil {
 			return err
 		}
+		tokenNames := map[string]bool{}
 		for _, token := range app.WorkloadIdentity.Tokens {
 			if strings.TrimSpace(token.Name) == "" {
 				return fmt.Errorf("%s: workload_identity.tokens[].name is required", app.Name)
@@ -1564,6 +1670,13 @@ func validateApps(apps []appModel) error {
 			if strings.TrimSpace(token.Audience) == "" {
 				return fmt.Errorf("%s: workload_identity token %q requires audience", app.Name, token.Name)
 			}
+			if tokenNames[token.Name] {
+				return fmt.Errorf("%s: duplicate workload_identity token %q", app.Name, token.Name)
+			}
+			tokenNames[token.Name] = true
+		}
+		if err := validateRuntimeAssets(app, tokenNames); err != nil {
+			return err
 		}
 		for _, mount := range app.DownwardAPI.Mounts {
 			if strings.TrimSpace(mount.Name) == "" {
@@ -1632,6 +1745,226 @@ func validateApps(apps []appModel) error {
 		}
 	}
 	return nil
+}
+
+func validateRuntimeAssets(app appModel, tokenNames map[string]bool) error {
+	names := map[string]bool{}
+	volumeNames := reservedVolumeNames(app)
+	mountPaths := map[string]bool{}
+	for _, item := range app.RuntimeAssets {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			return fmt.Errorf("%s: runtime_assets[].name is required", app.Name)
+		}
+		if !isDNSLabel(name) {
+			return fmt.Errorf("%s: runtime_assets name %q must be a Kubernetes DNS label", app.Name, name)
+		}
+		if len("runtime-assets-"+name) > 63 {
+			return fmt.Errorf("%s: runtime_assets name %q is too long for generated init container name", app.Name, name)
+		}
+		if names[name] {
+			return fmt.Errorf("%s: duplicate runtime_assets name %q", app.Name, name)
+		}
+		names[name] = true
+
+		if item.Source.Type != "simple_config" {
+			return fmt.Errorf("%s: runtime_assets %q source.type must be simple_config", app.Name, name)
+		}
+		if err := validateHTTPBaseURL(item.Source.BaseURL); err != nil {
+			return fmt.Errorf("%s: runtime_assets %q: %w", app.Name, name, err)
+		}
+		if strings.TrimSpace(item.Source.Tenant) == "" {
+			return fmt.Errorf("%s: runtime_assets %q source.tenant is required", app.Name, name)
+		}
+		if strings.TrimSpace(item.Source.Environment) == "" {
+			return fmt.Errorf("%s: runtime_assets %q source.environment is required", app.Name, name)
+		}
+		tokenName := strings.TrimSpace(item.Source.Token)
+		if tokenName == "" {
+			return fmt.Errorf("%s: runtime_assets %q source.token is required", app.Name, name)
+		}
+		if !tokenNames[tokenName] {
+			return fmt.Errorf("%s: runtime_assets %q references unknown workload_identity token %q", app.Name, name, tokenName)
+		}
+		if item.Source.TimeoutSeconds < 1 {
+			return fmt.Errorf("%s: runtime_assets %q source.timeout_seconds must be greater than 0", app.Name, name)
+		}
+
+		volumeName := strings.TrimSpace(item.Volume.Name)
+		if !isDNSLabel(volumeName) {
+			return fmt.Errorf("%s: runtime_assets %q volume.name %q must be a Kubernetes DNS label", app.Name, name, volumeName)
+		}
+		if volumeNames[volumeName] {
+			return fmt.Errorf("%s: runtime_assets %q volume.name %q conflicts with another generated volume", app.Name, name, volumeName)
+		}
+		volumeNames[volumeName] = true
+		if err := validateAbsoluteMountPath(item.Volume.MountPath); err != nil {
+			return fmt.Errorf("%s: runtime_assets %q volume.mount_path: %w", app.Name, name, err)
+		}
+		if mountPaths[item.Volume.MountPath] {
+			return fmt.Errorf("%s: runtime_assets %q duplicates volume.mount_path %q", app.Name, name, item.Volume.MountPath)
+		}
+		mountPaths[item.Volume.MountPath] = true
+		if item.Volume.Medium != "" && item.Volume.Medium != "Memory" {
+			return fmt.Errorf("%s: runtime_assets %q volume.medium must be Memory or empty", app.Name, name)
+		}
+
+		if strings.TrimSpace(item.Fetcher.Image) == "" {
+			return fmt.Errorf("%s: runtime_assets %q fetcher.image is required", app.Name, name)
+		}
+		if _, err := imagePullPolicy(item.Fetcher.ImagePullPolicy); err != nil {
+			return fmt.Errorf("%s: runtime_assets %q fetcher: %w", app.Name, name, err)
+		}
+		if strings.TrimSpace(item.Fetcher.Command) == "" {
+			return fmt.Errorf("%s: runtime_assets %q fetcher.command is required", app.Name, name)
+		}
+
+		if len(item.Files) == 0 {
+			return fmt.Errorf("%s: runtime_assets %q requires at least one file", app.Name, name)
+		}
+		targets := map[string]bool{}
+		for _, file := range item.Files {
+			if err := validateRuntimeAssetSourcePath(file.Source); err != nil {
+				return fmt.Errorf("%s: runtime_assets %q file source: %w", app.Name, name, err)
+			}
+			target, err := normalizeRuntimeAssetTarget(file.Target)
+			if err != nil {
+				return fmt.Errorf("%s: runtime_assets %q file target: %w", app.Name, name, err)
+			}
+			if targets[target] {
+				return fmt.Errorf("%s: runtime_assets %q has duplicate file target %q", app.Name, name, target)
+			}
+			targets[target] = true
+			if !regexp.MustCompile(`^0[0-7]{3}$`).MatchString(file.Mode) {
+				return fmt.Errorf("%s: runtime_assets %q file %q mode must use four octal digits such as 0440", app.Name, name, file.Target)
+			}
+			if err := validateRuntimeAssetSHA256(file.SHA256); err != nil {
+				return fmt.Errorf("%s: runtime_assets %q file %q: %w", app.Name, name, file.Target, err)
+			}
+		}
+
+		for _, selector := range item.Containers {
+			if selector == "*" {
+				continue
+			}
+			if !appHasRuntimeContainer(app, selector) {
+				return fmt.Errorf("%s: runtime_assets %q references unknown container %q", app.Name, name, selector)
+			}
+		}
+	}
+	return nil
+}
+
+func reservedVolumeNames(app appModel) map[string]bool {
+	out := map[string]bool{}
+	for _, token := range app.WorkloadIdentity.Tokens {
+		if name := strings.TrimSpace(token.Name); name != "" {
+			out[name+"-token"] = true
+		}
+	}
+	for _, mount := range app.DownwardAPI.Mounts {
+		if name := strings.TrimSpace(mount.Name); name != "" {
+			out[name] = true
+		}
+	}
+	if app.PodInfo.Enabled {
+		out["podinfo"] = true
+	}
+	if len(app.Tools) > 0 {
+		out["app-tools"] = true
+	}
+	for _, container := range appRuntimeContainers(app) {
+		for _, mount := range container.Mounts {
+			if name := effectiveMountName(mount); name != "" {
+				out[name] = true
+			}
+		}
+	}
+	for _, container := range app.InitContainers {
+		for _, mount := range container.Mounts {
+			if name := effectiveMountName(mount); name != "" {
+				out[name] = true
+			}
+		}
+	}
+	return out
+}
+
+func effectiveMountName(mount mountSpec) string {
+	if name, _ := mount.Volume["name"].(string); strings.TrimSpace(name) != "" {
+		return strings.TrimSpace(name)
+	}
+	return strings.TrimSpace(mount.Name)
+}
+
+func isDNSLabel(value string) bool {
+	return regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).MatchString(value) && len(value) <= 63
+}
+
+func validateHTTPBaseURL(value string) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed == nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("source.base_url must be an absolute HTTP(S) URL")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("source.base_url must not contain a query or fragment")
+	}
+	return nil
+}
+
+func validateAbsoluteMountPath(value string) error {
+	value = strings.TrimSpace(value)
+	if !filepath.IsAbs(value) || value == "/" || filepath.Clean(value) != value {
+		return fmt.Errorf("must be a normalized absolute path other than /")
+	}
+	return nil
+}
+
+func validateRuntimeAssetSourcePath(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "/") || strings.Contains(value, `\`) {
+		return fmt.Errorf("must be a non-empty relative path")
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || part == "." || part == ".." {
+			return fmt.Errorf("must not contain empty, . or .. path segments")
+		}
+	}
+	return nil
+}
+
+func normalizeRuntimeAssetTarget(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "/") || strings.Contains(value, `\`) {
+		return "", fmt.Errorf("must be a non-empty relative path")
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("must not contain empty, . or .. path segments")
+		}
+	}
+	return value, nil
+}
+
+func validateRuntimeAssetSHA256(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	value = strings.TrimPrefix(value, "sha256:")
+	if len(value) != 64 || !regexp.MustCompile(`^[0-9a-fA-F]{64}$`).MatchString(value) {
+		return fmt.Errorf("sha256 must contain 64 hexadecimal digits")
+	}
+	return nil
+}
+
+func appHasRuntimeContainer(app appModel, name string) bool {
+	for _, container := range appRuntimeContainers(app) {
+		if container.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func validateTools(app appModel) error {
@@ -1872,7 +2205,9 @@ func normalizeImagePolicy(policy string) string {
 }
 
 type releaseManifest struct {
-	Images []releaseImage `yaml:"images"`
+	ReleaseID    string         `yaml:"release_id"`
+	RegistryBase string         `yaml:"registry_base"`
+	Images       []releaseImage `yaml:"images"`
 }
 
 type releaseImage struct {
@@ -2520,14 +2855,8 @@ func workloadIdentityAssets(app appModel) []resolvedAsset {
 		if name == "" {
 			continue
 		}
-		path := strings.TrimSpace(token.Path)
-		if path == "" {
-			path = "token"
-		}
-		mountPath := strings.TrimSpace(token.MountPath)
-		if mountPath == "" {
-			mountPath = "/var/run/secrets/workload-identity/" + name
-		}
+		path := effectiveWorkloadTokenPath(token)
+		mountPath := effectiveWorkloadTokenMountPath(token)
 		expirationSeconds := token.ExpirationSeconds
 		if expirationSeconds == 0 {
 			expirationSeconds = 3600
@@ -2556,6 +2885,29 @@ func workloadIdentityAssets(app appModel) []resolvedAsset {
 		})
 	}
 	return out
+}
+
+func effectiveWorkloadTokenPath(token workloadIdentityTokenSpec) string {
+	if path := strings.TrimSpace(token.Path); path != "" {
+		return path
+	}
+	return "token"
+}
+
+func effectiveWorkloadTokenMountPath(token workloadIdentityTokenSpec) string {
+	if mountPath := strings.TrimSpace(token.MountPath); mountPath != "" {
+		return mountPath
+	}
+	return "/var/run/secrets/workload-identity/" + strings.TrimSpace(token.Name)
+}
+
+func findWorkloadIdentityToken(app appModel, name string) (workloadIdentityTokenSpec, bool) {
+	for _, token := range app.WorkloadIdentity.Tokens {
+		if token.Name == name {
+			return token, true
+		}
+	}
+	return workloadIdentityTokenSpec{}, false
 }
 
 func downwardAPIAssets(app appModel) []resolvedAsset {
@@ -2631,16 +2983,19 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 	}
 	workloadAssets := workloadIdentityAssets(app)
 	workloadAssets = append(workloadAssets, downwardAPIAssets(app)...)
+	runtimeVolumes := runtimeAssetVolumeAssets(app)
 
 	containers := make([]map[string]any, 0, len(app.Containers)+len(app.Sidecars))
 	for _, container := range app.Containers {
 		containerAssets := append([]resolvedAsset{}, assets[container.Name]...)
 		containerAssets = append(containerAssets, workloadAssets...)
+		containerAssets = append(containerAssets, runtimeAssetMountAssets(app, container.Name, false)...)
 		containers = append(containers, renderContainer(container, containerAssets, sharedAssets, app.Tools))
 	}
 	for _, sidecar := range app.Sidecars {
 		sidecarAssets := append([]resolvedAsset{}, assets[sidecar.Name]...)
 		sidecarAssets = append(sidecarAssets, workloadAssets...)
+		sidecarAssets = append(sidecarAssets, runtimeAssetMountAssets(app, sidecar.Name, true)...)
 		containers = append(containers, renderContainer(sidecar, sidecarAssets, sharedAssets, app.Tools))
 	}
 	initAssets := assets
@@ -2650,12 +3005,17 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 			initAssets[container.Name] = append(initAssets[container.Name], workloadAssets...)
 		}
 	}
-	initContainers := renderInitContainers(app, initAssets, app.Tools)
+	initContainers, err := renderInitContainers(app, initAssets, app.Tools)
+	if err != nil {
+		return nil, err
+	}
+	extraVolumes := append([]resolvedAsset{}, workloadAssets...)
+	extraVolumes = append(extraVolumes, runtimeVolumes...)
 
 	podSpec := map[string]any{
 		"containers":       containers,
 		"imagePullSecrets": renderImagePullSecrets(app.Registry),
-		"volumes":          renderVolumes(app, assets, sharedAssets, workloadAssets),
+		"volumes":          renderVolumes(app, assets, sharedAssets, extraVolumes),
 	}
 	if len(app.SecurityContext) > 0 {
 		podSpec["securityContext"] = cloneMap(app.SecurityContext)
@@ -3089,12 +3449,183 @@ func renderContainer(container containerSpec, assets []resolvedAsset, sharedAsse
 	return out
 }
 
-func renderInitContainers(app appModel, assets map[string][]resolvedAsset, tools []toolSpec) []map[string]any {
+func runtimeAssetVolumeAssets(app appModel) []resolvedAsset {
+	out := make([]resolvedAsset, 0, len(app.RuntimeAssets))
+	for _, item := range app.RuntimeAssets {
+		emptyDir := map[string]any{}
+		if item.Volume.Medium != "" {
+			emptyDir["medium"] = item.Volume.Medium
+		}
+		if item.Volume.SizeLimit != "" {
+			emptyDir["sizeLimit"] = item.Volume.SizeLimit
+		}
+		out = append(out, resolvedAsset{
+			VolumeName: item.Volume.Name,
+			Kind:       "raw",
+			RawVolume: map[string]any{
+				"name":     item.Volume.Name,
+				"emptyDir": emptyDir,
+			},
+			RawMount: map[string]any{
+				"name":      item.Volume.Name,
+				"mountPath": item.Volume.MountPath,
+				"readOnly":  true,
+			},
+		})
+	}
+	return out
+}
+
+func runtimeAssetMountAssets(app appModel, containerName string, sidecar bool) []resolvedAsset {
+	volumes := runtimeAssetVolumeAssets(app)
+	out := make([]resolvedAsset, 0, len(volumes))
+	for index, item := range app.RuntimeAssets {
+		if runtimeAssetAppliesToContainer(item, containerName, sidecar) {
+			out = append(out, volumes[index])
+		}
+	}
+	return out
+}
+
+func runtimeAssetAppliesToContainer(item runtimeAssetSpec, containerName string, sidecar bool) bool {
+	for _, selector := range item.Containers {
+		if selector == "*" && !sidecar {
+			return true
+		}
+		if selector == containerName {
+			return true
+		}
+	}
+	return false
+}
+
+func renderRuntimeAssetInitContainers(app appModel) ([]map[string]any, error) {
+	out := make([]map[string]any, 0, len(app.RuntimeAssets))
+	for _, item := range app.RuntimeAssets {
+		token, ok := findWorkloadIdentityToken(app, item.Source.Token)
+		if !ok {
+			return nil, fmt.Errorf("%s: runtime_assets %q references unknown workload_identity token %q", app.Name, item.Name, item.Source.Token)
+		}
+		filesJSON, err := runtimeAssetFilesJSON(item)
+		if err != nil {
+			return nil, fmt.Errorf("%s: runtime_assets %q: %w", app.Name, item.Name, err)
+		}
+		tokenMountPath := effectiveWorkloadTokenMountPath(token)
+		tokenFile := filepath.ToSlash(filepath.Join(tokenMountPath, effectiveWorkloadTokenPath(token)))
+		arguments := []string{
+			"fetch",
+			"--upstream",
+			item.Source.BaseURL,
+			"--token-file",
+			tokenFile,
+			"--timeout-seconds",
+			strconv.Itoa(item.Source.TimeoutSeconds),
+			"--output-dir",
+			item.Volume.MountPath,
+			"--files-json",
+			filesJSON,
+		}
+		if item.Source.InsecureUpstreamTLS {
+			arguments = append(arguments, "--insecure-upstream-tls")
+		}
+		fetcher := map[string]any{
+			"name":            "runtime-assets-" + item.Name,
+			"image":           item.Fetcher.Image,
+			"imagePullPolicy": mustImagePullPolicy(item.Fetcher.ImagePullPolicy),
+			"command":         []string{item.Fetcher.Command},
+			"args":            arguments,
+			"resources":       renderResources(runtimeAssetFetcherResources(item.Fetcher.Resources)),
+			"volumeMounts": []any{
+				map[string]any{
+					"name":      item.Volume.Name,
+					"mountPath": item.Volume.MountPath,
+				},
+				map[string]any{
+					"name":      token.Name + "-token",
+					"mountPath": tokenMountPath,
+					"readOnly":  true,
+				},
+			},
+		}
+		if len(item.Fetcher.SecurityContext) > 0 {
+			fetcher["securityContext"] = cloneMap(item.Fetcher.SecurityContext)
+		}
+		out = append(out, fetcher)
+	}
+	return out, nil
+}
+
+func runtimeAssetFilesJSON(item runtimeAssetSpec) (string, error) {
+	type fetchFile struct {
+		Source string `json:"source"`
+		Target string `json:"target"`
+		Mode   string `json:"mode"`
+		SHA256 string `json:"sha256,omitempty"`
+	}
+	files := make([]fetchFile, 0, len(item.Files))
+	for _, file := range item.Files {
+		source := runtimeAssetAPIPath(item.Source, file.Source)
+		files = append(files, fetchFile{
+			Source: source,
+			Target: file.Target,
+			Mode:   file.Mode,
+			SHA256: file.SHA256,
+		})
+	}
+	content, err := json.Marshal(files)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
+func runtimeAssetAPIPath(source runtimeAssetSourceSpec, file string) string {
+	segments := []string{
+		"api", "v1", "tenants", source.Tenant, "envs", source.Environment, "assets",
+	}
+	if source.Label != "" {
+		segments = append(segments, source.Label)
+	}
+	segments = append(segments, strings.Split(file, "/")...)
+	for index := range segments {
+		segments[index] = url.PathEscape(segments[index])
+	}
+	return "/" + strings.Join(segments, "/")
+}
+
+func runtimeAssetFetcherResources(overrides map[string]map[string]any) map[string]map[string]any {
+	resources := map[string]map[string]any{
+		"cpu": {
+			"from": "10m",
+			"to":   "100m",
+		},
+		"memory": {
+			"from": "16Mi",
+			"to":   "128Mi",
+		},
+	}
+	for resource, values := range overrides {
+		if resources[resource] == nil {
+			resources[resource] = map[string]any{}
+		}
+		for key, value := range values {
+			resources[resource][key] = value
+		}
+	}
+	return resources
+}
+
+func renderInitContainers(app appModel, assets map[string][]resolvedAsset, tools []toolSpec) ([]map[string]any, error) {
 	out := renderToolInitContainers(app.Tools)
+	runtimeFetchers, err := renderRuntimeAssetInitContainers(app)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, runtimeFetchers...)
 	for _, container := range app.InitContainers {
 		out = append(out, renderInitContainer(container, assets[container.Name], tools))
 	}
-	return out
+	return out, nil
 }
 
 func renderInitContainer(container initContainerSpec, assets []resolvedAsset, tools []toolSpec) map[string]any {
