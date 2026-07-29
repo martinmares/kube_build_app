@@ -613,6 +613,9 @@ Useful flags:
 -r, --release-manifest   release manifest YAML path
     --image              override image as app/container=image; repeatable
     --image-policy       image override policy: fallback or strict
+    --image-reference    release image reference: auto, digest, or tag
+    --force-image-tag    force one tag for all release manifest images
+    --force-image-prefix replace release image prefixes and keep basenames
 -w, --down               scale selected app replicas to 0
 -E, --env-file           explicit .env file path
     --vars-source        env, json, dot-env; repeatable or comma-separated
@@ -713,9 +716,19 @@ Image policy:
 ```bash
 kube-build-app build -e test --release-manifest release.yml --image-policy fallback
 kube-build-app build -e test --release-manifest release.yml --image-policy strict
+kube-build-app build -e test --release-manifest release.yml --image-reference tag
+kube-build-app build -e test --release-manifest release.yml \
+  --force-image-prefix artifactory.example.com/docker-release \
+  --force-image-tag emergency-1
 ```
 
 `fallback` keeps the app YAML image when no override exists. `strict` requires every rendered `<app>/<container>` to be covered by `--image` or `--release-manifest`; this is recommended for release pipelines.
+
+`--image-reference auto` is the default and prefers an immutable digest, then a tag, then the bare image name. `digest` and `tag` explicitly require that reference type in every matched release image and fail when it is missing.
+
+The force flags provide an explicit recovery mode. `--force-image-prefix` replaces the complete repository prefix while preserving only the final image basename. `--force-image-tag` then replaces every manifest digest or tag with one shared tag. They affect only images selected from `--release-manifest`; per-container `--image` overrides still have the highest priority. Prefixes use OCI reference syntax without `https://` or `docker://`. `--force-image-tag` cannot be combined with `--image-reference digest`.
+
+Repositories with the same basename map to the same destination when a forced prefix is used. For example, both `team-a/api` and `team-b/api` become `<forced-prefix>/api`; this accepted limitation should be checked in the test environment before production rollout.
 
 ## Placeholder Contract
 

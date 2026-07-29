@@ -38,6 +38,9 @@ type Options struct {
 	ReleaseManifest  string
 	ImageOverrides   []string
 	ImagePolicy      string
+	ImageReference   string
+	ForceImageTag    string
+	ForceImagePrefix string
 	SyncProfile      string
 	SyncPrefix       string
 	SyncSet          string
@@ -2344,6 +2347,10 @@ func applyImageOverrides(apps []appModel, opts Options) error {
 	if policy != "fallback" && policy != "strict" {
 		return fmt.Errorf("invalid image policy %q: expected fallback or strict", opts.ImagePolicy)
 	}
+	selection, err := releaseImageSelectionFromOptions(opts)
+	if err != nil {
+		return err
+	}
 	images := map[imageKey]string{}
 	if strings.TrimSpace(opts.ReleaseManifest) != "" {
 		manifest, err := loadReleaseManifest(opts.ReleaseManifest)
@@ -2352,12 +2359,20 @@ func applyImageOverrides(apps []appModel, opts Options) error {
 		}
 		for _, app := range apps {
 			for _, container := range app.Containers {
-				if image := manifest.imageFor(app.Name, container.Name); image != "" {
+				image, err := manifest.imageFor(app.Name, container.Name, selection)
+				if err != nil {
+					return err
+				}
+				if image != "" {
 					images[imageKey{App: app.Name, Container: container.Name}] = image
 				}
 			}
 			for _, sidecar := range app.Sidecars {
-				if image := manifest.sidecarImageFor(app.Name, sidecar.Name); image != "" {
+				image, err := manifest.sidecarImageFor(app.Name, sidecar.Name, selection)
+				if err != nil {
+					return err
+				}
+				if image != "" {
 					images[imageKey{App: app.Name, Container: sidecar.Name}] = image
 				}
 			}
@@ -2441,6 +2456,71 @@ func normalizeImagePolicy(policy string) string {
 		return "fallback"
 	}
 	return policy
+}
+
+func normalizeImageReference(reference string) string {
+	reference = strings.TrimSpace(strings.ToLower(reference))
+	if reference == "" {
+		return "auto"
+	}
+	return reference
+}
+
+type releaseImageSelection struct {
+	ReferenceMode string
+	ForceTag      string
+	ForcePrefix   string
+}
+
+func releaseImageSelectionFromOptions(opts Options) (releaseImageSelection, error) {
+	selection := releaseImageSelection{
+		ReferenceMode: normalizeImageReference(opts.ImageReference),
+		ForceTag:      strings.TrimSpace(opts.ForceImageTag),
+		ForcePrefix:   strings.Trim(strings.TrimSpace(opts.ForceImagePrefix), "/"),
+	}
+	if selection.ReferenceMode != "auto" && selection.ReferenceMode != "digest" && selection.ReferenceMode != "tag" {
+		return releaseImageSelection{}, fmt.Errorf("invalid image reference %q: expected auto, digest, or tag", opts.ImageReference)
+	}
+	if opts.ForceImageTag != "" && selection.ForceTag == "" {
+		return releaseImageSelection{}, errors.New("--force-image-tag must not be empty")
+	}
+	if selection.ForceTag != "" && !validImageTag(selection.ForceTag) {
+		return releaseImageSelection{}, fmt.Errorf("invalid --force-image-tag %q", opts.ForceImageTag)
+	}
+	if opts.ForceImagePrefix != "" && selection.ForcePrefix == "" {
+		return releaseImageSelection{}, errors.New("--force-image-prefix must not be empty")
+	}
+	if selection.ForcePrefix != "" {
+		if err := validateImagePrefix(selection.ForcePrefix); err != nil {
+			return releaseImageSelection{}, err
+		}
+	}
+	if selection.ForceTag != "" && selection.ReferenceMode == "digest" {
+		return releaseImageSelection{}, errors.New("--force-image-tag cannot be combined with --image-reference digest")
+	}
+	if (selection.ForceTag != "" || selection.ForcePrefix != "") && strings.TrimSpace(opts.ReleaseManifest) == "" {
+		return releaseImageSelection{}, errors.New("--force-image-tag and --force-image-prefix require --release-manifest")
+	}
+	return selection, nil
+}
+
+func validImageTag(tag string) bool {
+	return len(tag) <= 128 && imageTagPattern.MatchString(tag)
+}
+
+var imageTagPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
+
+func validateImagePrefix(prefix string) error {
+	if strings.Contains(prefix, "://") {
+		return fmt.Errorf("invalid --force-image-prefix %q: use an OCI registry/path without a URL scheme", prefix)
+	}
+	if strings.ContainsAny(prefix, "@ \t\r\n") || strings.Contains(prefix, "//") {
+		return fmt.Errorf("invalid --force-image-prefix %q", prefix)
+	}
+	if slash := strings.LastIndex(prefix, "/"); slash >= 0 && strings.Contains(prefix[slash+1:], ":") {
+		return fmt.Errorf("invalid --force-image-prefix %q: prefix must not contain an image tag", prefix)
+	}
+	return nil
 }
 
 type releaseManifest struct {
@@ -2572,24 +2652,26 @@ func (m *releaseManifest) normalizeAndValidate() error {
 	return nil
 }
 
-func (m releaseManifest) imageFor(appName string, containerName string) string {
-	if image := m.exactImageFor(appName, containerName); image != "" {
-		return image
+func (m releaseManifest) imageFor(appName string, containerName string, selection releaseImageSelection) (string, error) {
+	if image, found, err := m.exactImageFor(appName, containerName, selection); found || err != nil {
+		return image, err
 	}
-	if image := m.wildcardImageFor(containerName); image != "" {
-		return image
+	if image, found, err := m.wildcardImageFor(containerName, selection); found || err != nil {
+		return image, err
 	}
-	return m.defaultImageFor(appName)
+	image, _, err := m.defaultImageFor(appName, selection)
+	return image, err
 }
 
-func (m releaseManifest) sidecarImageFor(appName string, containerName string) string {
-	if image := m.exactImageFor(appName, containerName); image != "" {
-		return image
+func (m releaseManifest) sidecarImageFor(appName string, containerName string, selection releaseImageSelection) (string, error) {
+	if image, found, err := m.exactImageFor(appName, containerName, selection); found || err != nil {
+		return image, err
 	}
-	return m.wildcardImageFor(containerName)
+	image, _, err := m.wildcardImageFor(containerName, selection)
+	return image, err
 }
 
-func (m releaseManifest) exactImageFor(appName string, containerName string) string {
+func (m releaseManifest) exactImageFor(appName string, containerName string, selection releaseImageSelection) (string, bool, error) {
 	var match *releaseImage
 	for i := range m.Images {
 		item := &m.Images[i]
@@ -2598,10 +2680,10 @@ func (m releaseManifest) exactImageFor(appName string, containerName string) str
 			break
 		}
 	}
-	return releaseImageRef(match)
+	return releaseImageRef(match, selection)
 }
 
-func (m releaseManifest) wildcardImageFor(containerName string) string {
+func (m releaseManifest) wildcardImageFor(containerName string, selection releaseImageSelection) (string, bool, error) {
 	var match *releaseImage
 	for i := range m.Images {
 		item := &m.Images[i]
@@ -2610,10 +2692,10 @@ func (m releaseManifest) wildcardImageFor(containerName string) string {
 			break
 		}
 	}
-	return releaseImageRef(match)
+	return releaseImageRef(match, selection)
 }
 
-func (m releaseManifest) defaultImageFor(appName string) string {
+func (m releaseManifest) defaultImageFor(appName string, selection releaseImageSelection) (string, bool, error) {
 	var match *releaseImage
 	for i := range m.Images {
 		item := &m.Images[i]
@@ -2622,20 +2704,65 @@ func (m releaseManifest) defaultImageFor(appName string) string {
 			break
 		}
 	}
-	return releaseImageRef(match)
+	return releaseImageRef(match, selection)
 }
 
-func releaseImageRef(match *releaseImage) string {
+func releaseImageRef(match *releaseImage, selection releaseImageSelection) (string, bool, error) {
 	if match == nil || strings.TrimSpace(match.Image) == "" {
-		return ""
+		return "", false, nil
 	}
-	if digest := strings.TrimSpace(match.Digest); digest != "" {
-		return match.Image + "@" + digest
+	repository := strings.TrimSpace(match.Image)
+	if selection.ForcePrefix != "" {
+		basename, err := imageRepositoryBasename(repository)
+		if err != nil {
+			return "", true, err
+		}
+		repository = selection.ForcePrefix + "/" + basename
 	}
-	if tag := strings.TrimSpace(match.Tag); tag != "" {
-		return match.Image + ":" + tag
+	if selection.ForceTag != "" {
+		if selection.ForcePrefix == "" {
+			if _, err := imageRepositoryBasename(repository); err != nil {
+				return "", true, err
+			}
+		}
+		return repository + ":" + selection.ForceTag, true, nil
 	}
-	return match.Image
+	digest := strings.TrimSpace(match.Digest)
+	tag := strings.TrimSpace(match.Tag)
+	switch selection.ReferenceMode {
+	case "digest":
+		if digest == "" {
+			return "", true, fmt.Errorf("release image %s has no digest required by --image-reference digest", match.Image)
+		}
+		return repository + "@" + digest, true, nil
+	case "tag":
+		if tag == "" {
+			return "", true, fmt.Errorf("release image %s has no tag required by --image-reference tag", match.Image)
+		}
+		return repository + ":" + tag, true, nil
+	}
+	if digest != "" {
+		return repository + "@" + digest, true, nil
+	}
+	if tag != "" {
+		return repository + ":" + tag, true, nil
+	}
+	return repository, true, nil
+}
+
+func imageRepositoryBasename(repository string) (string, error) {
+	repository = strings.TrimSpace(repository)
+	original := repository
+	if strings.Contains(repository, "://") {
+		return "", fmt.Errorf("release image %q must not contain a URL scheme", repository)
+	}
+	if slash := strings.LastIndex(repository, "/"); slash >= 0 {
+		repository = repository[slash+1:]
+	}
+	if repository == "" || strings.ContainsAny(repository, "@:") {
+		return "", fmt.Errorf("release image %q must be an untagged repository name for --force-image-prefix", original)
+	}
+	return repository, nil
 }
 
 type replicaProfilesFile struct {

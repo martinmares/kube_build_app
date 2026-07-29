@@ -29,6 +29,9 @@ type cliOptions struct {
 	releaseManifest  string
 	imageOverrides   []string
 	imagePolicy      string
+	imageReference   string
+	forceImageTag    string
+	forceImagePrefix string
 	syncProfile      string
 	syncPrefix       string
 	syncSet          string
@@ -89,6 +92,9 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.PersistentFlags().StringVarP(&opts.releaseManifest, "release-manifest", "r", "", "release manifest YAML path")
 	root.PersistentFlags().StringArrayVar(&opts.imageOverrides, "image", nil, "override image as app/container=image; repeatable or comma-separated")
 	root.PersistentFlags().StringVar(&opts.imagePolicy, "image-policy", "fallback", "image override policy: fallback or strict")
+	root.PersistentFlags().StringVar(&opts.imageReference, "image-reference", "auto", "release image reference: auto, digest, or tag")
+	root.PersistentFlags().StringVar(&opts.forceImageTag, "force-image-tag", "", "force one tag for every image selected from the release manifest")
+	root.PersistentFlags().StringVar(&opts.forceImagePrefix, "force-image-prefix", "", "replace release image repository prefixes and preserve only image basenames")
 	root.PersistentFlags().StringVar(&opts.syncProfile, "sync-metadata-profile", "", "sync metadata profile: none, kube-deploy-sync, argocd")
 	root.PersistentFlags().StringVar(&opts.syncPrefix, "sync-metadata-prefix", "kube-build-app.io", "sync metadata label/annotation prefix")
 	root.PersistentFlags().StringVar(&opts.syncSet, "sync-set", "", "sync metadata set name; defaults to environment")
@@ -396,6 +402,9 @@ func toBuildOptions(opts *cliOptions) buildapp.Options {
 		ReleaseManifest:  opts.releaseManifest,
 		ImageOverrides:   opts.imageOverrides,
 		ImagePolicy:      opts.imagePolicy,
+		ImageReference:   opts.imageReference,
+		ForceImageTag:    opts.forceImageTag,
+		ForceImagePrefix: opts.forceImagePrefix,
 		SyncProfile:      opts.syncProfile,
 		SyncPrefix:       opts.syncPrefix,
 		SyncSet:          opts.syncSet,

@@ -52,6 +52,38 @@ func TestCobraBuildImageOverride(t *testing.T) {
 	}
 }
 
+func TestCobraBuildForceImageTagAndPrefix(t *testing.T) {
+	root := writeCLIEnv(t)
+	target := filepath.Join(t.TempDir(), "target")
+	manifest := filepath.Join(t.TempDir(), "release.yml")
+	writeTestFile(t, manifest, `
+images:
+  - app_name: api
+    container_name: api
+    image: harbor.example.com/old-project/team/api
+    digest: sha256:abcdef
+    tag: original
+`)
+
+	runCLI(
+		t,
+		"build",
+		"-e", "test",
+		"-R", root,
+		"-t", target,
+		"--release-manifest", manifest,
+		"--force-image-prefix", "artifactory.example.com/docker-release/",
+		"--force-image-tag", "emergency-1",
+	)
+	content, err := os.ReadFile(filepath.Join(target, "deployments", "api-deployment.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "image: artifactory.example.com/docker-release/api:emergency-1") {
+		t.Fatalf("forced release image missing:\n%s", content)
+	}
+}
+
 func TestCobraBuildYAMLIndent(t *testing.T) {
 	root := writeCLIEnv(t)
 	target := filepath.Join(t.TempDir(), "target")

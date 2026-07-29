@@ -1458,8 +1458,127 @@ extra_tags: [stable]
 	if manifest.Images[0].Source == nil || manifest.Images[0].Source.Digest != "sha256:source" {
 		t.Fatalf("source = %#v", manifest.Images[0].Source)
 	}
-	if got := manifest.imageFor("api", "application"); got != "registry.example.com/release/api@sha256:target" {
+	got, err := manifest.imageFor("api", "application", releaseImageSelection{ReferenceMode: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "registry.example.com/release/api@sha256:target" {
 		t.Fatalf("image = %q", got)
+	}
+	got, err = manifest.imageFor("api", "application", releaseImageSelection{ReferenceMode: "tag"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "registry.example.com/release/api:RE_2026.07.28.01" {
+		t.Fatalf("tag image = %q", got)
+	}
+}
+
+func TestReleaseImageReferenceModes(t *testing.T) {
+	image := &releaseImage{
+		Image:  "registry.example.com/release/api",
+		Tag:    "release-1",
+		Digest: "sha256:target",
+	}
+	for _, test := range []struct {
+		mode string
+		want string
+	}{
+		{mode: "auto", want: "registry.example.com/release/api@sha256:target"},
+		{mode: "digest", want: "registry.example.com/release/api@sha256:target"},
+		{mode: "tag", want: "registry.example.com/release/api:release-1"},
+	} {
+		got, found, err := releaseImageRef(image, releaseImageSelection{ReferenceMode: test.mode})
+		if err != nil {
+			t.Fatalf("mode %s: %v", test.mode, err)
+		}
+		if !found || got != test.want {
+			t.Fatalf("mode %s = %q, %v; want %q, true", test.mode, got, found, test.want)
+		}
+	}
+
+	withoutTag := *image
+	withoutTag.Tag = ""
+	if _, _, err := releaseImageRef(&withoutTag, releaseImageSelection{ReferenceMode: "tag"}); err == nil || !strings.Contains(err.Error(), "has no tag") {
+		t.Fatalf("missing tag error = %v", err)
+	}
+	withoutDigest := *image
+	withoutDigest.Digest = ""
+	if _, _, err := releaseImageRef(&withoutDigest, releaseImageSelection{ReferenceMode: "digest"}); err == nil || !strings.Contains(err.Error(), "has no digest") {
+		t.Fatalf("missing digest error = %v", err)
+	}
+}
+
+func TestApplyImageOverridesRejectsInvalidImageReference(t *testing.T) {
+	err := applyImageOverrides(nil, Options{ImageReference: "sha"})
+	if err == nil || !strings.Contains(err.Error(), "expected auto, digest, or tag") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestReleaseImageForceTagAndPrefix(t *testing.T) {
+	image := &releaseImage{
+		Image:  "harbor.example.com/old-project/team/api",
+		Tag:    "original",
+		Digest: "sha256:target",
+	}
+	got, found, err := releaseImageRef(image, releaseImageSelection{
+		ReferenceMode: "auto",
+		ForceTag:      "emergency-1",
+		ForcePrefix:   "artifactory.example.com/docker-release",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || got != "artifactory.example.com/docker-release/api:emergency-1" {
+		t.Fatalf("image = %q, %v", got, found)
+	}
+
+	got, found, err = releaseImageRef(image, releaseImageSelection{
+		ReferenceMode: "digest",
+		ForcePrefix:   "artifactory.example.com:5000/docker-release",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || got != "artifactory.example.com:5000/docker-release/api@sha256:target" {
+		t.Fatalf("digest image = %q, %v", got, found)
+	}
+}
+
+func TestReleaseImageForceOptionsValidation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		opts Options
+		want string
+	}{
+		{
+			name: "requires release manifest",
+			opts: Options{ForceImageTag: "emergency-1"},
+			want: "require --release-manifest",
+		},
+		{
+			name: "tag conflicts with digest mode",
+			opts: Options{ReleaseManifest: "release.yml", ImageReference: "digest", ForceImageTag: "emergency-1"},
+			want: "cannot be combined",
+		},
+		{
+			name: "invalid tag",
+			opts: Options{ReleaseManifest: "release.yml", ForceImageTag: "bad/tag"},
+			want: "invalid --force-image-tag",
+		},
+		{
+			name: "prefix rejects URL scheme",
+			opts: Options{ReleaseManifest: "release.yml", ForceImagePrefix: "https://registry.example.com/release"},
+			want: "without a URL scheme",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := releaseImageSelectionFromOptions(test.opts)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -2606,11 +2725,13 @@ containers:
 `)
 
 	_, err := Build(Options{
-		Environment:     "test",
-		Root:            root,
-		Target:          target,
-		ReleaseManifest: manifestPath,
-		ImageOverrides:  []string{"api/api=registry.cli/api@sha256:1234"},
+		Environment:      "test",
+		Root:             root,
+		Target:           target,
+		ReleaseManifest:  manifestPath,
+		ImageOverrides:   []string{"api/api=registry.cli/api@sha256:1234"},
+		ForceImageTag:    "emergency-1",
+		ForceImagePrefix: "artifactory.example.com/docker-release",
 	})
 	if err != nil {
 		t.Fatal(err)

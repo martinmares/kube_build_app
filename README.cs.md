@@ -599,6 +599,9 @@ Užitečné flagy:
 -r, --release-manifest   cesta k release manifest YAML
     --image              přepíše image ve formátu app/container=image; opakovatelné
     --image-policy       politika image override: fallback nebo strict
+    --image-reference    release image reference: auto, digest nebo tag
+    --force-image-tag    vynutí jeden tag pro všechny image z release manifestu
+    --force-image-prefix nahradí prefix release images a zachová basename
 -w, --down               nastaví vybraným appkám replicas na 0
 -E, --env-file           explicitní .env soubor
     --vars-source        env, json, dot-env; opakovatelné nebo comma-separated
@@ -699,9 +702,19 @@ Image policy:
 ```bash
 kube-build-app build -e test --release-manifest release.yml --image-policy fallback
 kube-build-app build -e test --release-manifest release.yml --image-policy strict
+kube-build-app build -e test --release-manifest release.yml --image-reference tag
+kube-build-app build -e test --release-manifest release.yml \
+  --force-image-prefix artifactory.example.com/docker-release \
+  --force-image-tag emergency-1
 ```
 
 `fallback` ponechá image z app YAML, pokud override neexistuje. `strict` vyžaduje, aby každý renderovaný `<app>/<container>` měl image z `--image` nebo `--release-manifest`; to je doporučené pro release pipeline.
+
+`--image-reference auto` je výchozí a preferuje neměnný digest, potom tag a nakonec samotný název image. Režimy `digest` a `tag` explicitně vyžadují příslušný typ reference u každé nalezené image a při jeho absenci skončí chybou.
+
+Force argumenty slouží jako explicitní záchranný režim. `--force-image-prefix` nahradí celý repository prefix a zachová pouze poslední basename image. `--force-image-tag` potom nahradí všechny digesty nebo tagy z manifestu jedním společným tagem. Ovlivňují pouze images vybrané z `--release-manifest`; per-container override `--image` má stále nejvyšší prioritu. Prefix používá OCI syntaxi bez `https://` nebo `docker://`. `--force-image-tag` nelze kombinovat s `--image-reference digest`.
+
+Repository se stejným basename se při vynuceném prefixu namapují na stejný cíl. Například `team-a/api` i `team-b/api` skončí jako `<vynucený-prefix>/api`; toto akceptované omezení je potřeba ověřit na testovacím prostředí před nasazením do produkce.
 
 ## Kontrakt Placeholderů
 
