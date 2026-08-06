@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/crc32"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -241,6 +243,137 @@ containers:
 	}
 	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "image"); got != "explicit-registry/explicit-value:explicit-release" {
 		t.Fatalf("explicit image = %q", got)
+	}
+}
+
+func TestBuildSupportsEnvURL(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{env:TSM_REGISTRY_URL}}/api:{{env:TSM_RELEASE_ID}}"
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("Authorization header = %q", got)
+		}
+		fmt.Fprintln(w, "NAMESPACE=url-ns")
+		fmt.Fprintln(w, "TSM_REGISTRY_URL=url-registry")
+		fmt.Fprintln(w, "TSM_RELEASE_ID=url-release")
+	}))
+	defer server.Close()
+
+	_, err := Build(Options{
+		Environment:   "test",
+		Root:          root,
+		Target:        target,
+		EnvURL:        server.URL,
+		EnvURLHeaders: []string{"Authorization: Bearer test-token"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "metadata", "namespace"); got != "url-ns" {
+		t.Fatalf("namespace = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "image"); got != "url-registry/api:url-release" {
+		t.Fatalf("image = %q", got)
+	}
+}
+
+func TestBuildSupportsInsecureEnvURLTLS(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{env:TSM_REGISTRY_URL}}/api:{{env:TSM_RELEASE_ID}}"
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "NAMESPACE=tls-ns")
+		fmt.Fprintln(w, "TSM_REGISTRY_URL=tls-registry")
+		fmt.Fprintln(w, "TSM_RELEASE_ID=tls-release")
+	}))
+	defer server.Close()
+
+	_, err := Build(Options{
+		Environment:    "test",
+		Root:           root,
+		Target:         target,
+		EnvURL:         server.URL,
+		EnvURLInsecure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "metadata", "namespace"); got != "tls-ns" {
+		t.Fatalf("namespace = %q", got)
+	}
+}
+
+func TestBuildRejectsEnvURLCombinations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+		want string
+	}{
+		{
+			name: "env file",
+			opts: Options{EnvFile: "local.env", EnvURL: "https://example.test/env"},
+			want: "-E/--env-file cannot be combined with --env-url",
+		},
+		{
+			name: "vars source",
+			opts: Options{EnvURL: "https://example.test/env", VarsSources: []string{"json"}},
+			want: "--env-url cannot be combined with --vars-source",
+		},
+		{
+			name: "decrypt secured",
+			opts: Options{EnvURL: "https://example.test/env", DecryptSecured: true},
+			want: "--env-url cannot be combined with -d/--decrypt-secured",
+		},
+		{
+			name: "header without url",
+			opts: Options{EnvURLHeaders: []string{"Authorization: Bearer token"}},
+			want: "--env-url-header requires --env-url",
+		},
+		{
+			name: "insecure without url",
+			opts: Options{EnvURLInsecure: true},
+			want: "--env-url-insecure requires --env-url",
+		},
+		{
+			name: "invalid header",
+			opts: Options{EnvURL: "https://example.test/env", EnvURLHeaders: []string{"Authorization"}},
+			want: "invalid --env-url-header",
+		},
+		{
+			name: "invalid url scheme",
+			opts: Options{EnvURL: "file:///tmp/env"},
+			want: "expected http or https URL",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadVars(t.TempDir(), tc.opts)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("loadVars error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 

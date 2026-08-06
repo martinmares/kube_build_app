@@ -24,6 +24,9 @@ type cliOptions struct {
 	inventory        bool
 	decryptSecured   bool
 	envFile          string
+	envURL           string
+	envURLHeaders    []string
+	envURLInsecure   bool
 	varsSources      []string
 	helmEscapeAssets bool
 	releaseManifest  string
@@ -87,6 +90,9 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.PersistentFlags().StringVar(&opts.profilesFile, "profiles-file", "", "replica profiles file path")
 	root.PersistentFlags().BoolVarP(&opts.decryptSecured, "decrypt-secured", "d", false, "enable env.secured.json variables")
 	root.PersistentFlags().StringVarP(&opts.envFile, "env-file", "E", "", "explicit .env file path")
+	root.PersistentFlags().StringVar(&opts.envURL, "env-url", "", "HTTP(S) URL returning .env content")
+	root.PersistentFlags().StringArrayVar(&opts.envURLHeaders, "env-url-header", nil, "HTTP header for --env-url as 'Name: value'; repeatable")
+	root.PersistentFlags().BoolVar(&opts.envURLInsecure, "env-url-insecure", false, "skip TLS certificate verification for --env-url")
 	root.PersistentFlags().StringArrayVar(&opts.varsSources, "vars-source", nil, "variable source(s): env, json, dot-env; repeatable or comma-separated")
 	root.PersistentFlags().BoolVar(&opts.helmEscapeAssets, "helm-escape-assets", false, "escape remaining {{VAR}} placeholders in text assets")
 	root.PersistentFlags().StringVarP(&opts.releaseManifest, "release-manifest", "r", "", "release manifest YAML path")
@@ -397,6 +403,9 @@ func toBuildOptions(opts *cliOptions) buildapp.Options {
 		Inventory:        opts.inventory,
 		DecryptSecured:   opts.decryptSecured,
 		EnvFile:          opts.envFile,
+		EnvURL:           opts.envURL,
+		EnvURLHeaders:    opts.envURLHeaders,
+		EnvURLInsecure:   opts.envURLInsecure,
 		VarsSources:      opts.varsSources,
 		HelmEscapeAssets: opts.helmEscapeAssets,
 		ReleaseManifest:  opts.releaseManifest,

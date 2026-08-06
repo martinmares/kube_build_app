@@ -3,6 +3,7 @@ package buildapp
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -18,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -33,6 +36,9 @@ type Options struct {
 	Inventory        bool
 	DecryptSecured   bool
 	EnvFile          string
+	EnvURL           string
+	EnvURLHeaders    []string
+	EnvURLInsecure   bool
 	VarsSources      []string
 	HelmEscapeAssets bool
 	ReleaseManifest  string
@@ -1386,7 +1392,7 @@ func parseMemoryMiB(value string) float64 {
 
 func loadVars(envDir string, opts Options) (map[string]string, error) {
 	vars := map[string]string{}
-	sources, envFile, decryptSecured, err := effectiveVarsSources(opts)
+	sources, envFile, envURL, envURLHeaders, envURLInsecure, decryptSecured, err := effectiveVarsSources(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -1417,6 +1423,10 @@ func loadVars(envDir string, opts Options) (map[string]string, error) {
 				return nil, fmt.Errorf("vars-source 'dot-env' selected but file not found: %s", path)
 			}
 			if err := loadDotEnvFile(vars, path); err != nil {
+				return nil, err
+			}
+		case "env-url":
+			if err := loadDotEnvURL(vars, envURL, envURLHeaders, envURLInsecure); err != nil {
 				return nil, err
 			}
 		default:
@@ -1454,15 +1464,45 @@ func loadBuildVars(envDir string, opts Options) (map[string]string, error) {
 	return vars, nil
 }
 
-func effectiveVarsSources(opts Options) ([]string, string, bool, error) {
+func effectiveVarsSources(opts Options) ([]string, string, string, []string, bool, bool, error) {
 	if strings.TrimSpace(opts.EnvFile) != "" {
 		if opts.DecryptSecured {
-			return nil, "", false, errors.New("-E/--env-file cannot be combined with -d/--decrypt-secured")
+			return nil, "", "", nil, false, false, errors.New("-E/--env-file cannot be combined with -d/--decrypt-secured")
+		}
+		if strings.TrimSpace(opts.EnvURL) != "" {
+			return nil, "", "", nil, false, false, errors.New("-E/--env-file cannot be combined with --env-url")
 		}
 		if len(opts.VarsSources) > 0 {
-			return nil, "", false, errors.New("-E/--env-file cannot be combined with --vars-source")
+			return nil, "", "", nil, false, false, errors.New("-E/--env-file cannot be combined with --vars-source")
 		}
-		return []string{"dot-env"}, opts.EnvFile, false, nil
+		if len(opts.EnvURLHeaders) > 0 {
+			return nil, "", "", nil, false, false, errors.New("--env-url-header requires --env-url")
+		}
+		if opts.EnvURLInsecure {
+			return nil, "", "", nil, false, false, errors.New("--env-url-insecure requires --env-url")
+		}
+		return []string{"dot-env"}, opts.EnvFile, "", nil, false, false, nil
+	}
+	if strings.TrimSpace(opts.EnvURL) != "" {
+		if opts.DecryptSecured {
+			return nil, "", "", nil, false, false, errors.New("--env-url cannot be combined with -d/--decrypt-secured")
+		}
+		if len(opts.VarsSources) > 0 {
+			return nil, "", "", nil, false, false, errors.New("--env-url cannot be combined with --vars-source")
+		}
+		if err := validateEnvURL(opts.EnvURL); err != nil {
+			return nil, "", "", nil, false, false, err
+		}
+		if err := validateEnvURLHeaders(opts.EnvURLHeaders); err != nil {
+			return nil, "", "", nil, false, false, err
+		}
+		return []string{"env-url"}, "", opts.EnvURL, opts.EnvURLHeaders, opts.EnvURLInsecure, false, nil
+	}
+	if len(opts.EnvURLHeaders) > 0 {
+		return nil, "", "", nil, false, false, errors.New("--env-url-header requires --env-url")
+	}
+	if opts.EnvURLInsecure {
+		return nil, "", "", nil, false, false, errors.New("--env-url-insecure requires --env-url")
 	}
 
 	sources := []string{}
@@ -1476,14 +1516,14 @@ func effectiveVarsSources(opts Options) ([]string, string, bool, error) {
 			case "env", "json", "dot-env":
 				sources = append(sources, source)
 			default:
-				return nil, "", false, fmt.Errorf("invalid --vars-source %q, expected one of: env, json, dot-env", source)
+				return nil, "", "", nil, false, false, fmt.Errorf("invalid --vars-source %q, expected one of: env, json, dot-env", source)
 			}
 		}
 	}
 	if len(sources) == 0 {
 		sources = []string{"json", "env"}
 	}
-	return sources, "", opts.DecryptSecured, nil
+	return sources, "", "", nil, false, opts.DecryptSecured, nil
 }
 
 func loadEnvJSONFile(vars map[string]string, path string, secured bool) error {
@@ -1596,7 +1636,72 @@ func loadDotEnvFile(vars map[string]string, path string) error {
 	if err != nil {
 		return err
 	}
-	lines := strings.Split(string(content), "\n")
+	loadDotEnvContent(vars, string(content))
+	return nil
+}
+
+func loadDotEnvURL(vars map[string]string, rawURL string, headers []string, insecure bool) error {
+	request, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return fmt.Errorf("env url request: %w", err)
+	}
+	for _, header := range headers {
+		name, value, _ := strings.Cut(header, ":")
+		request.Header.Add(strings.TrimSpace(name), strings.TrimSpace(value))
+	}
+	client := http.Client{Timeout: 15 * time.Second}
+	if insecure {
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // Explicit CLI escape hatch for self-signed internal endpoints.
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("env url fetch %s: %w", rawURL, err)
+	}
+	defer response.Body.Close()
+	content, err := io.ReadAll(io.LimitReader(response.Body, 4*1024*1024))
+	if err != nil {
+		return fmt.Errorf("env url read %s: %w", rawURL, err)
+	}
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		body := strings.TrimSpace(string(content))
+		if len(body) > 500 {
+			body = body[:500] + "..."
+		}
+		if body != "" {
+			return fmt.Errorf("env url fetch %s failed: HTTP %d: %s", rawURL, response.StatusCode, body)
+		}
+		return fmt.Errorf("env url fetch %s failed: HTTP %d", rawURL, response.StatusCode)
+	}
+	loadDotEnvContent(vars, string(content))
+	return nil
+}
+
+func validateEnvURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid --env-url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("invalid --env-url %q: expected http or https URL", rawURL)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("invalid --env-url %q: missing host", rawURL)
+	}
+	return nil
+}
+
+func validateEnvURLHeaders(headers []string) error {
+	for _, header := range headers {
+		name, _, ok := strings.Cut(header, ":")
+		if !ok || strings.TrimSpace(name) == "" {
+			return fmt.Errorf("invalid --env-url-header %q: expected 'Name: value'", header)
+		}
+	}
+	return nil
+}
+
+func loadDotEnvContent(vars map[string]string, content string) {
+	lines := strings.Split(content, "\n")
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -1617,7 +1722,6 @@ func loadDotEnvFile(vars map[string]string, path string) error {
 		}
 		vars[key] = value
 	}
-	return nil
 }
 
 func loadVarsLegacy(envDir string) (map[string]string, error) {

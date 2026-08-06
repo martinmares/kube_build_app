@@ -604,6 +604,9 @@ Užitečné flagy:
     --force-image-prefix nahradí prefix release images a zachová basename
 -w, --down               nastaví vybraným appkám replicas na 0
 -E, --env-file           explicitní .env soubor
+    --env-url            HTTP(S) URL vracející .env obsah
+    --env-url-header     HTTP hlavička pro --env-url ve formátu 'Name: value'; opakovatelné
+    --env-url-insecure   přeskočí ověření TLS certifikátu pro --env-url
     --vars-source        env, json, dot-env; opakovatelné nebo comma-separated
 -d, --decrypt-secured    zapne proměnné z env.secured.json
     --helm-escape-assets escapuje zbývající {{VAR}} placeholdery v textových assetech
@@ -792,6 +795,17 @@ kube-build-app build -e test -E /path/to/release.env
 Tohle je doporučený produkční workflow pro secured proměnné. Čím se hodnoty dešifrují je mimo `kube-build-app`; nástroj dostane už vyřešené key/value páry.
 
 V tomto režimu je explicitní `.env` jediný zdroj proměnných. Nelze ho kombinovat s `-d` ani s `--vars-source`.
+
+Vzdálený `.env` zdroj:
+
+```bash
+kube-build-app build -e test \
+  --env-url "https://server/public/v1/tenants/acme/environments/test/export-profiles/default/render" \
+  --env-url-header "Authorization: Bearer $TOKEN"
+```
+
+V tomto režimu je stažený `.env` jediný zdroj proměnných. Nelze ho kombinovat s `-E`, `-d` ani s `--vars-source`.
+Pro interní self-signed HTTPS endpointy přidejte `--env-url-insecure`, aby se přeskočilo ověření TLS certifikátu.
 
 Zpětně kompatibilní decrypt secured JSON:
 

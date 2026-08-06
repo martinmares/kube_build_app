@@ -618,6 +618,9 @@ Useful flags:
     --force-image-prefix replace release image prefixes and keep basenames
 -w, --down               scale selected app replicas to 0
 -E, --env-file           explicit .env file path
+    --env-url            HTTP(S) URL returning .env content
+    --env-url-header     HTTP header for --env-url as 'Name: value'; repeatable
+    --env-url-insecure   skip TLS certificate verification for --env-url
     --vars-source        env, json, dot-env; repeatable or comma-separated
 -d, --decrypt-secured    enable env.secured.json variables
     --helm-escape-assets escape remaining {{VAR}} placeholders in text assets
@@ -806,6 +809,17 @@ kube-build-app build -e test -E /path/to/release.env
 This is the recommended production workflow for secured variables. The decrypting tool can be anything; `kube-build-app` receives already resolved key/value pairs.
 
 In this mode the explicit `.env` is the only variable source. It cannot be combined with `-d` or `--vars-source`.
+
+Remote `.env` source:
+
+```bash
+kube-build-app build -e test \
+  --env-url "https://server/public/v1/tenants/acme/environments/test/export-profiles/default/render" \
+  --env-url-header "Authorization: Bearer $TOKEN"
+```
+
+In this mode the downloaded `.env` is the only variable source. It cannot be combined with `-E`, `-d` or `--vars-source`.
+For internal self-signed HTTPS endpoints, add `--env-url-insecure` to skip TLS certificate verification.
 
 Backward-compatible secured JSON decrypt:
 
