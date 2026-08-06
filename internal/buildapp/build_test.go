@@ -244,6 +244,41 @@ containers:
 	}
 }
 
+func TestBuildHintsBarePlaceholderInTypedAppField(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeFile(t, filepath.Join(envDir, ".env"), "NAMESPACE=nac-test\nDEFAULT_EXPOSE_PORT=8080\n")
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+containers:
+  - name: api
+    image: registry.local/api:1
+    ports:
+      - name: http
+        port: {{DEFAULT_EXPOSE_PORT}}
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target, EnvFile: filepath.Join(envDir, ".env")})
+	if err == nil {
+		t.Fatal("expected bare placeholder YAML unmarshal error")
+	}
+	message := err.Error()
+	for _, expected := range []string{
+		"cannot unmarshal !!map into int",
+		"bare {{NAME}} placeholders are passthrough legacy placeholders",
+		"use {{env:NAME}} for .env/process variables or {{var:NAME}} for YAML vars",
+		"{{DEFAULT_EXPOSE_PORT}}",
+	} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("error message missing %q:\n%s", expected, message)
+		}
+	}
+}
+
 func TestLoadVarsDecryptSecuredUsesEncjsonAPISelection(t *testing.T) {
 	root := t.TempDir()
 	envDir := filepath.Join(root, "test")

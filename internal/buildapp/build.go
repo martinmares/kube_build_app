@@ -2892,12 +2892,51 @@ func loadApp(path string, defaultsPath string, vars map[string]string) (appModel
 
 	var app appModel
 	if err := yaml.Unmarshal([]byte(content), &app); err != nil {
-		return appModel{}, fmt.Errorf("%s: %w", path, err)
+		return appModel{}, fmt.Errorf("%s: %w", path, appYAMLUnmarshalError(content, err))
 	}
 	if app.Name == "" {
 		return appModel{}, fmt.Errorf("%s: missing app name", path)
 	}
 	return app, nil
+}
+
+func appYAMLUnmarshalError(content string, err error) error {
+	hint := barePlaceholderHint(content)
+	if hint == "" {
+		return err
+	}
+	return fmt.Errorf("%w\n\n%s", err, hint)
+}
+
+func barePlaceholderHint(content string) string {
+	pattern := regexp.MustCompile(`\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}`)
+	type occurrence struct {
+		line int
+		text string
+	}
+	var matches []occurrence
+	for index, line := range strings.Split(content, "\n") {
+		for _, value := range pattern.FindAllString(line, -1) {
+			matches = append(matches, occurrence{line: index + 1, text: value})
+			if len(matches) >= 5 {
+				break
+			}
+		}
+		if len(matches) >= 5 {
+			break
+		}
+	}
+	if len(matches) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("hint: bare {{NAME}} placeholders are passthrough legacy placeholders and are not resolved before app model parsing.\n")
+	b.WriteString("hint: use {{env:NAME}} for .env/process variables or {{var:NAME}} for YAML vars in typed app fields such as port, replicas or probe port.\n")
+	b.WriteString("hint: unresolved bare placeholder occurrence(s):")
+	for _, match := range matches {
+		fmt.Fprintf(&b, "\n  line %d: %s", match.line, match.text)
+	}
+	return b.String()
 }
 
 func extractVars(content string) (map[string]string, error) {
