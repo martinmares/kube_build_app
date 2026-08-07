@@ -1448,7 +1448,7 @@ images:
     tag: "2.4.1"
 `)
 	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
-sidecars:
+sidecar_definitions:
   - name: cgroup-runtime-exporter
     image: registry.local/cgroup-runtime-exporter:latest
     resources:
@@ -1458,6 +1458,8 @@ sidecars:
 	for _, appName := range []string{"api", "worker"} {
 		writeFile(t, filepath.Join(envDir, "apps", appName+".yml"), fmt.Sprintf(`
 name: %s
+sidecar_ref_names:
+  - cgroup-runtime-exporter
 containers:
   - name: %s
     image: registry.local/%s:latest
@@ -2932,6 +2934,156 @@ name: api
 	}
 }
 
+func TestBuildImagePolicyStrictDoesNotRequireSidecarOverride(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	manifestPath := filepath.Join(root, "release.yml")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "nac-test"},
+	})
+	writeFile(t, manifestPath, `
+images:
+  - app_name: api
+    container_name: api
+    image: registry.release/api
+    tag: "1.0.0"
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
+sidecar_definitions:
+  - name: cgroup-runtime-exporter
+    image: registry.local/cgroup-runtime-exporter:stable
+    resources:
+      cpu: {from: "10m", to: "50m"}
+      memory: {from: "16Mi", to: "64Mi"}
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+sidecar_ref_names:
+  - cgroup-runtime-exporter
+containers:
+  - name: api
+    image: "<from release manifest>"
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	_, err := Build(Options{
+		Environment:     "test",
+		Root:            root,
+		Target:          target,
+		ReleaseManifest: manifestPath,
+		ImagePolicy:     "strict",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "image"); got != "registry.release/api:1.0.0" {
+		t.Fatalf("primary image = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "1", "image"); got != "registry.local/cgroup-runtime-exporter:stable" {
+		t.Fatalf("sidecar image = %q", got)
+	}
+}
+
+func TestBuildSelectsSidecarDefinitionsAndAppliesLocalPatch(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "nac-test"},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
+sidecar_definitions:
+  - name: cgroup-runtime-exporter
+    image: registry.local/cgroup-runtime-exporter:stable
+    envs:
+      - name: CGROUP_EXPORTER_TARGET_PID_REGEXP
+        value: '(^|/)java(\s|$)'
+      - name: KEEP_ME
+        value: "default"
+    resources:
+      cpu: {from: "10m", to: "50m"}
+      memory: {from: "16Mi", to: "64Mi"}
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+sidecar_ref_names:
+  - cgroup-runtime-exporter
+sidecars:
+  - name: cgroup-runtime-exporter
+    envs:
+      - name: CGROUP_EXPORTER_TARGET_PID_REGEXP
+        value: '(^|/)nginx(\s|$)'
+containers:
+  - name: api
+    image: registry.local/api:1
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	containers := digSlice(deployment, "spec", "template", "spec", "containers")
+	sidecar := namedObject(containers, "cgroup-runtime-exporter")
+	if sidecar == nil {
+		t.Fatalf("sidecar missing: %#v", containers)
+	}
+	env := digSlice(sidecar, "env")
+	if got := envValue(env, "CGROUP_EXPORTER_TARGET_PID_REGEXP"); got != `(^|/)nginx(\s|$)` {
+		t.Fatalf("CGROUP_EXPORTER_TARGET_PID_REGEXP = %q", got)
+	}
+	if got := envValue(env, "KEEP_ME"); got != "default" {
+		t.Fatalf("KEEP_ME = %q", got)
+	}
+}
+
+func TestBuildRejectsRemovedDefaultSidecars(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "nac-test"},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
+sidecars:
+  - name: cgroup-runtime-exporter
+    image: registry.local/cgroup-runtime-exporter:stable
+`)
+	writeMinimalApp(t, envDir, "api.yml", "name: api\n")
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err == nil || !strings.Contains(err.Error(), "_defaults.yml sidecars was removed; use sidecar_definitions and app sidecar_ref_names") {
+		t.Fatalf("Build error = %v", err)
+	}
+}
+
+func TestBuildRejectsUnknownSidecarRefName(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "nac-test"},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
+sidecar_definitions:
+  - name: cgroup-runtime-exporter
+    image: registry.local/cgroup-runtime-exporter:stable
+`)
+	writeMinimalApp(t, envDir, "api.yml", "name: api\nsidecar_ref_names:\n  - missing\n")
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err == nil || !strings.Contains(err.Error(), `api: sidecar_ref_names references unknown sidecar "missing"`) {
+		t.Fatalf("Build error = %v", err)
+	}
+}
+
 func TestBuildReleaseManifestMustExistWhenSpecified(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
@@ -3967,6 +4119,114 @@ containers:
 	}
 }
 
+func TestBuildAppliesContainerDefaults(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{
+			"NAMESPACE":           "nac-test",
+			"TSM_REGISTRY_URL":    "registry.local/tsm",
+			"TSM_RELEASE_ID":      "1.0.0",
+			"DEFAULT_EXPOSE_PORT": 8080,
+			"DEFAULT_HTTP_PORT":   80,
+		},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
+container_profiles:
+  - name: java-service
+    defaults:
+      image: "{{env:TSM_REGISTRY_URL}}/{{var:APP_NAME}}:{{env:TSM_RELEASE_ID}}"
+      startup:
+        command: ["/bin/sh"]
+        arguments:
+          - /app/start-java.sh
+          - /app/jib-classpath-file
+          - /app/jib-main-class-file
+      resources:
+        cpu: {from: "100m", to: "300m"}
+        memory: {from: "512Mi", to: "1024Mi"}
+      envs:
+        - name: SPRING_CONFIG_IMPORT
+          value: "configserver:http://127.0.0.1:9999"
+        - name: REMOVE_ME
+          value: "default"
+      ports:
+        - name: http
+          port: {{env:DEFAULT_EXPOSE_PORT}}
+          expose_as:
+            - hostname: "{{var:APP_NAME}}"
+              port: {{env:DEFAULT_HTTP_PORT}}
+      probes:
+        http:
+          path: /actuator/health
+          port: {{env:DEFAULT_EXPOSE_PORT}}
+        live: {failure: 5, period: 10, timeout: 2}
+        ready: {failure: 2, period: 2, success: 2, timeout: 2}
+        start: {failure: 30, period: 10, timeout: 2}
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+vars:
+  - name: APP_NAME
+    value: api
+name: "{{var:APP_NAME}}"
+replicas: 1
+containers:
+  - name: "{{var:APP_NAME}}"
+    profile_ref_names:
+      - java-service
+    resources:
+      cpu: {from: "150m", to: "500m"}
+    envs:
+      - name: JAVA_ARGS
+        value: -Xms300m -Xmx700m
+          -Dbuild.module={{var:APP_NAME}}
+      - name: REMOVE_ME
+        remove: true
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	containerPath := []string{"spec", "template", "spec", "containers", "0"}
+	if got := digString(deployment, append(containerPath, "image")...); got != "registry.local/tsm/api:1.0.0" {
+		t.Fatalf("image = %q", got)
+	}
+	if got := digString(deployment, append(containerPath, "command", "0")...); got != "/bin/sh" {
+		t.Fatalf("command[0] = %q", got)
+	}
+	if got := digString(deployment, append(containerPath, "args", "2")...); got != "/app/jib-main-class-file" {
+		t.Fatalf("args[2] = %q", got)
+	}
+	if got := digString(deployment, append(containerPath, "resources", "requests", "cpu")...); got != "150m" {
+		t.Fatalf("cpu request = %q", got)
+	}
+	if got := digString(deployment, append(containerPath, "resources", "requests", "memory")...); got != "512Mi" {
+		t.Fatalf("memory request = %q", got)
+	}
+	env := digSlice(deployment, append(containerPath, "env")...)
+	if got := envValue(env, "SPRING_CONFIG_IMPORT"); got != "configserver:http://127.0.0.1:9999" {
+		t.Fatalf("SPRING_CONFIG_IMPORT = %q", got)
+	}
+	if got := envValue(env, "JAVA_ARGS"); got != "-Xms300m -Xmx700m -Dbuild.module=api" {
+		t.Fatalf("JAVA_ARGS = %q", got)
+	}
+	if got := envValue(env, "REMOVE_ME"); got != "" {
+		t.Fatalf("REMOVE_ME unexpectedly exists: %q", got)
+	}
+	if got := digString(deployment, append(containerPath, "readinessProbe", "httpGet", "path")...); got != "/actuator/health" {
+		t.Fatalf("readiness probe path = %q", got)
+	}
+
+	service := loadYAML(t, filepath.Join(target, "services", "api-service.yml"))
+	if got := digInt(service, "spec", "ports", "0", "targetPort"); got != 8080 {
+		t.Fatalf("service targetPort = %d", got)
+	}
+}
+
 func TestBuildRendersLegacyContainerEnvVars(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
@@ -4165,7 +4425,7 @@ workload_identity:
     - name: simple-config
       audience: simple-config-server
 
-runtime_assets:
+runtime_asset_definitions:
   - name: java-runtime-config
     source:
       base_url: https://config.example.test/simple-config-server
@@ -4197,6 +4457,8 @@ container_envs:
 `)
 	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
 name: api
+runtime_asset_ref_names:
+  - java-runtime-config
 sidecars:
   - name: metrics
     image: registry.example.test/metrics:1
@@ -4302,11 +4564,13 @@ func TestBuildRejectsRuntimeAssetCAFileWithoutMatchingSharedAsset(t *testing.T) 
 	})
 	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
 name: api
+runtime_asset_ref_names:
+  - runtime-config
 workload_identity:
   tokens:
     - name: simple-config
       audience: simple-config-server
-runtime_assets:
+runtime_asset_definitions:
   - name: runtime-config
     source:
       base_url: https://config.example.test
@@ -4467,7 +4731,7 @@ func TestValidateRejectsRuntimeAssetCAFileWithInsecureTLS(t *testing.T) {
 	}
 }
 
-func TestBuildFiltersDefaultRuntimeAssetsByAppRefNames(t *testing.T) {
+func TestBuildSelectsDefaultRuntimeAssetsByAppRefs(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
 	envDir := filepath.Join(root, "test")
@@ -4479,10 +4743,8 @@ workload_identity:
   tokens:
     - name: simple-config
       audience: simple-config-server
-runtime_assets:
+runtime_asset_definitions:
   - name: runtime-config
-    app_ref_names: [" api "]
-    container_ref_names: ["*"]
     source:
       base_url: https://config.example.test
       workload_identity_token_ref_name: simple-config
@@ -4494,7 +4756,7 @@ runtime_assets:
       - source: files/config.yml
         target: config.yml
 `)
-	writeMinimalApp(t, envDir, "api.yml", "name: api\n")
+	writeMinimalApp(t, envDir, "api.yml", "name: api\nruntime_asset_ref_names:\n  - runtime-config\n")
 	writeMinimalApp(t, envDir, "worker.yml", "name: worker\n")
 
 	if _, err := Build(Options{Environment: "test", Root: root, Target: target}); err != nil {
@@ -4517,23 +4779,38 @@ func TestRuntimeAssetReferenceMigrationErrors(t *testing.T) {
 	legacyContainers := []string{"api"}
 	tests := []struct {
 		name string
-		item runtimeAssetSpec
+		app  appModel
 		want string
 	}{
 		{
+			name: "runtime assets",
+			app:  appModel{Name: "api", LegacyRuntimeAssets: []runtimeAssetSpec{{Name: "runtime-config"}}},
+			want: "runtime_assets was removed; use runtime_asset_definitions and runtime_asset_ref_names",
+		},
+		{
 			name: "apps",
-			item: runtimeAssetSpec{Name: "runtime-config", LegacyApps: &legacyApps},
-			want: "uses removed key apps; use app_ref_names",
+			app:  appModel{Name: "api", RuntimeAssetDefs: []runtimeAssetSpec{{Name: "runtime-config", LegacyApps: &legacyApps}}},
+			want: "uses removed key apps",
 		},
 		{
 			name: "containers",
-			item: runtimeAssetSpec{Name: "runtime-config", LegacyContainers: &legacyContainers},
-			want: "uses removed key containers; use container_ref_names",
+			app:  appModel{Name: "api", RuntimeAssetDefs: []runtimeAssetSpec{{Name: "runtime-config", LegacyContainers: &legacyContainers}}},
+			want: "uses removed key containers",
+		},
+		{
+			name: "app ref names",
+			app:  appModel{Name: "api", RuntimeAssetDefs: []runtimeAssetSpec{{Name: "runtime-config", AppRefNames: []string{"api"}}}},
+			want: "uses removed key app_ref_names",
+		},
+		{
+			name: "container ref names",
+			app:  appModel{Name: "api", RuntimeAssetDefs: []runtimeAssetSpec{{Name: "runtime-config", ContainerRefNames: []string{"api"}}}},
+			want: "uses removed key container_ref_names",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			apps := []appModel{{Name: "api", RuntimeAssets: []runtimeAssetSpec{tt.item}}}
+			apps := []appModel{tt.app}
 			err := prepareRuntimeAssetsForApps(apps, "test")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("prepareRuntimeAssetsForApps error = %v, want %q", err, tt.want)
@@ -4542,16 +4819,14 @@ func TestRuntimeAssetReferenceMigrationErrors(t *testing.T) {
 	}
 }
 
-func TestRuntimeAssetRejectsUnknownAppRefName(t *testing.T) {
+func TestRuntimeAssetRejectsUnknownRefName(t *testing.T) {
 	apps := []appModel{{
-		Name: "api",
-		RuntimeAssets: []runtimeAssetSpec{{
-			Name:        "runtime-config",
-			AppRefNames: []string{"missing"},
-		}},
+		Name:             "api",
+		RuntimeAssetRefs: []string{"missing"},
+		RuntimeAssetDefs: []runtimeAssetSpec{{Name: "runtime-config"}},
 	}}
 	err := prepareRuntimeAssetsForApps(apps, "test")
-	if err == nil || !strings.Contains(err.Error(), `app_ref_names references unknown app "missing"`) {
+	if err == nil || !strings.Contains(err.Error(), `runtime_asset_ref_names references unknown runtime asset "missing"`) {
 		t.Fatalf("prepareRuntimeAssetsForApps error = %v", err)
 	}
 }
@@ -4570,6 +4845,22 @@ container_envs:
 	_, err = parseContainerEnvDefaults(mappingValue(root, "container_envs"))
 	if err == nil || !strings.Contains(err.Error(), "container_envs[].name was removed; use container_ref_name") {
 		t.Fatalf("parseContainerEnvDefaults error = %v", err)
+	}
+}
+
+func TestContainerProfilesRejectNameInDefaults(t *testing.T) {
+	root, err := parseYAMLMapping(`
+container_profiles:
+  - name: java-service
+    defaults:
+      name: api
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = parseContainerProfiles(mappingValue(root, "container_profiles"))
+	if err == nil || !strings.Contains(err.Error(), `container_profiles "java-service" defaults.name is not allowed`) {
+		t.Fatalf("parseContainerProfiles error = %v", err)
 	}
 }
 

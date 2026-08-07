@@ -725,7 +725,7 @@ kube-build-app build -e test --release-manifest release.yml \
   --force-image-tag emergency-1
 ```
 
-`fallback` keeps the app YAML image when no override exists. `strict` requires every rendered `<app>/<container>` to be covered by `--image` or `--release-manifest`; this is recommended for release pipelines.
+`fallback` keeps the app YAML image when no override exists. `strict` requires every primary app `containers[]` image to be covered by `--image` or `--release-manifest`; this is recommended for release pipelines. Sidecar images may still be overridden from the release manifest, but `strict` does not require sidecars to be listed because they are often deterministic platform/helper images from the app model.
 
 `--image-reference auto` is the default and prefers an immutable digest, then a tag, then the bare image name. `digest` and `tag` explicitly require that reference type in every matched release image and fail when it is missing.
 
@@ -1340,9 +1340,11 @@ The reference contract intentionally removed ambiguous keys:
 | Removed key | Replacement |
 |---|---|
 | `envs[].workload_identity_token` | `workload_identity_token_ref_name` |
+| `runtime_assets` | `runtime_asset_definitions` + `runtime_asset_ref_names` |
 | `runtime_assets[].source.token` | `workload_identity_token_ref_name` |
-| `runtime_assets[].apps` | `app_ref_names` |
-| `runtime_assets[].containers` | `container_ref_names` |
+| `runtime_assets[].apps` | app-level `runtime_asset_ref_names` |
+| `runtime_assets[].containers` | `containers[].runtime_asset_ref_names` |
+| `_defaults.yml sidecars` | `sidecar_definitions` + app-level `sidecar_ref_names` |
 | `container_envs[].name` | `container_ref_name` |
 | `replica-profiles.yml defaults.profile` | `replica_profile_ref_name` |
 
@@ -1614,10 +1616,13 @@ Pod name is runtime/audit metadata only. Authorization should use the normalized
 
 ### 16. Runtime Assets
 
-Use `runtime_assets` to materialize authenticated binary or text files before
-the application containers start. The generated init container reads a
-projected token declared under `workload_identity`, downloads the files, and
-stores them in a shared `emptyDir` volume:
+Use `runtime_asset_definitions` to define reusable authenticated binary or text
+file groups. Apps and containers opt in with `runtime_asset_ref_names`. The
+generated init container reads a projected token declared under
+`workload_identity`, downloads the files, and stores them in a shared `emptyDir`
+volume before application containers start.
+
+Define the reusable asset in `apps/_defaults.yml`:
 
 ```yaml
 workload_identity:
@@ -1628,7 +1633,7 @@ workload_identity:
     - name: simple-config
       audience: simple-config-server
 
-runtime_assets:
+runtime_asset_definitions:
   - name: java-runtime-config
     source:
       type: simple_config
@@ -1651,14 +1656,6 @@ runtime_assets:
       # command defaults to simple-idm-token-proxy
       # image_pull_policy defaults to Always
 
-    # Optional when inherited from _defaults.yml.
-    app_ref_names:
-      - api
-
-    # Omitted container_ref_names defaults to ["*"]: all primary containers.
-    container_ref_names:
-      - "*"
-
     files:
       - source: files/ssl/tsm-client-keystore.jks
         target: tsm-client-keystore.jks
@@ -1669,6 +1666,25 @@ runtime_assets:
         target: tsm-client-truststore.jks
         mode: "0440"
 ```
+
+Select it from an app for all primary `containers[]`:
+
+```yaml
+runtime_asset_ref_names:
+  - java-runtime-config
+```
+
+Or select it only for one runtime container:
+
+```yaml
+containers:
+  - name: api
+    runtime_asset_ref_names:
+      - java-runtime-config
+```
+
+`runtime_asset_ref_names` on sidecars is also supported for the rare case where
+a sidecar needs the runtime volume. App-level refs never apply to sidecars.
 
 `source.workload_identity_token_ref_name` references
 `workload_identity.tokens[].name`; it does not define another token or
@@ -1708,17 +1724,12 @@ Defaults:
 - `source.environment`: the environment passed through `-e`
 - `source.timeout_seconds`: `30`
 - `volume.name`: runtime asset group name
-- `app_ref_names`: all apps
-- `container_ref_names`: `["*"]`
 - `files[].mode`: `"0440"`
 - fetcher resources: CPU `10m..100m`, memory `16Mi..128Mi`
 
-`app_ref_names` restricts a group inherited from `_defaults.yml` to named apps.
-The `container_ref_names` wildcard selects primary `containers` only. Name a
-sidecar explicitly when it also needs the runtime volume. Unknown app,
-container, token or shared asset references are validation errors. Application
-mounts are read-only; only the generated fetch init container receives a
-writable mount.
+Unknown runtime asset, token or shared asset references are validation errors.
+Application mounts are read-only; only the generated fetch init container
+receives a writable mount.
 
 The fetcher runs:
 
@@ -1736,18 +1747,13 @@ synchronized. A remote file change therefore requires a Pod restart or
 rollout. Use `source.label` when deployment must be pinned to a reproducible Git
 revision.
 
-`runtime_assets` can be inherited from `apps/_defaults.yml`. An app can opt out
-with:
-
-```yaml
-runtime_assets: []
-```
-
 ### 17. Sidecars and Pod Options
 
-Use app-level `sidecars` for helper containers that run in the same Pod but are not primary application containers:
+Use `sidecar_definitions` in `apps/_defaults.yml` for reusable helper
+containers. Apps opt in explicitly with `sidecar_ref_names`:
 
 ```yaml
+# apps/_defaults.yml
 workload_identity:
   service_account:
     create: true
@@ -1755,7 +1761,7 @@ workload_identity:
     - name: simple-config
       audience: simple-config-server
 
-sidecars:
+sidecar_definitions:
   - name: simple-idm-token-proxy
     image: "{{TSM_REGISTRY_URL}}/simple-idm-token-proxy:{{TSM_RELEASE_ID}}"
     startup:
@@ -1777,6 +1783,10 @@ sidecars:
         from: "32Mi"
         to: "128Mi"
 
+# apps/api.yml
+sidecar_ref_names:
+  - simple-idm-token-proxy
+
 containers:
   - name: api
     image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
@@ -1785,7 +1795,15 @@ containers:
         value: http://127.0.0.1:9999
 ```
 
-Sidecars are rendered as regular Kubernetes containers in the same Pod. They share Pod networking automatically, so `127.0.0.1` works between the app container and the sidecar. Workload identity token mounts and Downward API mounts are mounted into sidecars as well.
+Sidecars are rendered as regular Kubernetes containers in the same Pod. They
+share Pod networking automatically, so `127.0.0.1` works between the app
+container and the sidecar. Workload identity token mounts and Downward API
+mounts are mounted into sidecars as well.
+
+An app can patch a selected sidecar by defining a local `sidecars` item with the
+same `name`. Matching `envs` are merged by `name`, so app-specific overrides do
+not require duplicating the whole sidecar definition. A local `sidecars` item
+without a matching selected definition is appended as an app-only sidecar.
 
 For helper containers that need to see processes from other containers in the same Pod, enable shared process namespace:
 
@@ -1793,12 +1811,14 @@ For helper containers that need to see processes from other containers in the sa
 pod:
   share_process_namespace: true
 
+sidecar_ref_names:
+  - cgroup-runtime-exporter
+
 sidecars:
   - name: cgroup-runtime-exporter
-    image: "{{TSM_REGISTRY_URL}}/cgroup-runtime-exporter:{{TSM_RELEASE_ID}}"
     envs:
-      - name: TARGET_PID
-        value: "1"
+      - name: CGROUP_EXPORTER_TARGET_PID_REGEXP
+        value: '(^|/)java(\s|$)'
 ```
 
 This renders Kubernetes `shareProcessNamespace: true`. Sidecar ports are not used for service generation; services are generated only from primary `containers`.
@@ -1945,12 +1965,45 @@ container_envs:
     envs:
       - name: JAVA_OPTS
         value: "-Xms256m"
+
+container_profiles:
+  - name: java-jib-service
+    defaults:
+      image: "<from release manifest>"
+      startup:
+        command: ["/bin/sh"]
+        arguments:
+          - /app/start-java.sh
+          - /app/jib-classpath-file
+          - /app/jib-main-class-file
+      envs:
+        - name: SPRING_CONFIG_IMPORT
+          value: "configserver:http://127.0.0.1:9999"
+      probes:
+        http:
+          path: /actuator/health
+          port: "{{env:DEFAULT_EXPOSE_PORT}}"
+
+sidecar_definitions:
+  - name: cgroup-runtime-exporter
+    image: "{{env:DOCKER_HUB_URL}}/datalite/cgroup-runtime-exporter:2026.07.28.3"
+    envs:
+      - name: CGROUP_EXPORTER_TARGET_PID_REGEXP
+        value: '(^|/)java(\s|$)'
 ```
 
 Semantics:
 
 - generic map keys are recursively merged, app values win
 - `vars` are matched by `name`; app-level item fully replaces default item
+- `container_profiles` define reusable container defaults by `name`
+- `containers[].profile_ref_names` selects one or more profiles for that container
+- `sidecar_definitions` define reusable sidecars by `name`
+- `sidecar_ref_names` selects one or more sidecar definitions for an app
+- local `sidecars` can patch a selected sidecar by `name` or append an app-only sidecar
+- profile defaults are merged in listed order, then local container values win
+- `container_profiles[].defaults.name` is not allowed; set container names in app files
+- `container_profiles[].defaults.envs` and local `containers[].envs` are matched by `name`
 - `container_envs` are applied by `container_ref_name`
 - `container_ref_name: "*"` applies to all containers first
 - concrete container defaults are applied next

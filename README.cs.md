@@ -711,7 +711,7 @@ kube-build-app build -e test --release-manifest release.yml \
   --force-image-tag emergency-1
 ```
 
-`fallback` ponechá image z app YAML, pokud override neexistuje. `strict` vyžaduje, aby každý renderovaný `<app>/<container>` měl image z `--image` nebo `--release-manifest`; to je doporučené pro release pipeline.
+`fallback` ponechá image z app YAML, pokud override neexistuje. `strict` vyžaduje, aby každý primární app `containers[]` image měl záznam v `--image` nebo `--release-manifest`; to je doporučené pro release pipeline. Sidecar image lze z release manifestu také přepsat, ale `strict` je nevyžaduje, protože často jde o deterministické platformní/helper image z app modelu.
 
 `--image-reference auto` je výchozí a preferuje neměnný digest, potom tag a nakonec samotný název image. Režimy `digest` a `tag` explicitně vyžadují příslušný typ reference u každé nalezené image a při jeho absenci skončí chybou.
 
@@ -1326,9 +1326,11 @@ Referenční kontrakt záměrně odstranil nejednoznačné klíče:
 | Odstraněný klíč | Náhrada |
 |---|---|
 | `envs[].workload_identity_token` | `workload_identity_token_ref_name` |
+| `runtime_assets` | `runtime_asset_definitions` + `runtime_asset_ref_names` |
 | `runtime_assets[].source.token` | `workload_identity_token_ref_name` |
-| `runtime_assets[].apps` | `app_ref_names` |
-| `runtime_assets[].containers` | `container_ref_names` |
+| `runtime_assets[].apps` | app-level `runtime_asset_ref_names` |
+| `runtime_assets[].containers` | `containers[].runtime_asset_ref_names` |
+| `_defaults.yml sidecars` | `sidecar_definitions` + app-level `sidecar_ref_names` |
 | `container_envs[].name` | `container_ref_name` |
 | `replica-profiles.yml defaults.profile` | `replica_profile_ref_name` |
 
@@ -1600,10 +1602,13 @@ Pod name je jen runtime/audit metadata. Autorizace má používat normalizovanou
 
 ### 16. Runtime Assets
 
-`runtime_assets` slouží k přípravě autorizovaných binárních nebo textových
-souborů ještě před startem aplikačních containerů. Vygenerovaný init container
-použije projektovaný token deklarovaný ve `workload_identity`, stáhne soubory a
-uloží je do sdíleného `emptyDir` volume:
+`runtime_asset_definitions` definuje opakovaně použitelné skupiny
+autorizovaných binárních nebo textových souborů. Appky a containery je vybírají
+pomocí `runtime_asset_ref_names`. Vygenerovaný init container použije
+projektovaný token deklarovaný ve `workload_identity`, stáhne soubory a uloží
+je do sdíleného `emptyDir` volume ještě před startem aplikačních containerů.
+
+Opakovaně použitelný asset definujte v `apps/_defaults.yml`:
 
 ```yaml
 workload_identity:
@@ -1614,7 +1619,7 @@ workload_identity:
     - name: simple-config
       audience: simple-config-server
 
-runtime_assets:
+runtime_asset_definitions:
   - name: java-runtime-config
     source:
       type: simple_config
@@ -1637,14 +1642,6 @@ runtime_assets:
       # command má výchozí hodnotu simple-idm-token-proxy
       # image_pull_policy má výchozí hodnotu Always
 
-    # Volitelné při zdědění z _defaults.yml.
-    app_ref_names:
-      - api
-
-    # Vynechané container_ref_names znamená ["*"]: všechny primární containery.
-    container_ref_names:
-      - "*"
-
     files:
       - source: files/ssl/tsm-client-keystore.jks
         target: tsm-client-keystore.jks
@@ -1655,6 +1652,26 @@ runtime_assets:
         target: tsm-client-truststore.jks
         mode: "0440"
 ```
+
+Vyberte ho v appce pro všechny primární `containers[]`:
+
+```yaml
+runtime_asset_ref_names:
+  - java-runtime-config
+```
+
+Nebo jen pro jeden runtime container:
+
+```yaml
+containers:
+  - name: api
+    runtime_asset_ref_names:
+      - java-runtime-config
+```
+
+`runtime_asset_ref_names` v sidecarech je také podporované pro vzácný případ,
+kdy runtime volume potřebuje i sidecar. App-level refs se na sidecary nikdy
+neaplikují.
 
 `source.workload_identity_token_ref_name` odkazuje na
 `workload_identity.tokens[].name`; nevytváří druhý token ani audience.
@@ -1694,17 +1711,12 @@ Výchozí hodnoty:
 - `source.environment`: prostředí předané přes `-e`
 - `source.timeout_seconds`: `30`
 - `volume.name`: název skupiny runtime assetů
-- `app_ref_names`: všechny appky
-- `container_ref_names`: `["*"]`
 - `files[].mode`: `"0440"`
 - resources fetcheru: CPU `10m..100m`, memory `16Mi..128Mi`
 
-`app_ref_names` omezuje skupinu zděděnou z `_defaults.yml` na pojmenované
-appky. Wildcard v `container_ref_names` vybírá jen primární `containers`. Pokud
-runtime volume potřebuje také sidecar, musí být uveden explicitně jeho název.
-Neexistující reference na appku, container, token nebo shared asset je
-validační chyba. Mount v aplikačním containeru je read-only; zapisovat do něj
-může pouze vygenerovaný fetch init container.
+Neexistující reference na runtime asset, token nebo shared asset je validační
+chyba. Mount v aplikačním containeru je read-only; zapisovat do něj může pouze
+vygenerovaný fetch init container.
 
 Fetcher spouští:
 
@@ -1721,18 +1733,13 @@ Runtime assety se stáhnou jednou při startu Podu; průběžně se nesynchroniz
 Změna vzdáleného souboru proto vyžaduje restart nebo rollout Podu. Pokud musí
 být deployment svázaný s reprodukovatelnou Git revizí, použijte `source.label`.
 
-`runtime_assets` lze zdědit z `apps/_defaults.yml`. Konkrétní appka je může
-vypnout:
-
-```yaml
-runtime_assets: []
-```
-
 ### 17. Sidecars a Pod Options
 
-App-level `sidecars` použijte pro pomocné containery, které běží ve stejném Podu, ale nejsou primární aplikační containery:
+`sidecar_definitions` v `apps/_defaults.yml` použijte pro opakovaně použitelné
+pomocné containery. Appky si je explicitně vybírají pomocí `sidecar_ref_names`:
 
 ```yaml
+# apps/_defaults.yml
 workload_identity:
   service_account:
     create: true
@@ -1740,7 +1747,7 @@ workload_identity:
     - name: simple-config
       audience: simple-config-server
 
-sidecars:
+sidecar_definitions:
   - name: simple-idm-token-proxy
     image: "{{TSM_REGISTRY_URL}}/simple-idm-token-proxy:{{TSM_RELEASE_ID}}"
     startup:
@@ -1762,6 +1769,10 @@ sidecars:
         from: "32Mi"
         to: "128Mi"
 
+# apps/api.yml
+sidecar_ref_names:
+  - simple-idm-token-proxy
+
 containers:
   - name: api
     image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
@@ -1770,7 +1781,15 @@ containers:
         value: http://127.0.0.1:9999
 ```
 
-Sidecary se renderují jako běžné Kubernetes containery ve stejném Podu. Síť v Podu sdílí automaticky, takže `127.0.0.1` funguje mezi aplikačním containerem a sidecarem. Workload identity token mounty i Downward API mounty se mountují i do sidecarů.
+Sidecary se renderují jako běžné Kubernetes containery ve stejném Podu. Síť v
+Podu sdílí automaticky, takže `127.0.0.1` funguje mezi aplikačním containerem a
+sidecarem. Workload identity token mounty i Downward API mounty se mountují i do
+sidecarů.
+
+Appka může vybraný sidecar upravit lokální položkou `sidecars` se stejným
+`name`. Shodné `envs` se mergují podle `name`, takže app-specific override
+nevyžaduje opsat celý sidecar. Lokální `sidecars` položka bez vybrané definice
+se přidá jako sidecar jen pro danou appku.
 
 Pro pomocné containery, které potřebují vidět procesy ostatních containerů ve stejném Podu, zapněte sdílený process namespace:
 
@@ -1778,12 +1797,14 @@ Pro pomocné containery, které potřebují vidět procesy ostatních container�
 pod:
   share_process_namespace: true
 
+sidecar_ref_names:
+  - cgroup-runtime-exporter
+
 sidecars:
   - name: cgroup-runtime-exporter
-    image: "{{TSM_REGISTRY_URL}}/cgroup-runtime-exporter:{{TSM_RELEASE_ID}}"
     envs:
-      - name: TARGET_PID
-        value: "1"
+      - name: CGROUP_EXPORTER_TARGET_PID_REGEXP
+        value: '(^|/)java(\s|$)'
 ```
 
 Výsledkem je Kubernetes `shareProcessNamespace: true`. Porty sidecarů se nepoužívají pro generování Service; služby se generují jen z primárních `containers`.
@@ -1930,12 +1951,45 @@ container_envs:
     envs:
       - name: JAVA_OPTS
         value: "-Xms256m"
+
+container_profiles:
+  - name: java-jib-service
+    defaults:
+      image: "<from release manifest>"
+      startup:
+        command: ["/bin/sh"]
+        arguments:
+          - /app/start-java.sh
+          - /app/jib-classpath-file
+          - /app/jib-main-class-file
+      envs:
+        - name: SPRING_CONFIG_IMPORT
+          value: "configserver:http://127.0.0.1:9999"
+      probes:
+        http:
+          path: /actuator/health
+          port: "{{env:DEFAULT_EXPOSE_PORT}}"
+
+sidecar_definitions:
+  - name: cgroup-runtime-exporter
+    image: "{{env:DOCKER_HUB_URL}}/datalite/cgroup-runtime-exporter:2026.07.28.3"
+    envs:
+      - name: CGROUP_EXPORTER_TARGET_PID_REGEXP
+        value: '(^|/)java(\s|$)'
 ```
 
 Semantika:
 
 - obecné map klíče se rekurzivně mergují, app hodnoty vítězí
 - `vars` se párují podle `name`; app položka plně nahradí default položku
+- `container_profiles` definují znovupoužitelné container defaults podle `name`
+- `containers[].profile_ref_names` vybere jeden nebo více profilů pro daný container
+- `sidecar_definitions` definují znovupoužitelné sidecary podle `name`
+- `sidecar_ref_names` vybere jednu nebo více sidecar definic pro danou appku
+- lokální `sidecars` může upravit vybraný sidecar podle `name` nebo přidat sidecar jen pro appku
+- profily se mergují v uvedeném pořadí, potom vítězí lokální hodnoty containeru
+- `container_profiles[].defaults.name` není povolené; názvy containerů patří do app souborů
+- `container_profiles[].defaults.envs` a lokální `containers[].envs` se párují podle `name`
 - `container_envs` se aplikují podle `container_ref_name`
 - `container_ref_name: "*"` se aplikuje na všechny containery jako první
 - concrete container defaults se aplikují potom

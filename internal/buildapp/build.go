@@ -148,7 +148,11 @@ type appModel struct {
 	PodRaw               map[string]any       `yaml:"pod_raw"`
 	Autoscaling          autoscalingSpec      `yaml:"autoscaling"`
 	RolloutOn            rolloutOnSpec        `yaml:"rollout_on"`
-	RuntimeAssets        []runtimeAssetSpec   `yaml:"runtime_assets"`
+	SidecarRefs          []string             `yaml:"sidecar_ref_names"`
+	RuntimeAssetRefs     []string             `yaml:"runtime_asset_ref_names"`
+	RuntimeAssetDefs     []runtimeAssetSpec   `yaml:"runtime_asset_definitions"`
+	LegacyRuntimeAssets  []runtimeAssetSpec   `yaml:"runtime_assets"`
+	RuntimeAssets        []runtimeAssetSpec   `yaml:"-"`
 	Tools                []toolSpec           `yaml:"tools"`
 	InitContainers       []initContainerSpec  `yaml:"init_containers"`
 	Registry             []registrySpec       `yaml:"registry"`
@@ -305,6 +309,8 @@ type antiAffinitySpec struct {
 
 type containerSpec struct {
 	Name                 string                    `yaml:"name"`
+	ProfileRefNames      []string                  `yaml:"profile_ref_names"`
+	RuntimeAssetRefs     []string                  `yaml:"runtime_asset_ref_names"`
 	Image                string                    `yaml:"image"`
 	ImagePullPolicy      string                    `yaml:"image_pull_policy"`
 	Assets               []assetSpec               `yaml:"assets"`
@@ -588,6 +594,16 @@ type containerEnvDefault struct {
 	ContainerRefName string   `yaml:"container_ref_name"`
 	LegacyName       string   `yaml:"name"`
 	Envs             []envVar `yaml:"envs"`
+}
+
+type containerProfile struct {
+	Name     string
+	Defaults *yaml.Node
+}
+
+type sidecarDefinition struct {
+	Name string
+	Node *yaml.Node
 }
 
 type startupSpec struct {
@@ -1768,60 +1784,126 @@ func loadApps(appFiles []string, defaultsPath string, vars map[string]string, en
 }
 
 func prepareRuntimeAssetsForApps(apps []appModel, environment string) error {
-	appNames := make(map[string]bool, len(apps))
-	for _, app := range apps {
-		appNames[app.Name] = true
-	}
 	for appIndex := range apps {
 		app := &apps[appIndex]
-		filtered := make([]runtimeAssetSpec, 0, len(app.RuntimeAssets))
-		for _, item := range app.RuntimeAssets {
+		if len(app.LegacyRuntimeAssets) > 0 {
+			return fmt.Errorf("%s: runtime_assets was removed; use runtime_asset_definitions and runtime_asset_ref_names", app.Name)
+		}
+		for _, item := range app.RuntimeAssetDefs {
 			if item.LegacyApps != nil {
 				return fmt.Errorf(
-					"%s: runtime_assets %q uses removed key apps; use app_ref_names",
+					"%s: runtime_asset_definitions %q uses removed key apps; select assets from apps with runtime_asset_ref_names",
 					app.Name,
 					item.Name,
 				)
 			}
 			if item.LegacyContainers != nil {
 				return fmt.Errorf(
-					"%s: runtime_assets %q uses removed key containers; use container_ref_names",
+					"%s: runtime_asset_definitions %q uses removed key containers; select assets from containers with runtime_asset_ref_names",
 					app.Name,
 					item.Name,
 				)
 			}
-			for _, refName := range item.AppRefNames {
-				refName = strings.TrimSpace(refName)
-				if refName != "*" && !appNames[refName] {
-					return fmt.Errorf(
-						"%s: runtime_assets %q app_ref_names references unknown app %q",
-						app.Name,
-						item.Name,
-						refName,
-					)
-				}
+			if len(item.AppRefNames) > 0 {
+				return fmt.Errorf("%s: runtime_asset_definitions %q uses removed key app_ref_names; select assets from apps with runtime_asset_ref_names", app.Name, item.Name)
 			}
-			if runtimeAssetAppliesToApp(item, app.Name) {
-				filtered = append(filtered, item)
+			if len(item.ContainerRefNames) > 0 {
+				return fmt.Errorf("%s: runtime_asset_definitions %q uses removed key container_ref_names; select assets from containers with runtime_asset_ref_names", app.Name, item.Name)
 			}
 		}
-		app.RuntimeAssets = filtered
+		resolved, err := resolveRuntimeAssetRefs(*app)
+		if err != nil {
+			return err
+		}
+		app.RuntimeAssets = resolved
 		normalizeRuntimeAssets(app, environment)
 	}
 	return nil
 }
 
-func runtimeAssetAppliesToApp(item runtimeAssetSpec, appName string) bool {
-	if len(item.AppRefNames) == 0 {
-		return true
+func resolveRuntimeAssetRefs(app appModel) ([]runtimeAssetSpec, error) {
+	definitions := map[string]runtimeAssetSpec{}
+	order := make([]string, 0, len(app.RuntimeAssetDefs))
+	for _, item := range app.RuntimeAssetDefs {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			return nil, fmt.Errorf("%s: runtime_asset_definitions[].name is required", app.Name)
+		}
+		if _, exists := definitions[name]; exists {
+			return nil, fmt.Errorf("%s: duplicate runtime_asset_definitions name %q", app.Name, name)
+		}
+		item.Name = name
+		definitions[name] = item
+		order = append(order, name)
 	}
-	for _, refName := range item.AppRefNames {
+
+	selected := map[string]runtimeAssetSpec{}
+	selectedOrder := []string{}
+	addRef := func(refName, containerName string) error {
 		refName = strings.TrimSpace(refName)
-		if refName == "*" || refName == appName {
-			return true
+		if refName == "" {
+			return nil
+		}
+		definition, ok := definitions[refName]
+		if !ok {
+			return fmt.Errorf("%s: runtime_asset_ref_names references unknown runtime asset %q", app.Name, refName)
+		}
+		item, exists := selected[refName]
+		if !exists {
+			item = definition
+			item.ContainerRefNames = nil
+			selectedOrder = append(selectedOrder, refName)
+		}
+		item.ContainerRefNames = appendUniqueString(item.ContainerRefNames, containerName)
+		selected[refName] = item
+		return nil
+	}
+
+	for _, refName := range app.RuntimeAssetRefs {
+		if err := addRef(refName, "*"); err != nil {
+			return nil, err
 		}
 	}
-	return false
+	for _, container := range app.Containers {
+		for _, refName := range container.RuntimeAssetRefs {
+			if err := addRef(refName, container.Name); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, sidecar := range app.Sidecars {
+		for _, refName := range sidecar.RuntimeAssetRefs {
+			if err := addRef(refName, sidecar.Name); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	definitionPosition := map[string]int{}
+	for index, name := range order {
+		definitionPosition[name] = index
+	}
+	sort.SliceStable(selectedOrder, func(i, j int) bool {
+		return definitionPosition[selectedOrder[i]] < definitionPosition[selectedOrder[j]]
+	})
+	resolved := make([]runtimeAssetSpec, 0, len(selectedOrder))
+	for _, name := range selectedOrder {
+		resolved = append(resolved, selected[name])
+	}
+	return resolved, nil
+}
+
+func appendUniqueString(items []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return items
+	}
+	for _, item := range items {
+		if item == value {
+			return items
+		}
+	}
+	return append(items, value)
 }
 
 func normalizeRuntimeAssets(app *appModel, environment string) {
@@ -2505,7 +2587,7 @@ func applyImageOverrides(apps []appModel, opts Options) error {
 	}
 	if policy == "strict" {
 		for _, app := range apps {
-			for _, container := range appRuntimeContainers(app) {
+			for _, container := range app.Containers {
 				key := imageKey{App: app.Name, Container: container.Name}
 				if images[key] == "" {
 					return fmt.Errorf("image override missing for %s/%s in strict image policy", app.Name, container.Name)
@@ -3104,7 +3186,23 @@ func mergeDefaults(defaultsContent, appContent string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if mappingValue(defaultsNode, "container_defaults") != nil {
+		return "", errors.New("container_defaults was removed; use container_profiles and containers[].profile_ref_names")
+	}
+	containerProfiles, err := parseContainerProfiles(mappingValue(defaultsNode, "container_profiles"))
+	if err != nil {
+		return "", err
+	}
+	if mappingValue(defaultsNode, "sidecars") != nil {
+		return "", errors.New("_defaults.yml sidecars was removed; use sidecar_definitions and app sidecar_ref_names")
+	}
+	sidecarDefinitions, err := parseSidecarDefinitions(mappingValue(defaultsNode, "sidecar_definitions"))
+	if err != nil {
+		return "", err
+	}
 
+	removeMappingValue(defaultsNode, "container_profiles")
+	removeMappingValue(defaultsNode, "sidecar_definitions")
 	merged := mergeMappingNodes(defaultsNode, appNode)
 	mergedVars, err := mergeVarsFromNodes(defaultsNode, appNode)
 	if err != nil {
@@ -3112,6 +3210,12 @@ func mergeDefaults(defaultsContent, appContent string) (string, error) {
 	}
 	setMappingValue(merged, "vars", mergedVars)
 	removeMappingValue(merged, "container_envs")
+	if err := applySidecarRefs(merged, sidecarDefinitions); err != nil {
+		return "", err
+	}
+	if err := applyContainerProfiles(merged, containerProfiles); err != nil {
+		return "", err
+	}
 	if err := applyContainerEnvDefaults(merged, containerEnvDefaults); err != nil {
 		return "", err
 	}
@@ -3140,6 +3244,208 @@ func parseContainerEnvDefaults(node *yaml.Node) ([]containerEnvDefault, error) {
 		}
 	}
 	return items, nil
+}
+
+func parseContainerProfiles(node *yaml.Node) (map[string]containerProfile, error) {
+	if node == nil {
+		return nil, nil
+	}
+	if node.Kind != yaml.SequenceNode {
+		return nil, errors.New("container_profiles must be a sequence")
+	}
+	result := map[string]containerProfile{}
+	for _, item := range node.Content {
+		if item.Kind != yaml.MappingNode {
+			return nil, errors.New("container_profiles items must be mappings")
+		}
+		name := strings.TrimSpace(scalarMappingValue(item, "name"))
+		if name == "" {
+			return nil, errors.New("container_profiles[].name is required")
+		}
+		if _, exists := result[name]; exists {
+			return nil, fmt.Errorf("duplicate container_profiles name %q", name)
+		}
+		defaultsNode := mappingValue(item, "defaults")
+		if defaultsNode == nil {
+			return nil, fmt.Errorf("container_profiles %q defaults is required", name)
+		}
+		if defaultsNode.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("container_profiles %q defaults must be a mapping", name)
+		}
+		if mappingValue(defaultsNode, "name") != nil {
+			return nil, fmt.Errorf("container_profiles %q defaults.name is not allowed; set container names in app files", name)
+		}
+		result[name] = containerProfile{Name: name, Defaults: cloneNode(defaultsNode)}
+	}
+	return result, nil
+}
+
+func parseSidecarDefinitions(node *yaml.Node) (map[string]sidecarDefinition, error) {
+	if node == nil {
+		return nil, nil
+	}
+	if node.Kind != yaml.SequenceNode {
+		return nil, errors.New("sidecar_definitions must be a sequence")
+	}
+	result := map[string]sidecarDefinition{}
+	for _, item := range node.Content {
+		if item.Kind != yaml.MappingNode {
+			return nil, errors.New("sidecar_definitions items must be mappings")
+		}
+		name := strings.TrimSpace(scalarMappingValue(item, "name"))
+		if name == "" {
+			return nil, errors.New("sidecar_definitions[].name is required")
+		}
+		if _, exists := result[name]; exists {
+			return nil, fmt.Errorf("duplicate sidecar_definitions name %q", name)
+		}
+		result[name] = sidecarDefinition{Name: name, Node: cloneNode(item)}
+	}
+	return result, nil
+}
+
+func applySidecarRefs(root *yaml.Node, definitions map[string]sidecarDefinition) error {
+	refNames, err := stringSequenceMappingValue(root, "sidecar_ref_names")
+	if err != nil {
+		return fmt.Errorf("%s: sidecar_ref_names: %w", scalarMappingValue(root, "name"), err)
+	}
+	removeMappingValue(root, "sidecar_ref_names")
+	if len(refNames) == 0 {
+		return nil
+	}
+	resolved := &yaml.Node{Kind: yaml.SequenceNode}
+	resolvedByName := map[string]int{}
+	for _, refName := range refNames {
+		definition, ok := definitions[refName]
+		if !ok {
+			return fmt.Errorf("%s: sidecar_ref_names references unknown sidecar %q", scalarMappingValue(root, "name"), refName)
+		}
+		if _, exists := resolvedByName[refName]; exists {
+			continue
+		}
+		resolvedByName[refName] = len(resolved.Content)
+		resolved.Content = append(resolved.Content, cloneNode(definition.Node))
+	}
+
+	localSidecars := mappingValue(root, "sidecars")
+	if localSidecars != nil {
+		if localSidecars.Kind != yaml.SequenceNode {
+			return fmt.Errorf("%s: sidecars must be a sequence", scalarMappingValue(root, "name"))
+		}
+		for _, localSidecar := range localSidecars.Content {
+			if localSidecar.Kind != yaml.MappingNode {
+				return fmt.Errorf("%s: sidecars items must be mappings", scalarMappingValue(root, "name"))
+			}
+			name := strings.TrimSpace(scalarMappingValue(localSidecar, "name"))
+			if name == "" {
+				return fmt.Errorf("%s: sidecars[].name is required", scalarMappingValue(root, "name"))
+			}
+			if index, exists := resolvedByName[name]; exists {
+				merged, err := mergeContainerDefaultNodes(resolved.Content[index], localSidecar)
+				if err != nil {
+					return err
+				}
+				resolved.Content[index] = merged
+				continue
+			}
+			resolvedByName[name] = len(resolved.Content)
+			resolved.Content = append(resolved.Content, cloneNode(localSidecar))
+		}
+	}
+	setMappingValue(root, "sidecars", resolved)
+	return nil
+}
+
+func applyContainerProfiles(root *yaml.Node, profiles map[string]containerProfile) error {
+	if len(profiles) == 0 {
+		return nil
+	}
+	if err := applyContainerProfilesToSequence(scalarMappingValue(root, "name"), "containers", mappingValue(root, "containers"), profiles); err != nil {
+		return err
+	}
+	return applyContainerProfilesToSequence(scalarMappingValue(root, "name"), "sidecars", mappingValue(root, "sidecars"), profiles)
+}
+
+func applyContainerProfilesToSequence(appName, fieldName string, containersNode *yaml.Node, profiles map[string]containerProfile) error {
+	if containersNode == nil || containersNode.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for _, containerNode := range containersNode.Content {
+		if containerNode.Kind != yaml.MappingNode {
+			continue
+		}
+		profileRefNames, err := stringSequenceMappingValue(containerNode, "profile_ref_names")
+		if err != nil {
+			return fmt.Errorf("%s: %s[].profile_ref_names: %w", appName, fieldName, err)
+		}
+		if len(profileRefNames) == 0 {
+			continue
+		}
+		containerName := scalarMappingValue(containerNode, "name")
+		effective := &yaml.Node{Kind: yaml.MappingNode}
+		for _, profileRefName := range profileRefNames {
+			profile, ok := profiles[profileRefName]
+			if !ok {
+				return fmt.Errorf("%s: %s %q profile_ref_names references unknown profile %q", appName, fieldName, containerName, profileRefName)
+			}
+			effective, err = mergeContainerDefaultNodes(effective, profile.Defaults)
+			if err != nil {
+				return err
+			}
+		}
+		merged, err := mergeContainerDefaultNodes(effective, containerNode)
+		if err != nil {
+			return err
+		}
+		removeMappingValue(merged, "profile_ref_names")
+		*containerNode = *merged
+	}
+	return nil
+}
+
+func mergeContainerDefaultNodes(defaultsNode, appNode *yaml.Node) (*yaml.Node, error) {
+	merged := mergeMappingNodes(defaultsNode, appNode)
+	defaultEnvs := mappingValue(defaultsNode, "envs")
+	appEnvs := mappingValue(appNode, "envs")
+	if defaultEnvs == nil && appEnvs == nil {
+		return merged, nil
+	}
+	defaultVars, err := parseVarsNode(defaultEnvs, true)
+	if err != nil {
+		return nil, err
+	}
+	appVars, err := parseVarsNode(appEnvs, true)
+	if err != nil {
+		return nil, err
+	}
+	mergedVars := mergeVars(defaultVars, appVars)
+	if len(mergedVars) == 0 {
+		removeMappingValue(merged, "envs")
+	} else {
+		setMappingValue(merged, "envs", varsToNode(mergedVars))
+	}
+	return merged, nil
+}
+
+func stringSequenceMappingValue(node *yaml.Node, key string) ([]string, error) {
+	value := mappingValue(node, key)
+	if value == nil {
+		return nil, nil
+	}
+	if value.Kind != yaml.SequenceNode {
+		return nil, errors.New("must be a sequence")
+	}
+	var result []string
+	for _, item := range value.Content {
+		if item.Kind != yaml.ScalarNode {
+			return nil, errors.New("must contain only scalar strings")
+		}
+		text := strings.TrimSpace(item.Value)
+		if text != "" {
+			result = append(result, text)
+		}
+	}
+	return result, nil
 }
 
 func applyContainerEnvDefaults(root *yaml.Node, defaults []containerEnvDefault) error {
