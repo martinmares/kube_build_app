@@ -3305,20 +3305,18 @@ func parseSidecarDefinitions(node *yaml.Node) (map[string]sidecarDefinition, err
 }
 
 func applySidecarRefs(root *yaml.Node, definitions map[string]sidecarDefinition) error {
+	appName := scalarMappingValue(root, "name")
 	refNames, err := stringSequenceMappingValue(root, "sidecar_ref_names")
 	if err != nil {
-		return fmt.Errorf("%s: sidecar_ref_names: %w", scalarMappingValue(root, "name"), err)
+		return fmt.Errorf("%s: sidecar_ref_names: %w", appName, err)
 	}
 	removeMappingValue(root, "sidecar_ref_names")
-	if len(refNames) == 0 {
-		return nil
-	}
 	resolved := &yaml.Node{Kind: yaml.SequenceNode}
 	resolvedByName := map[string]int{}
 	for _, refName := range refNames {
 		definition, ok := definitions[refName]
 		if !ok {
-			return fmt.Errorf("%s: sidecar_ref_names references unknown sidecar %q", scalarMappingValue(root, "name"), refName)
+			return fmt.Errorf("%s: sidecar_ref_names references unknown sidecar %q", appName, refName)
 		}
 		if _, exists := resolvedByName[refName]; exists {
 			continue
@@ -3330,15 +3328,15 @@ func applySidecarRefs(root *yaml.Node, definitions map[string]sidecarDefinition)
 	localSidecars := mappingValue(root, "sidecars")
 	if localSidecars != nil {
 		if localSidecars.Kind != yaml.SequenceNode {
-			return fmt.Errorf("%s: sidecars must be a sequence", scalarMappingValue(root, "name"))
+			return fmt.Errorf("%s: sidecars must be a sequence", appName)
 		}
 		for _, localSidecar := range localSidecars.Content {
 			if localSidecar.Kind != yaml.MappingNode {
-				return fmt.Errorf("%s: sidecars items must be mappings", scalarMappingValue(root, "name"))
+				return fmt.Errorf("%s: sidecars items must be mappings", appName)
 			}
 			name := strings.TrimSpace(scalarMappingValue(localSidecar, "name"))
 			if name == "" {
-				return fmt.Errorf("%s: sidecars[].name is required", scalarMappingValue(root, "name"))
+				return fmt.Errorf("%s: sidecars[].name is required", appName)
 			}
 			if index, exists := resolvedByName[name]; exists {
 				merged, err := mergeContainerDefaultNodes(resolved.Content[index], localSidecar)
@@ -3348,9 +3346,15 @@ func applySidecarRefs(root *yaml.Node, definitions map[string]sidecarDefinition)
 				resolved.Content[index] = merged
 				continue
 			}
+			if _, exists := definitions[name]; exists {
+				return fmt.Errorf("%s: sidecars %q matches sidecar_definitions but is not selected; add it to sidecar_ref_names before patching it", appName, name)
+			}
 			resolvedByName[name] = len(resolved.Content)
 			resolved.Content = append(resolved.Content, cloneNode(localSidecar))
 		}
+	}
+	if len(resolved.Content) == 0 {
+		return nil
 	}
 	setMappingValue(root, "sidecars", resolved)
 	return nil

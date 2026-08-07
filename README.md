@@ -1800,10 +1800,12 @@ share Pod networking automatically, so `127.0.0.1` works between the app
 container and the sidecar. Workload identity token mounts and Downward API
 mounts are mounted into sidecars as well.
 
-An app can patch a selected sidecar by defining a local `sidecars` item with the
-same `name`. Matching `envs` are merged by `name`, so app-specific overrides do
-not require duplicating the whole sidecar definition. A local `sidecars` item
-without a matching selected definition is appended as an app-only sidecar.
+An app can patch a selected reusable sidecar by defining a local `sidecars` item
+with the same `name`. The sidecar must still be listed in `sidecar_ref_names`;
+otherwise the patch is rejected with a migration error. Matching `envs` are
+merged by `name`, so app-specific overrides do not require duplicating the whole
+sidecar definition. A local `sidecars` item without a matching definition is
+appended as an app-only sidecar.
 
 For helper containers that need to see processes from other containers in the same Pod, enable shared process namespace:
 

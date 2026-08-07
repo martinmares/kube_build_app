@@ -1786,10 +1786,11 @@ Podu sdílí automaticky, takže `127.0.0.1` funguje mezi aplikačním container
 sidecarem. Workload identity token mounty i Downward API mounty se mountují i do
 sidecarů.
 
-Appka může vybraný sidecar upravit lokální položkou `sidecars` se stejným
-`name`. Shodné `envs` se mergují podle `name`, takže app-specific override
-nevyžaduje opsat celý sidecar. Lokální `sidecars` položka bez vybrané definice
-se přidá jako sidecar jen pro danou appku.
+Appka může vybraný znovupoužitelný sidecar upravit lokální položkou `sidecars`
+se stejným `name`. Sidecar musí být dál uvedený v `sidecar_ref_names`; jinak se
+patch odmítne migrační chybou. Shodné `envs` se mergují podle `name`, takže
+app-specific override nevyžaduje opsat celý sidecar. Lokální `sidecars` položka
+bez odpovídající definice se přidá jako sidecar jen pro danou appku.
 
 Pro pomocné containery, které potřebují vidět procesy ostatních containerů ve stejném Podu, zapněte sdílený process namespace:
 

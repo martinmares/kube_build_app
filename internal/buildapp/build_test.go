@@ -3044,6 +3044,47 @@ containers:
 	}
 }
 
+func TestBuildRejectsUnselectedSidecarDefinitionPatch(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "nac-test"},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
+sidecar_definitions:
+  - name: cgroup-runtime-exporter
+    image: registry.local/cgroup-runtime-exporter:stable
+    startup:
+      command: ["/usr/local/bin/cgroup-runtime-exporter"]
+    envs:
+      - name: CGROUP_EXPORTER_TARGET_PID_REGEXP
+        value: '(^|/)java(\s|$)'
+    resources:
+      cpu: {from: "2m", to: "10m"}
+      memory: {from: "8Mi", to: "32Mi"}
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "ui.yml"), `
+name: ui
+sidecars:
+  - name: cgroup-runtime-exporter
+    envs:
+      - name: CGROUP_EXPORTER_TARGET_PID_REGEXP
+        value: '(^|/)nginx(\s|$)'
+containers:
+  - name: ui
+    image: registry.local/ui:1
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	_, err := Build(Options{Environment: "test", Root: root, Target: target})
+	if err == nil || !strings.Contains(err.Error(), `ui: sidecars "cgroup-runtime-exporter" matches sidecar_definitions but is not selected; add it to sidecar_ref_names before patching it`) {
+		t.Fatalf("Build error = %v", err)
+	}
+}
+
 func TestBuildRejectsRemovedDefaultSidecars(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
