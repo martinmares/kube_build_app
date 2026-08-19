@@ -173,6 +173,67 @@ kube-build-app import -f deployment.yml -o environments/test/apps/api.yml
 kube-build-app completion zsh
 ```
 
+### External Resource Policy
+
+Resource ownership can be separated from the environment repository by using
+`-P/--resource-policy-root`:
+
+```bash
+kube-build-app build \
+  -e test \
+  -R tsm-environments \
+  -P tsm-resources \
+  -t deploy/test
+```
+
+The policy repository mirrors app file paths from the environment repository:
+
+```text
+tsm-resources/
+  test/
+    apps/
+      tsm-gateway.yml
+```
+
+`tsm-resources/test/apps/tsm-gateway.yml` contains only resources keyed by the
+final container name:
+
+```yaml
+containers:
+  tsm-gateway:
+    cpu:
+      from: "100m"
+      to: "500m"
+    memory:
+      from: "550Mi"
+      to: "850Mi"
+
+  tsm-ui-diag:
+    cpu:
+      from: "10m"
+      to: "100m"
+    memory:
+      from: "20Mi"
+      to: "100Mi"
+```
+
+Without `-P`, inline `resources` keep their existing behavior. With `-P`, the
+external policy is strict and authoritative: a policy file is required for
+every active app, every primary container and sidecar requires an entry, and
+unknown container entries fail validation. Policy resources fully replace
+inline resources; they are not merged. CPU and memory `from`/`to` values are
+required. `ephemeral-storage` may be added with the same `from`/`to` shape.
+Generated init containers, tools, and runtime-asset fetchers retain their own
+resource configuration.
+
+`build`, `validate`, `summary`, `inventory`, and `list` all enforce the same
+policy. Inventory marks effective values with
+`"resources_source": "external-policy"`.
+
+The separate repository is a governance boundary only when protected CI/CD
+jobs always invoke `kube-build-app` with the required `-P` argument and access
+to the policy repository is restricted separately.
+
 ### Generator Commands
 
 `scaffold` is a non-interactive generator for creating environment and app model
@@ -1633,29 +1694,28 @@ workload_identity:
     - name: simple-config
       audience: simple-config-server
 
+runtime_asset_defaults:
+  source:
+    type: simple_config
+    base_url: https://config.example.test/simple-config-server
+    tenant: default
+    environment: test
+    label: release-2026.07 # optional Git label
+    workload_identity_token_ref_name: simple-config
+    ca_shared_asset_ref_name: internal-ca
+    timeout_seconds: 30
+  volume:
+    name: runtime-config
+    mount_path: /app/runtime-config
+    medium: Memory
+    size_limit: 16Mi
+  fetcher:
+    image: registry.example.test/simple-idm-token-proxy:1.0.0
+    # command defaults to simple-idm-token-proxy
+    # image_pull_policy defaults to Always
+
 runtime_asset_definitions:
   - name: java-runtime-config
-    source:
-      type: simple_config
-      base_url: https://config.example.test/simple-config-server
-      tenant: default
-      environment: test
-      label: release-2026.07 # optional Git label
-      workload_identity_token_ref_name: simple-config
-      ca_shared_asset_ref_name: internal-ca
-      timeout_seconds: 30
-
-    volume:
-      name: runtime-config
-      mount_path: /app/runtime-config
-      medium: Memory
-      size_limit: 16Mi
-
-    fetcher:
-      image: registry.example.test/simple-idm-token-proxy:1.0.0
-      # command defaults to simple-idm-token-proxy
-      # image_pull_policy defaults to Always
-
     files:
       - source: files/ssl/tsm-client-keystore.jks
         target: tsm-client-keystore.jks
@@ -1665,13 +1725,25 @@ runtime_asset_definitions:
       - source: files/ssl/tsm-client-truststore.jks
         target: tsm-client-truststore.jks
         mode: "0440"
+
+  - name: connector-runtime-config
+    files:
+      - source: files/infrastructure/mtls-connector-worker.yaml
+        target: mtls-connector-worker.yaml
+        mode: "0440"
 ```
+
+`runtime_asset_defaults` supplies the complete `source`, `volume`, and
+`fetcher` blocks when a definition omits them. A definition may replace any
+one of these blocks by declaring that complete block itself. Fields inside a
+block are not merged, which keeps the resulting configuration unambiguous.
 
 Select it from an app for all primary `containers[]`:
 
 ```yaml
 runtime_asset_ref_names:
   - java-runtime-config
+  - connector-runtime-config
 ```
 
 Or select it only for one runtime container:
@@ -1685,6 +1757,20 @@ containers:
 
 `runtime_asset_ref_names` on sidecars is also supported for the rare case where
 a sidecar needs the runtime volume. App-level refs never apply to sidecars.
+
+```yaml
+sidecars:
+  - name: mtls-gateway
+    runtime_asset_ref_names:
+      - connector-runtime-config
+```
+
+Selected definitions may share a volume when `name`, `mount_path`, `medium`,
+and `size_limit` are identical. The Pod receives one volume and each container
+receives at most one matching mount. Fetch init containers remain separate and
+run sequentially. Two definitions may not write the same `target` into a
+shared volume. A differently configured volume with the same name is also a
+validation error.
 
 `source.workload_identity_token_ref_name` references
 `workload_identity.tokens[].name`; it does not define another token or

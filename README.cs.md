@@ -161,6 +161,66 @@ kube-build-app import -f deployment.yml -o environments/test/apps/api.yml
 kube-build-app completion zsh
 ```
 
+### Externí Policy Prostředků
+
+Vlastnictví prostředků lze oddělit od repozitáře prostředí pomocí argumentu
+`-P/--resource-policy-root`:
+
+```bash
+kube-build-app build \
+  -e test \
+  -R tsm-environments \
+  -P tsm-resources \
+  -t deploy/test
+```
+
+Policy repozitář kopíruje cesty app souborů z environment repozitáře:
+
+```text
+tsm-resources/
+  test/
+    apps/
+      tsm-gateway.yml
+```
+
+`tsm-resources/test/apps/tsm-gateway.yml` obsahuje pouze prostředky indexované
+výsledným názvem containeru:
+
+```yaml
+containers:
+  tsm-gateway:
+    cpu:
+      from: "100m"
+      to: "500m"
+    memory:
+      from: "550Mi"
+      to: "850Mi"
+
+  tsm-ui-diag:
+    cpu:
+      from: "10m"
+      to: "100m"
+    memory:
+      from: "20Mi"
+      to: "100Mi"
+```
+
+Bez `-P` zůstává stávající chování inline bloků `resources`. S `-P` je externí
+policy striktní a autoritativní: každý aktivní app model musí mít policy soubor,
+každý primární container a sidecar musí mít záznam a neznámé containery způsobí
+chybu validace. Externí prostředky plně nahrazují inline hodnoty; neslučují se.
+Hodnoty CPU a memory `from`/`to` jsou povinné. Volitelně lze stejným způsobem
+přidat `ephemeral-storage`. Generované init containery, tools a fetchery runtime
+assetů si ponechávají vlastní konfiguraci prostředků.
+
+Stejnou policy kontrolují příkazy `build`, `validate`, `summary`, `inventory` a
+`list`. Inventory označí efektivní hodnoty položkou
+`"resources_source": "external-policy"`.
+
+Samostatný repozitář je skutečnou governance hranicí pouze tehdy, když chráněné
+CI/CD joby vždy spouštějí `kube-build-app` s povinným argumentem `-P` a přístup
+k policy repozitáři je řízen odděleně.
+
 ### Generator Commandy
 
 `scaffold` je neinteraktivní generátor souborů prostředí a aplikačních modelů.
@@ -1619,29 +1679,28 @@ workload_identity:
     - name: simple-config
       audience: simple-config-server
 
+runtime_asset_defaults:
+  source:
+    type: simple_config
+    base_url: https://config.example.test/simple-config-server
+    tenant: default
+    environment: test
+    label: release-2026.07 # volitelný Git label
+    workload_identity_token_ref_name: simple-config
+    ca_shared_asset_ref_name: internal-ca
+    timeout_seconds: 30
+  volume:
+    name: runtime-config
+    mount_path: /app/runtime-config
+    medium: Memory
+    size_limit: 16Mi
+  fetcher:
+    image: registry.example.test/simple-idm-token-proxy:1.0.0
+    # command má výchozí hodnotu simple-idm-token-proxy
+    # image_pull_policy má výchozí hodnotu Always
+
 runtime_asset_definitions:
   - name: java-runtime-config
-    source:
-      type: simple_config
-      base_url: https://config.example.test/simple-config-server
-      tenant: default
-      environment: test
-      label: release-2026.07 # volitelný Git label
-      workload_identity_token_ref_name: simple-config
-      ca_shared_asset_ref_name: internal-ca
-      timeout_seconds: 30
-
-    volume:
-      name: runtime-config
-      mount_path: /app/runtime-config
-      medium: Memory
-      size_limit: 16Mi
-
-    fetcher:
-      image: registry.example.test/simple-idm-token-proxy:1.0.0
-      # command má výchozí hodnotu simple-idm-token-proxy
-      # image_pull_policy má výchozí hodnotu Always
-
     files:
       - source: files/ssl/tsm-client-keystore.jks
         target: tsm-client-keystore.jks
@@ -1651,13 +1710,25 @@ runtime_asset_definitions:
       - source: files/ssl/tsm-client-truststore.jks
         target: tsm-client-truststore.jks
         mode: "0440"
+
+  - name: connector-runtime-config
+    files:
+      - source: files/infrastructure/mtls-connector-worker.yaml
+        target: mtls-connector-worker.yaml
+        mode: "0440"
 ```
+
+`runtime_asset_defaults` poskytne celé bloky `source`, `volume` a `fetcher`,
+pokud je konkrétní definice vynechá. Definice může kterýkoli blok nahradit tím,
+že jej sama uvede celý. Jednotlivá pole uvnitř bloku se neslučují, takže je
+výsledná konfigurace jednoznačná.
 
 Vyberte ho v appce pro všechny primární `containers[]`:
 
 ```yaml
 runtime_asset_ref_names:
   - java-runtime-config
+  - connector-runtime-config
 ```
 
 Nebo jen pro jeden runtime container:
@@ -1672,6 +1743,20 @@ containers:
 `runtime_asset_ref_names` v sidecarech je také podporované pro vzácný případ,
 kdy runtime volume potřebuje i sidecar. App-level refs se na sidecary nikdy
 neaplikují.
+
+```yaml
+sidecars:
+  - name: mtls-gateway
+    runtime_asset_ref_names:
+      - connector-runtime-config
+```
+
+Vybrané definice mohou sdílet volume, pokud mají shodné hodnoty `name`,
+`mount_path`, `medium` a `size_limit`. Pod dostane jedno volume a každý
+container nejvýše jeden odpovídající mount. Fetch init containery zůstávají
+samostatné a běží postupně. Dvě definice nesmějí do sdíleného volume zapisovat
+stejný `target`. Odlišně nakonfigurované volume se stejným jménem je také
+validační chyba.
 
 `source.workload_identity_token_ref_name` odkazuje na
 `workload_identity.tokens[].name`; nevytváří druhý token ani audience.

@@ -39,6 +39,21 @@ func TestCobraBuildReportsDefaultOutputDir(t *testing.T) {
 	}
 }
 
+func TestCobraResourcePolicyRootOverridesInlineResources(t *testing.T) {
+	root := writeCLIEnv(t)
+	policyRoot := filepath.Join(t.TempDir(), "resources")
+	writeTestFile(t, filepath.Join(policyRoot, "test", "apps", "api.yml"), `
+containers:
+  api:
+    cpu: {from: "300m", to: "900m"}
+    memory: {from: "256Mi", to: "768Mi"}
+`)
+	out := runCLI(t, "summary", "-e", "test", "-R", root, "-P", policyRoot)
+	if !strings.Contains(out, "| api |   2 | api       | 300m") || !strings.Contains(out, "768Mi") {
+		t.Fatalf("summary does not use external resource policy:\n%s", out)
+	}
+}
+
 func TestCobraBuildImageOverride(t *testing.T) {
 	root := writeCLIEnv(t)
 	target := filepath.Join(t.TempDir(), "target")

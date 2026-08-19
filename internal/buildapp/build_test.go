@@ -4596,6 +4596,162 @@ containers:
 	}
 }
 
+func TestBuildComposesRuntimeAssetDefaultsIntoSharedVolume(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{
+		"environment": map[string]any{"NAMESPACE": "tsm-test"},
+	})
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), `
+workload_identity:
+  tokens:
+    - name: simple-config
+      audience: simple-config-server
+
+runtime_asset_defaults:
+  source:
+    base_url: https://config.example.test/simple-config-server
+    workload_identity_token_ref_name: simple-config
+  volume:
+    name: runtime-config
+    mount_path: /app/runtime-config
+    medium: Memory
+    size_limit: 16Mi
+  fetcher:
+    image: registry.example.test/simple-idm-token-proxy:1.0.0
+
+runtime_asset_definitions:
+  - name: java-runtime-config
+    files:
+      - source: files/ssl/client-truststore.jks
+        target: client-truststore.jks
+  - name: connector-runtime-config
+    files:
+      - source: files/connector/mtls.yml
+        target: mtls.yml
+`)
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+runtime_asset_ref_names:
+  - java-runtime-config
+  - connector-runtime-config
+sidecars:
+  - name: mtls-gateway
+    image: registry.example.test/mtls-gateway:1
+    runtime_asset_ref_names:
+      - connector-runtime-config
+    resources:
+      cpu: {from: "10m", to: "50m"}
+      memory: {from: "16Mi", to: "64Mi"}
+containers:
+  - name: api
+    image: registry.example.test/api:1
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	if _, err := Build(Options{Environment: "test", Root: root, Target: target}); err != nil {
+		t.Fatal(err)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	podSpec := digAny(deployment, "spec", "template", "spec").(map[string]any)
+	if got := countNamedObjects(podSpec["volumes"].([]any), "runtime-config"); got != 1 {
+		t.Fatalf("runtime-config volume count = %d, want 1", got)
+	}
+
+	initContainers := podSpec["initContainers"].([]any)
+	if namedObject(initContainers, "runtime-assets-java-runtime-config") == nil {
+		t.Fatalf("java runtime fetcher missing: %#v", initContainers)
+	}
+	if namedObject(initContainers, "runtime-assets-connector-runtime-config") == nil {
+		t.Fatalf("connector runtime fetcher missing: %#v", initContainers)
+	}
+
+	containers := podSpec["containers"].([]any)
+	api := namedObject(containers, "api")
+	if got := countNamedObjects(digSlice(api, "volumeMounts"), "runtime-config"); got != 1 {
+		t.Fatalf("api runtime-config mount count = %d, want 1", got)
+	}
+	mtlsGateway := namedObject(containers, "mtls-gateway")
+	if got := countNamedObjects(digSlice(mtlsGateway, "volumeMounts"), "runtime-config"); got != 1 {
+		t.Fatalf("sidecar runtime-config mount count = %d, want 1", got)
+	}
+}
+
+func TestValidateRejectsDifferentlyConfiguredSharedRuntimeVolume(t *testing.T) {
+	first := validRuntimeAssetForTest("java-config", "truststore.jks")
+	second := validRuntimeAssetForTest("connector-config", "mtls.yml")
+	second.Volume.SizeLimit = "32Mi"
+	app := appModel{
+		Name:          "api",
+		RuntimeAssets: []runtimeAssetSpec{first, second},
+		Containers:    []containerSpec{{Name: "api"}},
+	}
+
+	err := validateRuntimeAssets(
+		app,
+		map[string]bool{"simple-config": true},
+		map[string]bool{},
+		map[string]bool{},
+	)
+	if err == nil || !strings.Contains(err.Error(), `volume.name "runtime-config" conflicts with a differently configured runtime volume`) {
+		t.Fatalf("validateRuntimeAssets error = %v", err)
+	}
+}
+
+func TestValidateRejectsDuplicateTargetInSharedRuntimeVolume(t *testing.T) {
+	first := validRuntimeAssetForTest("java-config", "config.yml")
+	second := validRuntimeAssetForTest("connector-config", "config.yml")
+	app := appModel{
+		Name:          "api",
+		RuntimeAssets: []runtimeAssetSpec{first, second},
+		Containers:    []containerSpec{{Name: "api"}},
+	}
+
+	err := validateRuntimeAssets(
+		app,
+		map[string]bool{"simple-config": true},
+		map[string]bool{},
+		map[string]bool{},
+	)
+	if err == nil || !strings.Contains(err.Error(), `file target "config.yml" conflicts with runtime asset "java-config"`) {
+		t.Fatalf("validateRuntimeAssets error = %v", err)
+	}
+}
+
+func validRuntimeAssetForTest(name, target string) runtimeAssetSpec {
+	return runtimeAssetSpec{
+		Name: name,
+		Source: runtimeAssetSourceSpec{
+			Type:                         "simple_config",
+			BaseURL:                      "https://config.example.test",
+			Tenant:                       "default",
+			Environment:                  "test",
+			WorkloadIdentityTokenRefName: "simple-config",
+			TimeoutSeconds:               30,
+		},
+		Volume: runtimeAssetVolumeSpec{
+			Name:      "runtime-config",
+			MountPath: "/app/runtime-config",
+			Medium:    "Memory",
+			SizeLimit: "16Mi",
+		},
+		Files: []runtimeAssetFileSpec{{
+			Source: "files/" + target,
+			Target: target,
+			Mode:   "0440",
+		}},
+		Fetcher: runtimeAssetFetcherSpec{
+			Image:   "registry.example.test/fetcher:1",
+			Command: "simple-idm-token-proxy",
+		},
+		ContainerRefNames: []string{"*"},
+	}
+}
+
 func TestBuildRejectsRuntimeAssetCAFileWithoutMatchingSharedAsset(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
@@ -4979,6 +5135,17 @@ func namedObject(items []any, name string) map[string]any {
 		}
 	}
 	return nil
+}
+
+func countNamedObjects(items []any, name string) int {
+	count := 0
+	for _, item := range items {
+		object, ok := item.(map[string]any)
+		if ok && object["name"] == name {
+			count++
+		}
+	}
+	return count
 }
 
 func mountAtPath(items []any, mountPath string) map[string]any {

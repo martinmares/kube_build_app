@@ -28,30 +28,31 @@ import (
 const appLabel = "app.kubernetes.io/name"
 
 type Options struct {
-	Environment      string
-	Root             string
-	Target           string
-	Profile          string
-	ProfilesFile     string
-	Inventory        bool
-	DecryptSecured   bool
-	EnvFile          string
-	EnvURL           string
-	EnvURLHeaders    []string
-	EnvURLInsecure   bool
-	VarsSources      []string
-	HelmEscapeAssets bool
-	ReleaseManifest  string
-	ImageOverrides   []string
-	ImagePolicy      string
-	ImageReference   string
-	ForceImageTag    string
-	ForceImagePrefix string
-	SyncProfile      string
-	SyncPrefix       string
-	SyncSet          string
-	Down             []string
-	YAMLIndent       int
+	Environment        string
+	Root               string
+	ResourcePolicyRoot string
+	Target             string
+	Profile            string
+	ProfilesFile       string
+	Inventory          bool
+	DecryptSecured     bool
+	EnvFile            string
+	EnvURL             string
+	EnvURLHeaders      []string
+	EnvURLInsecure     bool
+	VarsSources        []string
+	HelmEscapeAssets   bool
+	ReleaseManifest    string
+	ImageOverrides     []string
+	ImagePolicy        string
+	ImageReference     string
+	ForceImageTag      string
+	ForceImagePrefix   string
+	SyncProfile        string
+	SyncPrefix         string
+	SyncSet            string
+	Down               []string
+	YAMLIndent         int
 }
 
 type Result struct {
@@ -150,6 +151,7 @@ type appModel struct {
 	RolloutOn            rolloutOnSpec        `yaml:"rollout_on"`
 	SidecarRefs          []string             `yaml:"sidecar_ref_names"`
 	RuntimeAssetRefs     []string             `yaml:"runtime_asset_ref_names"`
+	RuntimeAssetDefaults runtimeAssetDefaults `yaml:"runtime_asset_defaults"`
 	RuntimeAssetDefs     []runtimeAssetSpec   `yaml:"runtime_asset_definitions"`
 	LegacyRuntimeAssets  []runtimeAssetSpec   `yaml:"runtime_assets"`
 	RuntimeAssets        []runtimeAssetSpec   `yaml:"-"`
@@ -211,6 +213,12 @@ type runtimeAssetSpec struct {
 	LegacyContainers  *[]string               `yaml:"containers"`
 	Files             []runtimeAssetFileSpec  `yaml:"files"`
 	Fetcher           runtimeAssetFetcherSpec `yaml:"fetcher"`
+}
+
+type runtimeAssetDefaults struct {
+	Source  runtimeAssetSourceSpec  `yaml:"source"`
+	Volume  runtimeAssetVolumeSpec  `yaml:"volume"`
+	Fetcher runtimeAssetFetcherSpec `yaml:"fetcher"`
 }
 
 type runtimeAssetSourceSpec struct {
@@ -682,6 +690,9 @@ func Build(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if err := applyResourcePolicies(apps, appFiles, opts); err != nil {
+		return Result{}, err
+	}
 	if err := applyImageOverrides(apps, opts); err != nil {
 		return Result{}, err
 	}
@@ -997,6 +1008,9 @@ func Inventory(opts Options) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := applyResourcePolicies(apps, appFiles, opts); err != nil {
+		return nil, err
+	}
 	sharedAssets, err := loadSharedAssets(envDir, vars, opts)
 	if err != nil {
 		return nil, err
@@ -1030,6 +1044,7 @@ func Inventory(opts Options) (map[string]any, error) {
 				"enable_cgroup_exporter": container.EnableCgroupExporter,
 				"mtls_enabled":           container.MTLS.Enabled,
 				"resources":              container.Resources,
+				"resources_source":       resourceSource(opts),
 				"mtls_paths": map[string]any{
 					"secured_json": filepath.ToSlash(filepath.Join(opts.Environment, "mtls", app.Name, container.Name+".secured.json")),
 					"schema_json":  filepath.ToSlash(filepath.Join(opts.Environment, "mtls", app.Name, container.Name+".secured.schema.json")),
@@ -1087,6 +1102,9 @@ func Validate(opts Options) error {
 	}
 	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars, opts.Environment)
 	if err != nil {
+		return err
+	}
+	if err := applyResourcePolicies(apps, appFiles, opts); err != nil {
 		return err
 	}
 	sharedAssets, err := loadSharedAssets(envDir, vars, opts)
@@ -1242,6 +1260,9 @@ func loadPreparedApps(opts Options, applyProfileAndDown bool) ([]appModel, strin
 	}
 	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars, opts.Environment)
 	if err != nil {
+		return nil, "", nil, err
+	}
+	if err := applyResourcePolicies(apps, appFiles, opts); err != nil {
 		return nil, "", nil, err
 	}
 	sharedAssets, err := loadSharedAssets(envDir, vars, opts)
@@ -1833,6 +1854,7 @@ func resolveRuntimeAssetRefs(app appModel) ([]runtimeAssetSpec, error) {
 			return nil, fmt.Errorf("%s: duplicate runtime_asset_definitions name %q", app.Name, name)
 		}
 		item.Name = name
+		item = applyRuntimeAssetDefaults(item, app.RuntimeAssetDefaults)
 		definitions[name] = item
 		order = append(order, name)
 	}
@@ -1891,6 +1913,45 @@ func resolveRuntimeAssetRefs(app appModel) ([]runtimeAssetSpec, error) {
 		resolved = append(resolved, selected[name])
 	}
 	return resolved, nil
+}
+
+func applyRuntimeAssetDefaults(item runtimeAssetSpec, defaults runtimeAssetDefaults) runtimeAssetSpec {
+	if !runtimeAssetSourceConfigured(item.Source) {
+		item.Source = defaults.Source
+	}
+	if !runtimeAssetVolumeConfigured(item.Volume) {
+		item.Volume = defaults.Volume
+	}
+	if !runtimeAssetFetcherConfigured(item.Fetcher) {
+		item.Fetcher = defaults.Fetcher
+	}
+	return item
+}
+
+func runtimeAssetSourceConfigured(source runtimeAssetSourceSpec) bool {
+	return source.Type != "" ||
+		source.BaseURL != "" ||
+		source.Tenant != "" ||
+		source.Environment != "" ||
+		source.Label != "" ||
+		source.WorkloadIdentityTokenRefName != "" ||
+		source.CASharedAssetRefName != "" ||
+		source.CAFile != "" ||
+		source.LegacyToken != "" ||
+		source.TimeoutSeconds != 0 ||
+		source.InsecureUpstreamTLS
+}
+
+func runtimeAssetVolumeConfigured(volume runtimeAssetVolumeSpec) bool {
+	return volume.Name != "" || volume.MountPath != "" || volume.Medium != "" || volume.SizeLimit != ""
+}
+
+func runtimeAssetFetcherConfigured(fetcher runtimeAssetFetcherSpec) bool {
+	return fetcher.Image != "" ||
+		fetcher.ImagePullPolicy != "" ||
+		fetcher.Command != "" ||
+		len(fetcher.Resources) > 0 ||
+		len(fetcher.SecurityContext) > 0
 }
 
 func appendUniqueString(items []string, value string) []string {
@@ -2107,8 +2168,10 @@ func validateEnvReferences(app appModel, containerName string, items []envVar, t
 
 func validateRuntimeAssets(app appModel, tokenNames, sharedAssetNames, sharedAssetMountPaths map[string]bool) error {
 	names := map[string]bool{}
-	volumeNames := reservedVolumeNames(app)
-	mountPaths := map[string]bool{}
+	reservedVolumes := reservedVolumeNames(app)
+	runtimeVolumes := map[string]runtimeAssetVolumeSpec{}
+	mountPaths := map[string]string{}
+	volumeTargets := map[string]map[string]string{}
 	for _, item := range app.RuntimeAssets {
 		name := strings.TrimSpace(item.Name)
 		if name == "" {
@@ -2219,17 +2282,27 @@ func validateRuntimeAssets(app appModel, tokenNames, sharedAssetNames, sharedAss
 		if !isDNSLabel(volumeName) {
 			return fmt.Errorf("%s: runtime_assets %q volume.name %q must be a Kubernetes DNS label", app.Name, name, volumeName)
 		}
-		if volumeNames[volumeName] {
+		if existing, ok := runtimeVolumes[volumeName]; ok {
+			if existing != item.Volume {
+				return fmt.Errorf(
+					"%s: runtime_assets %q volume.name %q conflicts with a differently configured runtime volume",
+					app.Name,
+					name,
+					volumeName,
+				)
+			}
+		} else if reservedVolumes[volumeName] {
 			return fmt.Errorf("%s: runtime_assets %q volume.name %q conflicts with another generated volume", app.Name, name, volumeName)
+		} else {
+			runtimeVolumes[volumeName] = item.Volume
 		}
-		volumeNames[volumeName] = true
 		if err := validateAbsoluteMountPath(item.Volume.MountPath); err != nil {
 			return fmt.Errorf("%s: runtime_assets %q volume.mount_path: %w", app.Name, name, err)
 		}
-		if mountPaths[item.Volume.MountPath] {
+		if existingVolume, ok := mountPaths[item.Volume.MountPath]; ok && existingVolume != volumeName {
 			return fmt.Errorf("%s: runtime_assets %q duplicates volume.mount_path %q", app.Name, name, item.Volume.MountPath)
 		}
-		mountPaths[item.Volume.MountPath] = true
+		mountPaths[item.Volume.MountPath] = volumeName
 		if item.Volume.Medium != "" && item.Volume.Medium != "Memory" {
 			return fmt.Errorf("%s: runtime_assets %q volume.medium must be Memory or empty", app.Name, name)
 		}
@@ -2247,7 +2320,11 @@ func validateRuntimeAssets(app appModel, tokenNames, sharedAssetNames, sharedAss
 		if len(item.Files) == 0 {
 			return fmt.Errorf("%s: runtime_assets %q requires at least one file", app.Name, name)
 		}
-		targets := map[string]bool{}
+		targets := volumeTargets[volumeName]
+		if targets == nil {
+			targets = map[string]string{}
+			volumeTargets[volumeName] = targets
+		}
 		for _, file := range item.Files {
 			if err := validateRuntimeAssetSourcePath(file.Source); err != nil {
 				return fmt.Errorf("%s: runtime_assets %q file source: %w", app.Name, name, err)
@@ -2256,10 +2333,17 @@ func validateRuntimeAssets(app appModel, tokenNames, sharedAssetNames, sharedAss
 			if err != nil {
 				return fmt.Errorf("%s: runtime_assets %q file target: %w", app.Name, name, err)
 			}
-			if targets[target] {
-				return fmt.Errorf("%s: runtime_assets %q has duplicate file target %q", app.Name, name, target)
+			if existingAsset, exists := targets[target]; exists {
+				return fmt.Errorf(
+					"%s: runtime_assets %q file target %q conflicts with runtime asset %q in shared volume %q",
+					app.Name,
+					name,
+					target,
+					existingAsset,
+					volumeName,
+				)
 			}
-			targets[target] = true
+			targets[target] = name
 			if !regexp.MustCompile(`^0[0-7]{3}$`).MatchString(file.Mode) {
 				return fmt.Errorf("%s: runtime_assets %q file %q mode must use four octal digits such as 0440", app.Name, name, file.Target)
 			}
@@ -4419,37 +4503,47 @@ func renderContainer(app appModel, container containerSpec, assets []resolvedAss
 
 func runtimeAssetVolumeAssets(app appModel) []resolvedAsset {
 	out := make([]resolvedAsset, 0, len(app.RuntimeAssets))
+	seen := map[string]bool{}
 	for _, item := range app.RuntimeAssets {
-		emptyDir := map[string]any{}
-		if item.Volume.Medium != "" {
-			emptyDir["medium"] = item.Volume.Medium
+		if seen[item.Volume.Name] {
+			continue
 		}
-		if item.Volume.SizeLimit != "" {
-			emptyDir["sizeLimit"] = item.Volume.SizeLimit
-		}
-		out = append(out, resolvedAsset{
-			VolumeName: item.Volume.Name,
-			Kind:       "raw",
-			RawVolume: map[string]any{
-				"name":     item.Volume.Name,
-				"emptyDir": emptyDir,
-			},
-			RawMount: map[string]any{
-				"name":      item.Volume.Name,
-				"mountPath": item.Volume.MountPath,
-				"readOnly":  true,
-			},
-		})
+		seen[item.Volume.Name] = true
+		out = append(out, runtimeAssetVolumeAsset(item))
 	}
 	return out
 }
 
+func runtimeAssetVolumeAsset(item runtimeAssetSpec) resolvedAsset {
+	emptyDir := map[string]any{}
+	if item.Volume.Medium != "" {
+		emptyDir["medium"] = item.Volume.Medium
+	}
+	if item.Volume.SizeLimit != "" {
+		emptyDir["sizeLimit"] = item.Volume.SizeLimit
+	}
+	return resolvedAsset{
+		VolumeName: item.Volume.Name,
+		Kind:       "raw",
+		RawVolume: map[string]any{
+			"name":     item.Volume.Name,
+			"emptyDir": emptyDir,
+		},
+		RawMount: map[string]any{
+			"name":      item.Volume.Name,
+			"mountPath": item.Volume.MountPath,
+			"readOnly":  true,
+		},
+	}
+}
+
 func runtimeAssetMountAssets(app appModel, containerName string, sidecar bool) []resolvedAsset {
-	volumes := runtimeAssetVolumeAssets(app)
-	out := make([]resolvedAsset, 0, len(volumes))
-	for index, item := range app.RuntimeAssets {
-		if runtimeAssetAppliesToContainer(item, containerName, sidecar) {
-			out = append(out, volumes[index])
+	out := make([]resolvedAsset, 0, len(app.RuntimeAssets))
+	seen := map[string]bool{}
+	for _, item := range app.RuntimeAssets {
+		if runtimeAssetAppliesToContainer(item, containerName, sidecar) && !seen[item.Volume.Name] {
+			seen[item.Volume.Name] = true
+			out = append(out, runtimeAssetVolumeAsset(item))
 		}
 	}
 	return out
