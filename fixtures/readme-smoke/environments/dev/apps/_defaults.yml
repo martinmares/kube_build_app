@@ -4,13 +4,13 @@ vars:
 labels:
   team: "{{var:TEAM}}"
 container_envs:
-  - name: "*"
+  - container_ref_name: "*"
     envs:
       - name: GLOBAL_FLAG
         value: "true"
       - name: REMOVE_ME
         value: "from-defaults"
-  - name: api
+  - container_ref_name: api
     envs:
       - name: API_DEFAULT
         value: "from-container-defaults"
