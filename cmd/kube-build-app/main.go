@@ -17,6 +17,7 @@ import (
 
 type cliOptions struct {
 	envName            string
+	namespace          string
 	root               string
 	resourcePolicyRoot string
 	target             string
@@ -85,6 +86,7 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 
 	root.PersistentFlags().BoolVar(&opts.showVersion, "version", false, "print version information as JSON")
 	root.PersistentFlags().StringVarP(&opts.envName, "environment", "e", "", "environment name")
+	root.PersistentFlags().StringVar(&opts.namespace, "namespace", "", "override target namespace for generated resources")
 	root.PersistentFlags().StringVarP(&opts.root, "root", "R", "environments", "environments root directory")
 	root.PersistentFlags().StringVarP(&opts.resourcePolicyRoot, "resource-policy-root", "P", "", "external resource policy root directory")
 	root.PersistentFlags().StringVarP(&opts.target, "target", "t", "", "target output directory")
@@ -398,6 +400,7 @@ func writeFileNoClobber(path string, content []byte, force bool) error {
 func toBuildOptions(opts *cliOptions) buildapp.Options {
 	return buildapp.Options{
 		Environment:        opts.envName,
+		Namespace:          opts.namespace,
 		Root:               opts.root,
 		ResourcePolicyRoot: opts.resourcePolicyRoot,
 		Target:             opts.target,
@@ -443,6 +446,8 @@ func printBuildEvents(out io.Writer, events []buildapp.BuildEvent, format string
 	}
 	for _, event := range events {
 		switch event.Type {
+		case "namespace_override":
+			fmt.Fprintf(out, "%s: %s %s\n", paint("Build namespace", ansiBold, color), event.Name, paint("(CLI override)", ansiDim, color))
 		case "shared_assets":
 			fmt.Fprintf(out, "%s: %d\n", paint("Build shared assets", ansiBold, color), event.Count)
 		case "app":

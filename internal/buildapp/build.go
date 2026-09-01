@@ -29,6 +29,7 @@ const appLabel = "app.kubernetes.io/name"
 
 type Options struct {
 	Environment        string
+	Namespace          string
 	Root               string
 	ResourcePolicyRoot string
 	Target             string
@@ -709,6 +710,9 @@ func Build(opts Options) (Result, error) {
 	}
 
 	result := Result{}
+	if strings.TrimSpace(opts.Namespace) != "" {
+		result.Events = append(result.Events, BuildEvent{Type: "namespace_override", Name: vars["NAMESPACE"]})
+	}
 	result.Events = append(result.Events, BuildEvent{Type: "shared_assets", Count: len(sharedAssets)})
 	for _, asset := range sharedAssets {
 		if asset.Kind != "configmap" && asset.Kind != "" {
@@ -1478,26 +1482,26 @@ func loadBuildVars(envDir string, opts Options) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(opts.ReleaseManifest) == "" {
-		return vars, nil
+	if strings.TrimSpace(opts.ReleaseManifest) != "" {
+		manifest, err := loadReleaseManifest(opts.ReleaseManifest)
+		if err != nil {
+			return nil, err
+		}
+		releaseID := strings.TrimSpace(manifest.ReleaseID)
+		if releaseID != "" {
+			if current := strings.TrimSpace(vars["RELEASE_ID"]); current != "" && current != releaseID {
+				return nil, fmt.Errorf(
+					"release manifest release_id %q conflicts with build variable RELEASE_ID %q",
+					releaseID,
+					current,
+				)
+			}
+			vars["RELEASE_ID"] = releaseID
+		}
 	}
-
-	manifest, err := loadReleaseManifest(opts.ReleaseManifest)
-	if err != nil {
-		return nil, err
+	if namespace := strings.TrimSpace(opts.Namespace); namespace != "" {
+		vars["NAMESPACE"] = namespace
 	}
-	releaseID := strings.TrimSpace(manifest.ReleaseID)
-	if releaseID == "" {
-		return vars, nil
-	}
-	if current := strings.TrimSpace(vars["RELEASE_ID"]); current != "" && current != releaseID {
-		return nil, fmt.Errorf(
-			"release manifest release_id %q conflicts with build variable RELEASE_ID %q",
-			releaseID,
-			current,
-		)
-	}
-	vars["RELEASE_ID"] = releaseID
 	return vars, nil
 }
 
