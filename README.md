@@ -882,6 +882,18 @@ kube-build-app build -e test \
 In this mode the downloaded `.env` is the only variable source. It cannot be combined with `-E`, `-d` or `--vars-source`.
 For internal self-signed HTTPS endpoints, add `--env-url-insecure` to skip TLS certificate verification.
 
+Target namespace override:
+
+```bash
+kube-build-app build -e test --namespace customer-test
+```
+
+`--namespace` has the highest priority and overrides `NAMESPACE` from every
+variable source, including `--env-file` and `--env-url`. When the flag is not
+specified, the existing `NAMESPACE` variable behavior is unchanged. The
+environment selected by `-e/--environment` and the generated Kubernetes
+namespace are independent values.
+
 Backward-compatible secured JSON decrypt:
 
 ```bash
@@ -2367,3 +2379,17 @@ RELEASE_PUSH_TOKEN
 ```
 
 When `RELEASE_PUSH_TOKEN` is set in GitLab CI/CD variables, the publish job updates `CHANGELOG.md` and pushes it back with `[skip ci]`.
+
+## License
+
+This project is licensed under the MIT License.
+
+See [LICENSE](LICENSE) for details.
+
+## Support
+
+This repository is provided as-is and is not maintained as a community-supported project. GitHub Issues and free community support are not provided.
+
+Commercial support, including technical assistance, verified releases, bug fixes, updates and long-term maintenance, is available from [DataLite, spol. s r.o.](https://datalite.cz/).
+
+Acceptance of pull requests is entirely at the discretion of the project maintainer. The maintainer is not obligated to review, accept or respond to a pull request.

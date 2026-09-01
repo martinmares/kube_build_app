@@ -867,6 +867,17 @@ kube-build-app build -e test \
 V tomto režimu je stažený `.env` jediný zdroj proměnných. Nelze ho kombinovat s `-E`, `-d` ani s `--vars-source`.
 Pro interní self-signed HTTPS endpointy přidejte `--env-url-insecure`, aby se přeskočilo ověření TLS certifikátu.
 
+Přepsání cílového namespace:
+
+```bash
+kube-build-app build -e test --namespace customer-test
+```
+
+`--namespace` má nejvyšší prioritu a přepisuje `NAMESPACE` ze všech zdrojů
+proměnných, včetně `--env-file` a `--env-url`. Bez tohoto argumentu zůstává
+stávající chování proměnné `NAMESPACE` beze změny. Prostředí vybrané pomocí
+`-e/--environment` a výsledný Kubernetes namespace jsou nezávislé hodnoty.
+
 Zpětně kompatibilní decrypt secured JSON:
 
 ```bash
@@ -2351,3 +2362,17 @@ RELEASE_PUSH_TOKEN
 ```
 
 Pokud je `RELEASE_PUSH_TOKEN` nastavený v GitLab CI/CD variables, publish job aktualizuje `CHANGELOG.md` a pushne změnu zpět s `[skip ci]`.
+
+## Licence
+
+Tento projekt je poskytován pod licencí MIT.
+
+Podrobnosti jsou uvedeny v souboru [LICENSE](LICENSE).
+
+## Podpora
+
+Tento repozitář je poskytován tak, jak je, a není provozován jako komunitně podporovaný projekt. GitHub Issues ani bezplatná komunitní podpora nejsou poskytovány.
+
+Komerční podpora, včetně technické pomoci, ověřených releasů, oprav chyb, aktualizací a dlouhodobé údržby, je dostupná od společnosti [DataLite, spol. s r.o.](https://datalite.cz/).
+
+Přijetí pull requestu je zcela na rozhodnutí správce projektu. Správce nemá povinnost pull request posoudit, přijmout ani na něj reagovat.
