@@ -42,6 +42,7 @@ type Options struct {
 	EnvURLHeaders      []string
 	EnvURLInsecure     bool
 	VarsSources        []string
+	LegacyApplyEnv     bool
 	HelmEscapeAssets   bool
 	ReleaseManifest    string
 	ImageOverrides     []string
@@ -818,8 +819,56 @@ func Build(opts Options) (Result, error) {
 			result.Events = append(result.Events, BuildEvent{Type: "autoscaling", App: app.Name, Name: app.Name, Path: outPath})
 		}
 	}
+	if opts.LegacyApplyEnv {
+		if err := applyLegacyEnvironment(result, vars); err != nil {
+			return Result{}, err
+		}
+	}
 
 	return result, nil
+}
+
+var legacyEnvironmentPlaceholder = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
+
+func applyLegacyEnvironment(result Result, vars map[string]string) error {
+	paths := make([]string, 0, len(result.Deployments)+len(result.ServiceAccounts)+len(result.Budgets)+len(result.Autoscaling)+len(result.Externals))
+	paths = append(paths, result.Deployments...)
+	paths = append(paths, result.ServiceAccounts...)
+	paths = append(paths, result.Budgets...)
+	paths = append(paths, result.Autoscaling...)
+	paths = append(paths, result.Externals...)
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("legacy apply-env read %s: %w", path, err)
+		}
+		missing := map[string]bool{}
+		resolved := legacyEnvironmentPlaceholder.ReplaceAllStringFunc(string(content), func(placeholder string) string {
+			matches := legacyEnvironmentPlaceholder.FindStringSubmatch(placeholder)
+			value, found := vars[matches[1]]
+			if !found {
+				missing[matches[1]] = true
+				return placeholder
+			}
+			return value
+		})
+		if len(missing) > 0 {
+			names := make([]string, 0, len(missing))
+			for name := range missing {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			return fmt.Errorf("legacy apply-env %s: unresolved variable(s): %s", path, strings.Join(names, ", "))
+		}
+		var manifest any
+		if err := yaml.Unmarshal([]byte(resolved), &manifest); err != nil {
+			return fmt.Errorf("legacy apply-env produced invalid YAML in %s: %w", path, err)
+		}
+		if err := os.WriteFile(path, []byte(resolved), 0o644); err != nil {
+			return fmt.Errorf("legacy apply-env write %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 func writeRenderedObject(path string, object map[string]any, opts Options, syncSpec syncMetadataSpec) error {

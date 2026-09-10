@@ -246,6 +246,63 @@ containers:
 	}
 }
 
+func TestBuildLegacyApplyEnvResolvesBareDeploymentPlaceholders(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeFile(t, filepath.Join(envDir, "explicit.env"), "NAMESPACE=legacy-ns\nTSM_REGISTRY_URL=legacy-registry\nTSM_RELEASE_ID=9.1.0\n")
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+labels:
+  app.kubernetes.io/version: "{{TSM_RELEASE_ID}}"
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	_, err := Build(Options{
+		Environment:    "test",
+		Root:           root,
+		Target:         target,
+		EnvFile:        filepath.Join(envDir, "explicit.env"),
+		LegacyApplyEnv: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "metadata", "labels", "app.kubernetes.io/version"); got != "9.1.0" {
+		t.Fatalf("version label = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "image"); got != "legacy-registry/api:9.1.0" {
+		t.Fatalf("image = %q", got)
+	}
+}
+
+func TestLegacyApplyEnvRejectsUnknownVariableAndSkipsOrdinaryServices(t *testing.T) {
+	dir := t.TempDir()
+	deployment := filepath.Join(dir, "deployment.yml")
+	service := filepath.Join(dir, "service.yml")
+	writeFile(t, deployment, "value: '{{MISSING}}'\n")
+	writeFile(t, service, "value: '{{UNCHANGED}}'\n")
+
+	err := applyLegacyEnvironment(Result{Deployments: []string{deployment}, Services: []string{service}}, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "unresolved variable(s): MISSING") {
+		t.Fatalf("error = %v", err)
+	}
+	content, readErr := os.ReadFile(service)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(content) != "value: '{{UNCHANGED}}'\n" {
+		t.Fatalf("ordinary service was unexpectedly changed: %s", content)
+	}
+}
+
 func TestBuildSupportsEnvURL(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")

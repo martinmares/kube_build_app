@@ -30,6 +30,7 @@ type cliOptions struct {
 	envURLHeaders      []string
 	envURLInsecure     bool
 	varsSources        []string
+	legacyApplyEnv     bool
 	helmEscapeAssets   bool
 	releaseManifest    string
 	imageOverrides     []string
@@ -98,6 +99,7 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.PersistentFlags().StringArrayVar(&opts.envURLHeaders, "env-url-header", nil, "HTTP header for --env-url as 'Name: value'; repeatable")
 	root.PersistentFlags().BoolVar(&opts.envURLInsecure, "env-url-insecure", false, "skip TLS certificate verification for --env-url")
 	root.PersistentFlags().StringArrayVar(&opts.varsSources, "vars-source", nil, "variable source(s): env, json, dot-env; repeatable or comma-separated")
+	root.PersistentFlags().BoolVar(&opts.legacyApplyEnv, "legacy-apply-env", false, "resolve legacy {{VAR}} placeholders in generated deployment and external service manifests")
 	root.PersistentFlags().BoolVar(&opts.helmEscapeAssets, "helm-escape-assets", false, "escape remaining {{VAR}} placeholders in text assets")
 	root.PersistentFlags().StringVarP(&opts.releaseManifest, "release-manifest", "r", "", "release manifest YAML path")
 	root.PersistentFlags().StringArrayVar(&opts.imageOverrides, "image", nil, "override image as app/container=image; repeatable or comma-separated")
@@ -413,6 +415,7 @@ func toBuildOptions(opts *cliOptions) buildapp.Options {
 		EnvURLHeaders:      opts.envURLHeaders,
 		EnvURLInsecure:     opts.envURLInsecure,
 		VarsSources:        opts.varsSources,
+		LegacyApplyEnv:     opts.legacyApplyEnv,
 		HelmEscapeAssets:   opts.helmEscapeAssets,
 		ReleaseManifest:    opts.releaseManifest,
 		ImageOverrides:     opts.imageOverrides,

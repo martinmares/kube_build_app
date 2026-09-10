@@ -664,6 +664,7 @@ Užitečné flagy:
     --force-image-prefix nahradí prefix release images a zachová basename
 -w, --down               nastaví vybraným appkám replicas na 0
 -E, --env-file           explicitní .env soubor
+    --legacy-apply-env   nahradí legacy {{VAR}} v deployment a external service manifestech
     --env-url            HTTP(S) URL vracející .env obsah
     --env-url-header     HTTP hlavička pro --env-url ve formátu 'Name: value'; opakovatelné
     --env-url-insecure   přeskočí ověření TLS certifikátu pro --env-url
@@ -855,6 +856,21 @@ kube-build-app build -e test -E /path/to/release.env
 Tohle je doporučený produkční workflow pro secured proměnné. Čím se hodnoty dešifrují je mimo `kube-build-app`; nástroj dostane už vyřešené key/value páry.
 
 V tomto režimu je explicitní `.env` jediný zdroj proměnných. Nelze ho kombinovat s `-d` ani s `--vars-source`.
+
+Starší environment repozitáře mohou po načtení explicitního `.env` souboru zapnout
+kompatibilní post-processing:
+
+```bash
+kube-build-app build -e test \
+  -E /path/to/release.env \
+  --legacy-apply-env
+```
+
+`--legacy-apply-env` nahrazuje holé `{{VAR}}` pouze ve vygenerovaných souborech pod
+`deployments/` a `services/external/`, tedy ve stejném rozsahu jako historický
+post-build skript s nástrojem `apply-env`. Neznámá proměnná nebo neplatný výsledný YAML
+ukončí build chybou. Bez tohoto explicitního přepínače zůstává standardní placeholder
+kontrakt beze změny a holé placeholdery se ponechají pro pozdější fázi.
 
 Vzdálený `.env` zdroj:
 

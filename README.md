@@ -679,6 +679,7 @@ Useful flags:
     --force-image-prefix replace release image prefixes and keep basenames
 -w, --down               scale selected app replicas to 0
 -E, --env-file           explicit .env file path
+    --legacy-apply-env   resolve legacy {{VAR}} in deployment and external service manifests
     --env-url            HTTP(S) URL returning .env content
     --env-url-header     HTTP header for --env-url as 'Name: value'; repeatable
     --env-url-insecure   skip TLS certificate verification for --env-url
@@ -870,6 +871,21 @@ kube-build-app build -e test -E /path/to/release.env
 This is the recommended production workflow for secured variables. The decrypting tool can be anything; `kube-build-app` receives already resolved key/value pairs.
 
 In this mode the explicit `.env` is the only variable source. It cannot be combined with `-d` or `--vars-source`.
+
+Older environment repositories can opt into compatible post-processing after loading
+the explicit `.env` file:
+
+```bash
+kube-build-app build -e test \
+  -E /path/to/release.env \
+  --legacy-apply-env
+```
+
+`--legacy-apply-env` resolves bare `{{VAR}}` placeholders only in generated files
+under `deployments/` and `services/external/`, matching the historical post-build
+`apply-env` script scope. An unknown variable or invalid resulting YAML fails the
+build. Without this explicit flag, the standard placeholder contract is unchanged and
+bare placeholders remain available for a later deployment stage.
 
 Remote `.env` source:
 
