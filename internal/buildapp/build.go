@@ -842,23 +842,9 @@ func applyLegacyEnvironment(result Result, vars map[string]string) error {
 		if err != nil {
 			return fmt.Errorf("legacy apply-env read %s: %w", path, err)
 		}
-		missing := map[string]bool{}
-		resolved := legacyEnvironmentPlaceholder.ReplaceAllStringFunc(string(content), func(placeholder string) string {
-			matches := legacyEnvironmentPlaceholder.FindStringSubmatch(placeholder)
-			value, found := vars[matches[1]]
-			if !found {
-				missing[matches[1]] = true
-				return placeholder
-			}
-			return value
-		})
-		if len(missing) > 0 {
-			names := make([]string, 0, len(missing))
-			for name := range missing {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			return fmt.Errorf("legacy apply-env %s: unresolved variable(s): %s", path, strings.Join(names, ", "))
+		resolved, err := resolveLegacyEnvironmentValue(string(content), vars)
+		if err != nil {
+			return fmt.Errorf("legacy apply-env %s: %w", path, err)
 		}
 		var manifest any
 		if err := yaml.Unmarshal([]byte(resolved), &manifest); err != nil {
@@ -5200,25 +5186,33 @@ func resolveAsset(appName string, containerName string, spec assetSpec, envDir s
 	if spec.To == "" {
 		return resolvedAsset{}, fmt.Errorf("asset %s target path is required", spec.File)
 	}
+	targetPath := spec.To
+	if opts.LegacyApplyEnv {
+		var err error
+		targetPath, err = resolveLegacyEnvironmentValue(targetPath, vars)
+		if err != nil {
+			return resolvedAsset{}, fmt.Errorf("asset %s target path: %w", spec.File, err)
+		}
+	}
 	if spec.Temp {
-		content := spec.To
-		digest := fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(spec.File+spec.To+content)))
-		return resolvedAsset{VolumeName: appName + "-temp-" + digest, ContainerName: containerName, To: spec.To, Kind: "temp"}, nil
+		content := targetPath
+		digest := fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(spec.File+targetPath+content)))
+		return resolvedAsset{VolumeName: appName + "-temp-" + digest, ContainerName: containerName, To: targetPath, Kind: "temp"}, nil
 	}
 	if spec.PVC {
-		content := spec.To
-		digest := fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(spec.File+spec.To+content)))
-		return resolvedAsset{VolumeName: appName + "-pvc-" + digest, ContainerName: containerName, To: spec.To, Kind: "pvc", PVCName: spec.Name}, nil
+		content := targetPath
+		digest := fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(spec.File+targetPath+content)))
+		return resolvedAsset{VolumeName: appName + "-pvc-" + digest, ContainerName: containerName, To: targetPath, Kind: "pvc", PVCName: spec.Name}, nil
 	}
 	if spec.NFSServer != "" {
 		content := spec.Path
-		digest := fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(spec.File+spec.To+content)))
-		return resolvedAsset{VolumeName: appName + "-nfs-" + digest, ContainerName: containerName, To: spec.To, Kind: "nfs", NFSServer: spec.NFSServer, NFSPath: spec.Path}, nil
+		digest := fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(spec.File+targetPath+content)))
+		return resolvedAsset{VolumeName: appName + "-nfs-" + digest, ContainerName: containerName, To: targetPath, Kind: "nfs", NFSServer: spec.NFSServer, NFSPath: spec.Path}, nil
 	}
 	if spec.HostPath != "" {
-		content := spec.HostPath + spec.To
-		digest := fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(spec.File+spec.To+content)))
-		return resolvedAsset{VolumeName: appName + "-host-" + digest, ContainerName: containerName, To: spec.To, Kind: "host", HostPath: spec.HostPath}, nil
+		content := spec.HostPath + targetPath
+		digest := fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(spec.File+targetPath+content)))
+		return resolvedAsset{VolumeName: appName + "-host-" + digest, ContainerName: containerName, To: targetPath, Kind: "host", HostPath: spec.HostPath}, nil
 	}
 	if spec.File == "" {
 		return resolvedAsset{}, errors.New("asset file is required")
@@ -5235,7 +5229,7 @@ func resolveAsset(appName string, containerName string, spec assetSpec, envDir s
 	if assetHelmEscape(spec, opts) && !spec.Binary {
 		renderedContent = []byte(helmEscapePlaceholders(string(renderedContent)))
 	}
-	digestInput := spec.File + spec.To + string(renderedContent)
+	digestInput := spec.File + targetPath + string(renderedContent)
 	digest := fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(digestInput)))
 	key := filepath.Base(sourcePath)
 	if spec.Transform {
@@ -5246,7 +5240,7 @@ func resolveAsset(appName string, containerName string, spec assetSpec, envDir s
 		ConfigMapKey:  key,
 		ContainerName: containerName,
 		SourceFile:    spec.File,
-		To:            spec.To,
+		To:            targetPath,
 		Content:       renderedContent,
 		Binary:        spec.Binary,
 		Kind:          "configmap",
@@ -6084,6 +6078,28 @@ func applyEnvPlainPlaceholders(content string, vars map[string]string) string {
 		content = pattern.ReplaceAllStringFunc(content, func(string) string { return value })
 	}
 	return content
+}
+
+func resolveLegacyEnvironmentValue(value string, vars map[string]string) (string, error) {
+	missing := map[string]bool{}
+	resolved := legacyEnvironmentPlaceholder.ReplaceAllStringFunc(value, func(placeholder string) string {
+		matches := legacyEnvironmentPlaceholder.FindStringSubmatch(placeholder)
+		resolvedValue, found := vars[matches[1]]
+		if !found {
+			missing[matches[1]] = true
+			return placeholder
+		}
+		return resolvedValue
+	})
+	if len(missing) > 0 {
+		names := make([]string, 0, len(missing))
+		for name := range missing {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return "", fmt.Errorf("unresolved variable(s): %s", strings.Join(names, ", "))
+	}
+	return resolved, nil
 }
 
 func applyAppVarPlaceholders(content string, vars map[string]string) string {

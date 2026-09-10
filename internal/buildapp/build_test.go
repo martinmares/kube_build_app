@@ -283,6 +283,54 @@ containers:
 	}
 }
 
+func TestBuildLegacyApplyEnvResolvesAssetTargetBeforeSyncMetadata(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	envDir := filepath.Join(root, "test")
+	writeFile(t, filepath.Join(envDir, "explicit.env"), "NAMESPACE=legacy-ns\nTSM_REGISTRY_URL=legacy-registry\nTSM_RELEASE_ID=9.1.0\nJAVA_SSL_KEYSTORE_LOCATION=/app/resources/client.jks\n")
+	writeFile(t, filepath.Join(envDir, "assets", "client.conf"), "runtime={{RUNTIME_SECRET}}\n")
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+replicas: 1
+containers:
+  - name: api
+    image: "{{TSM_REGISTRY_URL}}/api:{{TSM_RELEASE_ID}}"
+    assets:
+      - file: assets/client.conf
+        to: "{{JAVA_SSL_KEYSTORE_LOCATION}}"
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+
+	result, err := Build(Options{
+		Environment:    "test",
+		Root:           root,
+		Target:         target,
+		EnvFile:        filepath.Join(envDir, "explicit.env"),
+		LegacyApplyEnv: true,
+		SyncProfile:    "kube-deploy-sync",
+		SyncSet:        "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Assets) != 1 {
+		t.Fatalf("len(assets) = %d, want 1", len(result.Assets))
+	}
+	asset := loadYAML(t, result.Assets[0])
+	wantSyncID := "test/app/api/container/api/asset/assets/client.conf:/app/resources/client.jks"
+	assertSyncMetadata(t, asset, wantSyncID, "100")
+	if got := digString(asset, "data", "client.conf"); got != "runtime={{RUNTIME_SECRET}}\n" {
+		t.Fatalf("asset content = %q, runtime placeholder must remain untouched", got)
+	}
+
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "volumeMounts", "0", "mountPath"); got != "/app/resources/client.jks" {
+		t.Fatalf("asset mount path = %q", got)
+	}
+}
+
 func TestLegacyApplyEnvRejectsUnknownVariableAndSkipsOrdinaryServices(t *testing.T) {
 	dir := t.TempDir()
 	deployment := filepath.Join(dir, "deployment.yml")
