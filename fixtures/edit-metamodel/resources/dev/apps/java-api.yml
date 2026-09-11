@@ -1,0 +1,10 @@
+containers:
+  java-api:
+    cpu: {from: 150m, to: 600m}
+    memory: {from: 300Mi, to: 800Mi}
+  process-exporter:
+    cpu: {from: 2m, to: 10m}
+    memory: {from: 8Mi, to: 32Mi}
+  mtls-gateway:
+    cpu: {from: 10m, to: 100m}
+    memory: {from: 32Mi, to: 128Mi}

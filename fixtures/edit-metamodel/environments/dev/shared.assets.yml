@@ -1,0 +1,4 @@
+assets:
+  - name: test-ca
+    file: assets/shared/test-ca.pem
+    to: /etc/ssl/certs/test-ca.pem

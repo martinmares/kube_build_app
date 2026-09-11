@@ -86,3 +86,34 @@ func TestServeRejectsConflictingWriteFlags(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestServeExposesBuilderContextFlags(t *testing.T) {
+	cmd := newRootCommand(appinfo.For(appinfo.EditAppName), &cliOptions{})
+	serve, _, err := cmd.Find([]string{"serve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"namespace", "resource-policy-root", "profile", "profiles-file",
+		"env-file", "env-url", "env-url-header", "env-url-insecure",
+		"release-manifest", "image-policy", "image-reference",
+		"sync-metadata-profile", "yaml-indent",
+	} {
+		if serve.Flags().Lookup(name) == nil {
+			t.Errorf("serve flag --%s is missing", name)
+		}
+	}
+}
+
+func TestServeRejectsInvalidBuildContextBeforeListening(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "dev"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCommand(appinfo.For(appinfo.EditAppName), &cliOptions{})
+	cmd.SetArgs([]string{"serve", "--root", root, "--env-file", "local.env", "--env-url", "https://config.example.test/render"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("error = %v, want build context conflict", err)
+	}
+}

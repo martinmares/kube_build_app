@@ -97,6 +97,7 @@ type Options struct {
 	ClusterStatus     bool
 	Kubeconfig        string
 	KubeContext       string
+	BuildOptions      buildapp.Options
 	TrustedProxyAuth  TrustedProxyAuthOptions
 }
 
@@ -148,6 +149,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/probes", s.handleAppContainerProbesUpdate)
 	mux.HandleFunc("POST /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/probes/fix-legacy", s.handleAppContainerLegacyProbesFix)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/model", s.handleAppModel)
+	mux.HandleFunc("GET /api/v1/envs/{env}/inspect", s.handleBuildInspect)
+	mux.HandleFunc("GET /api/v1/envs/{env}/build-context", s.handleBuildContext)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets", s.handleAssets)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/content/{asset_path...}", s.handleAssetContent)
 	mux.HandleFunc("GET /api/v1/envs/{env}/assets/special/{special_file}/entries", s.handleSpecialEntries)
@@ -913,6 +916,28 @@ func (s *Server) handleBuildValidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleBuildContext(w http.ResponseWriter, r *http.Request) {
+	context, err := buildapp.DescribeBuildContext(s.buildOptions(r.PathValue("env")))
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, context)
+}
+
+func (s *Server) handleBuildInspect(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	inspection, err := buildapp.Inspect(s.buildOptions(r.PathValue("env")))
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, inspection)
+}
+
 func (s *Server) handleBuildSummary(w http.ResponseWriter, r *http.Request) {
 	if s.repo == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "repository root is not configured"})
@@ -1066,29 +1091,7 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) environmentNamespace(env string) (string, error) {
-	env = strings.TrimSpace(env)
-	if env == "" {
-		return "", errors.New("environment is required")
-	}
-	envDir := filepath.Join(s.repo.Root(), env)
-	if !strings.HasPrefix(envDir, s.repo.Root()+string(os.PathSeparator)) {
-		return "", errors.New("invalid environment path")
-	}
-	content, err := os.ReadFile(filepath.Join(envDir, "env.unsecured.json"))
-	if err != nil {
-		return "", err
-	}
-	var payload struct {
-		Environment map[string]any `json:"environment"`
-	}
-	if err := json.Unmarshal(content, &payload); err != nil {
-		return "", err
-	}
-	namespace := strings.TrimSpace(fmt.Sprint(payload.Environment["NAMESPACE"]))
-	if namespace == "" || namespace == "<nil>" {
-		return "", fmt.Errorf("environment %q does not define NAMESPACE in env.unsecured.json", env)
-	}
-	return namespace, nil
+	return buildapp.ResolveNamespace(s.buildOptions(env))
 }
 
 func previewFiles(root string) ([]buildPreviewFile, error) {
@@ -1387,10 +1390,20 @@ func randomID() (string, error) {
 }
 
 func (s *Server) buildOptions(env string) buildapp.Options {
-	return buildapp.Options{
-		Environment: env,
-		Root:        s.repo.Root(),
+	opts := s.options.BuildOptions
+	opts.Environment = env
+	opts.Root = s.repo.Root()
+	opts.Target = ""
+	if opts.EncjsonPath == "" {
+		opts.EncjsonPath = s.options.EncjsonPath
 	}
+	if opts.EncjsonLegacyPath == "" {
+		opts.EncjsonLegacyPath = s.options.EncjsonLegacyPath
+	}
+	if opts.EncjsonKeydir == "" {
+		opts.EncjsonKeydir = s.options.EncjsonKeydir
+	}
+	return opts
 }
 
 func validationMessage(err error) string {

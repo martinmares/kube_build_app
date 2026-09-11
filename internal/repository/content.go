@@ -187,13 +187,13 @@ type DefaultsModel struct {
 }
 
 type ContainerEnvGroup struct {
-	Name string        `json:"name"`
-	Envs []EnvVarModel `json:"envs"`
+	ContainerRefName string        `json:"container_ref_name"`
+	Envs             []EnvVarModel `json:"envs"`
 }
 
 type ContainerEnvGroupUpdate struct {
-	Name string    `json:"name"`
-	Envs []VarItem `json:"envs"`
+	ContainerRefName string    `json:"container_ref_name"`
+	Envs             []VarItem `json:"envs"`
 }
 
 type AppModel struct {
@@ -222,16 +222,19 @@ type ContainerModel struct {
 }
 
 type EnvVarModel struct {
-	Index           int     `json:"index"`
-	Name            *string `json:"name"`
-	Kind            string  `json:"kind"`
-	Value           *string `json:"value"`
-	Key             *string `json:"key"`
-	SecretName      *string `json:"secret_name"`
-	ResourceName    *string `json:"resource_name"`
-	Divisor         *string `json:"divisor"`
-	FieldPath       *string `json:"field_path"`
-	IsValueEditable bool    `json:"is_value_editable"`
+	Index                        int     `json:"index"`
+	Name                         *string `json:"name"`
+	Kind                         string  `json:"kind"`
+	Value                        *string `json:"value"`
+	Key                          *string `json:"key"`
+	SecretName                   *string `json:"secret_name"`
+	ResourceName                 *string `json:"resource_name"`
+	Divisor                      *string `json:"divisor"`
+	FieldPath                    *string `json:"field_path"`
+	WorkloadIdentityTokenRefName *string `json:"workload_identity_token_ref_name"`
+	SharedAssetRefName           *string `json:"shared_asset_ref_name"`
+	Remove                       bool    `json:"remove"`
+	IsValueEditable              bool    `json:"is_value_editable"`
 }
 
 type ResourceModel struct {
@@ -405,6 +408,9 @@ func (r *Repository) UpdateAppAutoscaling(envName string, appFile string, autosc
 	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
 		return AppAutoscaling{}, NewConflictError("app file changed before save; refresh and apply the edit again")
 	}
+	if err := rejectUnsupportedAutoscalingForUpdate(string(contentBytes)); err != nil {
+		return AppAutoscaling{}, err
+	}
 	updated := replaceAutoscalingBlock(string(contentBytes), autoscaling)
 	if err := atomicWriteFile(path, []byte(updated)); err != nil {
 		return AppAutoscaling{}, err
@@ -437,6 +443,9 @@ func (r *Repository) UpdateAppContainerResources(envName string, appFile string,
 	}
 	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
 		return AppContainerResources{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	if err := rejectUnsupportedContainerBlockForUpdate(string(contentBytes), containerIndex, "resources"); err != nil {
+		return AppContainerResources{}, err
 	}
 	updated, err := replaceContainerResourcesBlock(string(contentBytes), containerIndex, resources)
 	if err != nil {
@@ -552,6 +561,9 @@ func (r *Repository) UpdateDefaultsContainerEnvs(envName string, groups []Contai
 	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
 		return DefaultsModel{}, NewConflictError("defaults file changed before save; refresh and apply the edit again")
 	}
+	if err := rejectUnsupportedDefaultsContainerEnvsForUpdate(string(contentBytes)); err != nil {
+		return DefaultsModel{}, err
+	}
 	updated := replaceDefaultsContainerEnvsBlock(string(contentBytes), groups)
 	if err := atomicWriteFile(path, []byte(updated)); err != nil {
 		return DefaultsModel{}, err
@@ -585,6 +597,9 @@ func (r *Repository) UpdateAppContainerProbes(envName string, appFile string, co
 	}
 	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
 		return AppContainerProbes{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	if err := rejectUnsupportedContainerBlockForUpdate(string(contentBytes), containerIndex, "probes"); err != nil {
+		return AppContainerProbes{}, err
 	}
 	updated, err := replaceContainerProbesBlock(string(contentBytes), containerIndex, probes)
 	if err != nil {
@@ -653,6 +668,9 @@ func (r *Repository) UpdateAppContainerRuntime(envName string, appFile string, c
 	}
 	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
 		return AppContainerRuntime{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	if err := rejectUnsupportedContainerBlockForUpdate(string(contentBytes), containerIndex, "runtime"); err != nil {
+		return AppContainerRuntime{}, err
 	}
 	updated, err := replaceContainerRuntimeBlock(string(contentBytes), containerIndex, runtime)
 	if err != nil {
@@ -1608,13 +1626,13 @@ func defaultsModelFromDetail(detail AssetDetail) (DefaultsModel, error) {
 	model := DefaultsModel{Env: detail.Env, FileName: detail.RelativePath, Path: detail.Path, ContentHash: detail.ContentHash, IsDirty: detail.IsDirty, Vars: extractVars(detail.Content)}
 	for gIdx, rawGroup := range anySlice(rootMap["container_envs"]) {
 		groupMap, _ := rawGroup.(map[string]any)
-		group := ContainerEnvGroup{Name: stringValue(groupMap["name"])}
+		group := ContainerEnvGroup{ContainerRefName: stringValue(groupMap["container_ref_name"])}
 		for eIdx, rawEnv := range anySlice(groupMap["envs"]) {
 			envMap, _ := rawEnv.(map[string]any)
 			group.Envs = append(group.Envs, envVarModel(eIdx, envMap))
 		}
-		if group.Name == "" {
-			group.Name = fmt.Sprintf("#%d", gIdx+1)
+		if group.ContainerRefName == "" {
+			group.ContainerRefName = fmt.Sprintf("#%d", gIdx+1)
 		}
 		model.ContainerEnvs = append(model.ContainerEnvs, group)
 	}
@@ -1686,7 +1704,7 @@ func renderDefaultsContainerEnvsBlock(groups []ContainerEnvGroupUpdate) []string
 	}
 	lines := []string{"container_envs:"}
 	for _, group := range groups {
-		lines = append(lines, "  - name: "+strconv.Quote(strings.TrimSpace(group.Name)))
+		lines = append(lines, "  - container_ref_name: "+strconv.Quote(strings.TrimSpace(group.ContainerRefName)))
 		if len(group.Envs) == 0 {
 			lines = append(lines, "    envs: []")
 			continue
@@ -1702,9 +1720,9 @@ func renderDefaultsContainerEnvsBlock(groups []ContainerEnvGroupUpdate) []string
 func validateContainerEnvGroups(groups []ContainerEnvGroupUpdate) error {
 	seen := map[string]bool{}
 	for _, group := range groups {
-		name := strings.TrimSpace(group.Name)
+		name := strings.TrimSpace(group.ContainerRefName)
 		if name == "" {
-			return errors.New("container env group name is required")
+			return errors.New("container_ref_name is required")
 		}
 		if strings.ContainsAny(name, "\r\n:") {
 			return fmt.Errorf("invalid container env group name %q", name)
@@ -2493,12 +2511,113 @@ func validatePositivePort(label string, value string) error {
 	return nil
 }
 
-func rejectUnsupportedPortsForUpdate(content string, containerIndex int) error {
+var sourceTemplatePattern = regexp.MustCompile(`\{\{[^{}\r\n]+\}\}`)
+
+func sourceModelRoot(content string) (map[string]any, error) {
+	preview := sourceTemplatePattern.ReplaceAllString(renderVarsPreview(content), "__KUBE_EDIT_TEMPLATE__")
 	var root any
-	if err := yaml.Unmarshal([]byte(renderVarsPreview(content)), &root); err != nil {
-		return err
+	if err := yaml.Unmarshal([]byte(preview), &root); err != nil {
+		return nil, err
 	}
 	rootMap, _ := root.(map[string]any)
+	return rootMap, nil
+}
+
+func rejectUnsupportedAutoscalingForUpdate(content string) error {
+	root, err := sourceModelRoot(content)
+	if err != nil {
+		return err
+	}
+	autoscaling, _ := root["autoscaling"].(map[string]any)
+	if err := rejectUnknownKeys(autoscaling, "autoscaling", "enabled", "min_replicas", "max_replicas", "cpu", "memory"); err != nil {
+		return err
+	}
+	for _, metric := range []string{"cpu", "memory"} {
+		values, _ := autoscaling[metric].(map[string]any)
+		if err := rejectUnknownKeys(values, "autoscaling."+metric, "average_utilization"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rejectUnsupportedDefaultsContainerEnvsForUpdate(content string) error {
+	root, err := sourceModelRoot(content)
+	if err != nil {
+		return err
+	}
+	for groupIndex, rawGroup := range anySlice(root["container_envs"]) {
+		group, _ := rawGroup.(map[string]any)
+		for envIndex, rawEnv := range anySlice(group["envs"]) {
+			env, _ := rawEnv.(map[string]any)
+			if _, editable := env["value"]; !editable {
+				return fmt.Errorf("container_envs[%d].envs[%d] uses an advanced environment value; edit the YAML source until the advanced env editor is available", groupIndex, envIndex)
+			}
+		}
+	}
+	return nil
+}
+
+func rejectUnsupportedContainerBlockForUpdate(content string, containerIndex int, blockName string) error {
+	root, err := sourceModelRoot(content)
+	if err != nil {
+		return err
+	}
+	containers := anySlice(root["containers"])
+	if containerIndex >= len(containers) {
+		return errors.New("container index not found")
+	}
+	container, _ := containers[containerIndex].(map[string]any)
+	block, _ := container[blockName].(map[string]any)
+	switch blockName {
+	case "resources":
+		if err := rejectUnknownKeys(block, "resources", "cpu", "memory"); err != nil {
+			return err
+		}
+		for _, resource := range []string{"cpu", "memory"} {
+			values, _ := block[resource].(map[string]any)
+			if err := rejectUnknownKeys(values, "resources."+resource, "requests", "limits", "from", "to"); err != nil {
+				return err
+			}
+		}
+	case "probes":
+		if err := rejectUnknownKeys(block, "probes", "preset", "port", "path"); err != nil {
+			return fmt.Errorf("%w; edit the YAML source until the advanced probes editor is available", err)
+		}
+	case "runtime":
+		if err := rejectUnknownKeys(block, "runtime", "java"); err != nil {
+			return err
+		}
+		java, _ := block["java"].(map[string]any)
+		if err := rejectUnknownKeys(java, "runtime.java", "xms", "xmx", "opts", "export"); err != nil {
+			return err
+		}
+		export, _ := java["export"].(map[string]any)
+		if err := rejectUnknownKeys(export, "runtime.java.export", "env_name"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rejectUnknownKeys(values map[string]any, path string, allowed ...string) error {
+	allowedSet := map[string]bool{}
+	for _, key := range allowed {
+		allowedSet[key] = true
+	}
+	for key := range values {
+		if !allowedSet[key] {
+			return fmt.Errorf("%s editor does not support existing field %q", path, key)
+		}
+	}
+	return nil
+}
+
+func rejectUnsupportedPortsForUpdate(content string, containerIndex int) error {
+	rootMap, err := sourceModelRoot(content)
+	if err != nil {
+		return err
+	}
 	containers := anySlice(rootMap["containers"])
 	if containerIndex >= len(containers) {
 		return errors.New("container index not found")
@@ -2749,8 +2868,27 @@ func parseVarsLines(lines []string) []VarItem {
 
 func envVarModel(index int, varMap map[string]any) EnvVarModel {
 	model := EnvVarModel{Index: index, Name: stringPtr(stringValue(varMap["name"])), Kind: "value", IsValueEditable: true}
-	if value := stringValue(varMap["value"]); value != "" {
+	if rawValue, exists := varMap["value"]; exists {
+		value := stringValue(rawValue)
 		model.Value = &value
+		return model
+	}
+	if value := stringValue(varMap["workload_identity_token_ref_name"]); value != "" {
+		model.Kind = "workload_identity_token"
+		model.WorkloadIdentityTokenRefName = stringPtr(value)
+		model.IsValueEditable = false
+		return model
+	}
+	if value := stringValue(varMap["shared_asset_ref_name"]); value != "" {
+		model.Kind = "shared_asset"
+		model.SharedAssetRefName = stringPtr(value)
+		model.IsValueEditable = false
+		return model
+	}
+	if boolValue(varMap["remove"]) {
+		model.Kind = "remove"
+		model.Remove = true
+		model.IsValueEditable = false
 		return model
 	}
 	valueFrom, _ := varMap["valueFrom"].(map[string]any)

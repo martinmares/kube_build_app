@@ -15,6 +15,9 @@ environments*
 !fixtures/readme-smoke/
 !fixtures/readme-smoke/environments/
 !fixtures/readme-smoke/environments/**
+!fixtures/edit-metamodel/
+!fixtures/edit-metamodel/environments/
+!fixtures/edit-metamodel/environments/**
 Gemfile.lock
 dist/
 .qlty/

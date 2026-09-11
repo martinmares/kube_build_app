@@ -1,7 +1,9 @@
 package webapp
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"testing"
 
 	"kube-env/internal/appinfo"
+	"kube-env/internal/buildapp"
 	"kube-env/internal/repository"
 )
 
@@ -745,6 +748,147 @@ func TestBuildReadOnlyEndpoints(t *testing.T) {
 	}
 }
 
+func TestInspectionAndBuildContextEndpointsUseConfiguredOptions(t *testing.T) {
+	root := editMetamodelWebFixtureRoot(t)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{BuildOptions: buildapp.Options{
+		Namespace:      "web-override",
+		ImagePolicy:    "fallback",
+		ImageReference: "auto",
+		YAMLIndent:     4,
+	}})
+
+	contextReq := httptest.NewRequest(http.MethodGet, "/api/v1/envs/dev/build-context", nil)
+	contextRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(contextRes, contextReq)
+	if contextRes.Code != http.StatusOK || !strings.Contains(contextRes.Body.String(), `"namespace_override":"web-override"`) || !strings.Contains(contextRes.Body.String(), `"yaml_indent":4`) {
+		t.Fatalf("unexpected build context response (%d): %s", contextRes.Code, contextRes.Body.String())
+	}
+
+	inspectReq := httptest.NewRequest(http.MethodGet, "/api/v1/envs/dev/inspect", nil)
+	inspectRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(inspectRes, inspectReq)
+	if inspectRes.Code != http.StatusOK || !strings.Contains(inspectRes.Body.String(), `"namespace":"web-override"`) || !strings.Contains(inspectRes.Body.String(), `"sidecars"`) || !strings.Contains(inspectRes.Body.String(), `"container_profile"`) {
+		t.Fatalf("unexpected inspection response (%d): %s", inspectRes.Code, inspectRes.Body.String())
+	}
+}
+
+func TestDefaultsContainerEnvsAPIProducesBuildableStableMetamodel(t *testing.T) {
+	root := copyEditMetamodelWebFixture(t)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/envs/dev/defaults", nil)
+	getResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getResponse, get)
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("defaults status = %d: %s", getResponse.Code, getResponse.Body.String())
+	}
+	var defaults repository.DefaultsModel
+	if err := json.Unmarshal(getResponse.Body.Bytes(), &defaults); err != nil {
+		t.Fatal(err)
+	}
+	payload := fmt.Sprintf(`{"expected_hash":%q,"groups":[{"container_ref_name":"*","envs":[{"name":"DEFAULT_MODE","value":"api-edited"}]}]}`, defaults.ContentHash)
+	patch := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/dev/defaults/container-envs", strings.NewReader(payload))
+	patchResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(patchResponse, patch)
+	if patchResponse.Code != http.StatusOK {
+		t.Fatalf("defaults patch status = %d: %s", patchResponse.Code, patchResponse.Body.String())
+	}
+	if err := json.Unmarshal(patchResponse.Body.Bytes(), &defaults); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "dev", "apps", "_defaults.yml")
+	beforeNoop, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = fmt.Sprintf(`{"expected_hash":%q,"groups":[{"container_ref_name":"*","envs":[{"name":"DEFAULT_MODE","value":"api-edited"}]}]}`, defaults.ContentHash)
+	patch = httptest.NewRequest(http.MethodPatch, "/api/v1/envs/dev/defaults/container-envs", strings.NewReader(payload))
+	patchResponse = httptest.NewRecorder()
+	server.Handler().ServeHTTP(patchResponse, patch)
+	if patchResponse.Code != http.StatusOK {
+		t.Fatalf("no-op defaults patch status = %d: %s", patchResponse.Code, patchResponse.Body.String())
+	}
+	afterNoop, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeNoop, afterNoop) {
+		t.Fatalf("no-op defaults update changed source:\nbefore:\n%s\nafter:\n%s", beforeNoop, afterNoop)
+	}
+	if err := buildapp.Validate(buildapp.Options{Environment: "dev", Root: root}); err != nil {
+		t.Fatalf("builder rejected API output: %v", err)
+	}
+}
+
+func TestWebPreviewMatchesDirectBuilderWithSameContext(t *testing.T) {
+	root := editMetamodelWebFixtureRoot(t)
+	directTarget := t.TempDir()
+	resourcePolicyRoot := filepath.Join(filepath.Dir(root), "resources")
+	opts := buildapp.Options{
+		Environment: "dev", Root: root, Target: directTarget, Namespace: "preview-namespace",
+		ResourcePolicyRoot: resourcePolicyRoot, ReleaseManifest: filepath.Join(root, "dev", "_release.yml"),
+		SyncProfile: "kube-deploy-sync", YAMLIndent: 4,
+	}
+	result, err := buildapp.Build(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Deployments) == 0 {
+		t.Fatal("direct build returned no deployments")
+	}
+	javaManifest, err := os.ReadFile(result.Deployments[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"namespace: preview-namespace", "image: registry.release.example.test/java-api:2026.09.11", "150m", "800Mi", "kube-build-app.io/sync-hash"} {
+		if !strings.Contains(string(javaManifest), expected) {
+			t.Fatalf("direct manifest missing %q:\n%s", expected, javaManifest)
+		}
+	}
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{BuildOptions: opts})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/envs/dev/preview", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("preview status = %d: %s", response.Code, response.Body.String())
+	}
+	var preview buildPreview
+	if err := json.Unmarshal(response.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range preview.Files {
+		direct, err := os.ReadFile(filepath.Join(directTarget, filepath.FromSlash(file.Path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		contentReq := httptest.NewRequest(http.MethodGet, "/api/v1/envs/dev/preview/"+preview.ID+"/content/"+file.Path, nil)
+		contentRes := httptest.NewRecorder()
+		server.Handler().ServeHTTP(contentRes, contentReq)
+		if contentRes.Code != http.StatusOK {
+			t.Fatalf("preview content %s status = %d: %s", file.Path, contentRes.Code, contentRes.Body.String())
+		}
+		var content buildPreviewContent
+		if err := json.Unmarshal(contentRes.Body.Bytes(), &content); err != nil {
+			t.Fatal(err)
+		}
+		if content.Content != string(direct) {
+			t.Fatalf("web preview differs from direct build for %s", file.Path)
+		}
+	}
+}
+
 func TestClusterStatusEndpointDisabledByDefault(t *testing.T) {
 	root := t.TempDir()
 	writeBuildFixture(t, root)
@@ -925,6 +1069,24 @@ containers:
 `)
 }
 
+func editMetamodelWebFixtureRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", "fixtures", "edit-metamodel", "environments"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func copyEditMetamodelWebFixture(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "environments")
+	if err := os.CopyFS(root, os.DirFS(editMetamodelWebFixtureRoot(t))); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 const fakeClusterKubectlScript = `#!/bin/sh
 resource=""
 prev=""
@@ -986,7 +1148,7 @@ func TestDefaultsUpdateEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	envsBody := `{"expected_hash":"` + defaults.ContentHash + `","groups":[{"name":"*","envs":[{"name":"LOG_LEVEL","value":"INFO"}]}]}`
+	envsBody := `{"expected_hash":"` + defaults.ContentHash + `","groups":[{"container_ref_name":"*","envs":[{"name":"LOG_LEVEL","value":"INFO"}]}]}`
 	envsReq := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/defaults/container-envs", strings.NewReader(envsBody))
 	envsRes := httptest.NewRecorder()
 	server.Handler().ServeHTTP(envsRes, envsReq)

@@ -1,0 +1,7 @@
+containers:
+  ui:
+    cpu: {from: 75m, to: 250m}
+    memory: {from: 96Mi, to: 320Mi}
+  process-exporter:
+    cpu: {from: 2m, to: 10m}
+    memory: {from: 8Mi, to: 32Mi}

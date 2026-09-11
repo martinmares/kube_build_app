@@ -712,6 +712,134 @@ containers:
 	}
 }
 
+func TestAppModelPreservesMetamodelEnvReferencesAndEmptyValue(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    envs:
+      - name: EMPTY
+        value: ""
+      - name: TOKEN_FILE
+        workload_identity_token_ref_name: runtime-config
+      - name: CA_FILE
+        shared_asset_ref_name: test-ca
+      - name: INHERITED
+        remove: true
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := repo.AppModel("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	envs := model.Containers[0].Envs
+	if len(envs) != 4 || envs[0].Value == nil || *envs[0].Value != "" || !envs[0].IsValueEditable {
+		t.Fatalf("empty value was not preserved: %#v", envs)
+	}
+	if envs[1].Kind != "workload_identity_token" || envs[1].WorkloadIdentityTokenRefName == nil || *envs[1].WorkloadIdentityTokenRefName != "runtime-config" || envs[1].IsValueEditable {
+		t.Fatalf("token reference was not preserved: %#v", envs[1])
+	}
+	if envs[2].Kind != "shared_asset" || envs[2].SharedAssetRefName == nil || *envs[2].SharedAssetRefName != "test-ca" || envs[2].IsValueEditable {
+		t.Fatalf("shared asset reference was not preserved: %#v", envs[2])
+	}
+	if envs[3].Kind != "remove" || !envs[3].Remove || envs[3].IsValueEditable {
+		t.Fatalf("remove env was not preserved: %#v", envs[3])
+	}
+}
+
+func TestSimpleEditorsRejectAdvancedBlocksWithoutChangingSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		update  func(*Repository) error
+		field   string
+	}{
+		{
+			name:    "resources ephemeral storage",
+			content: "name: api\ncontainers:\n  - name: api\n    resources:\n      ephemeral-storage:\n        from: 64Mi\n        to: 128Mi\n",
+			update: func(repo *Repository) error {
+				_, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{CPURequest: "100m"}, "")
+				return err
+			},
+			field: "ephemeral-storage",
+		},
+		{
+			name:    "advanced probes",
+			content: "name: api\ncontainers:\n  - name: api\n    probes:\n      http:\n        port: 8080\n        path: /health\n      live:\n        failure: 5\n",
+			update: func(repo *Repository) error {
+				_, err := repo.UpdateAppContainerProbes("test", "api.yml", 0, ProbeUpdate{Port: "8080", Path: "/health"}, "")
+				return err
+			},
+			field: "http",
+		},
+		{
+			name:    "autoscaling raw",
+			content: "name: api\nautoscaling:\n  enabled: true\n  min_replicas: 1\n  max_replicas: 2\n  raw:\n    behavior: {}\ncontainers:\n  - name: api\n",
+			update: func(repo *Repository) error {
+				_, err := repo.UpdateAppAutoscaling("test", "api.yml", AutoscalingUpdate{Enabled: true, MinReplicas: "1", MaxReplicas: "2", CPUAverageUtilization: "80"}, "")
+				return err
+			},
+			field: "raw",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "test", "apps", "api.yml")
+			writeFile(t, path, tt.content)
+			repo, err := New(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = tt.update(repo)
+			if err == nil || !contains(err.Error(), tt.field) {
+				t.Fatalf("error = %v, want unsupported %s", err, tt.field)
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(content) != tt.content {
+				t.Fatalf("source changed after rejected update:\n%s", content)
+			}
+		})
+	}
+}
+
+func TestDefaultsContainerEnvsEditorRejectsAdvancedValuesWithoutChangingSource(t *testing.T) {
+	root := t.TempDir()
+	content := "container_envs:\n  - container_ref_name: \"*\"\n    envs:\n      - name: CONFIG_TOKEN\n        workload_identity_token_ref_name: runtime-config\n"
+	path := filepath.Join(root, "test", "apps", "_defaults.yml")
+	writeFile(t, path, content)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := repo.Defaults("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := model.ContainerEnvs[0].Envs[0]; got.Kind != "workload_identity_token" || got.WorkloadIdentityTokenRefName == nil {
+		t.Fatalf("advanced defaults env not exposed read-only: %#v", got)
+	}
+	_, err = repo.UpdateDefaultsContainerEnvs("test", []ContainerEnvGroupUpdate{{
+		ContainerRefName: "*", Envs: []VarItem{{Name: "NEW_VALUE", Value: "fixture"}},
+	}}, model.ContentHash)
+	if err == nil || !contains(err.Error(), "advanced environment value") {
+		t.Fatalf("error = %v, want advanced environment value guard", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != content {
+		t.Fatalf("source changed after rejected update:\n%s", after)
+	}
+}
+
 func TestUpdateAppContainerRuntimeWritesJavaRuntime(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n    image: api:1\n")
@@ -1038,7 +1166,7 @@ func TestDefaultsReadsAndUpdatesVarsAndContainerEnvs(t *testing.T) {
     value: api
 arch: amd64
 container_envs:
-  - name: "*"
+  - container_ref_name: "*"
     envs:
       - name: LOG_LEVEL
         value: INFO
@@ -1052,7 +1180,7 @@ container_envs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(defaults.Vars) != 1 || defaults.Vars[0].Name != "APP_NAME" || len(defaults.ContainerEnvs) != 1 || defaults.ContainerEnvs[0].Name != "*" {
+	if len(defaults.Vars) != 1 || defaults.Vars[0].Name != "APP_NAME" || len(defaults.ContainerEnvs) != 1 || defaults.ContainerEnvs[0].ContainerRefName != "*" {
 		t.Fatalf("unexpected defaults: %#v", defaults)
 	}
 
@@ -1064,18 +1192,18 @@ container_envs:
 		t.Fatalf("unexpected vars after update: %#v", defaults.Vars)
 	}
 
-	defaults, err = repo.UpdateDefaultsContainerEnvs("test", []ContainerEnvGroupUpdate{{Name: "*", Envs: []VarItem{{Name: "LOG_LEVEL", Value: "DEBUG"}}}, {Name: "api", Envs: []VarItem{{Name: "API_ONLY", Value: "true"}}}}, defaults.ContentHash)
+	defaults, err = repo.UpdateDefaultsContainerEnvs("test", []ContainerEnvGroupUpdate{{ContainerRefName: "*", Envs: []VarItem{{Name: "LOG_LEVEL", Value: "DEBUG"}}}, {ContainerRefName: "api", Envs: []VarItem{{Name: "API_ONLY", Value: "true"}}}}, defaults.ContentHash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(defaults.ContainerEnvs) != 2 || defaults.ContainerEnvs[1].Name != "api" {
+	if len(defaults.ContainerEnvs) != 2 || defaults.ContainerEnvs[1].ContainerRefName != "api" {
 		t.Fatalf("unexpected container env defaults after update: %#v", defaults.ContainerEnvs)
 	}
 	detail, err := repo.AssetDetail("test", "_defaults.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(detail.Content, "container_envs:\n  - name: \"*\"\n    envs:\n      - name: LOG_LEVEL\n        value: \"DEBUG\"\n  - name: \"api\"") {
+	if !contains(detail.Content, "container_envs:\n  - container_ref_name: \"*\"\n    envs:\n      - name: LOG_LEVEL\n        value: \"DEBUG\"\n  - container_ref_name: \"api\"") {
 		t.Fatalf("defaults content not updated as expected:\n%s", detail.Content)
 	}
 }

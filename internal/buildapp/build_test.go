@@ -3301,8 +3301,8 @@ containers:
 		t.Fatalf("len(items) = %d, want 1", len(items))
 	}
 	item := items[0]
-	if got := item["replicas"]; got != 2 {
-		t.Fatalf("inventory replicas = %#v, want 2", got)
+	if got := item["replicas"]; got != 1 {
+		t.Fatalf("inventory replicas = %#v, want profile-adjusted 1", got)
 	}
 	mtlsPaths := item["mtls_paths"].(map[string]any)
 	if got := mtlsPaths["secured_json"]; got != "test/mtls/tsm-deco/tsm-deco.secured.json" {

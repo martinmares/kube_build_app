@@ -1,0 +1,27 @@
+vars:
+  - name: APP_NAME
+    value: java-api
+name: "{{var:APP_NAME}}"
+replicas: 1
+runtime_asset_ref_names:
+  - java-config
+sidecar_ref_names:
+  - process-exporter
+sidecars:
+  - name: mtls-gateway
+    image: "{{env:REGISTRY_URL}}/mtls-gateway:{{env:RELEASE_ID}}"
+    runtime_asset_ref_names:
+      - java-config
+    resources:
+      cpu: {from: 10m, to: 100m}
+      memory: {from: 32Mi, to: 128Mi}
+containers:
+  - name: "{{var:APP_NAME}}"
+    profile_ref_names:
+      - java-service
+    resources:
+      cpu: {from: 100m, to: 500m}
+      memory: {from: 256Mi, to: 768Mi}
+    envs:
+      - name: JAVA_ARGS
+        value: -Xms256m -Xmx512m

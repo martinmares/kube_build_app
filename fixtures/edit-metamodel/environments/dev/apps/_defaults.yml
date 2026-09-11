@@ -1,0 +1,83 @@
+vars:
+  - name: TOOLS_VERSION
+    value: "1.0.0"
+
+labels:
+  app.kubernetes.io/part-of: edit-metamodel
+
+workload_identity:
+  service_account:
+    create: true
+    name: "{{var:APP_NAME}}"
+    automount: false
+  tokens:
+    - name: runtime-config
+      audience: config.example.test
+      expiration_seconds: 3600
+
+container_envs:
+  - container_ref_name: "*"
+    envs:
+      - name: DEFAULT_MODE
+        value: fixture
+
+pod:
+  share_process_namespace: true
+
+container_profiles:
+  - name: java-service
+    defaults:
+      image: "{{env:REGISTRY_URL}}/{{var:APP_NAME}}:{{env:RELEASE_ID}}"
+      startup:
+        command: ["/bin/sh"]
+        arguments: ["/app/start-java.sh"]
+      ports:
+        - name: http
+          port: 8080
+          expose_as:
+            - service_name: "{{var:APP_NAME}}"
+              port: 80
+      probes:
+        http:
+          path: /actuator/health
+          port: 8080
+        live: {failure: 5, period: 10, timeout: 2}
+        ready: {failure: 2, period: 2, timeout: 2}
+
+sidecar_definitions:
+  - name: process-exporter
+    image: "{{env:REGISTRY_URL}}/process-exporter:{{var:TOOLS_VERSION}}"
+    envs:
+      - name: TARGET_PROCESS
+        value: java
+    resources:
+      cpu: {from: 2m, to: 10m}
+      memory: {from: 8Mi, to: 32Mi}
+
+runtime_asset_defaults:
+  source:
+    type: simple_config
+    base_url: https://config.example.test
+    tenant: fixture
+    environment: dev
+    workload_identity_token_ref_name: runtime-config
+    ca_shared_asset_ref_name: test-ca
+  volume:
+    name: runtime-config
+    mount_path: /app/runtime-config
+    medium: Memory
+    size_limit: 8Mi
+  fetcher:
+    image: "{{env:REGISTRY_URL}}/runtime-fetcher:{{var:TOOLS_VERSION}}"
+
+runtime_asset_definitions:
+  - name: java-config
+    files:
+      - source: files/application.yml
+        target: application.yml
+        mode: "0440"
+  - name: ui-config
+    files:
+      - source: files/config.json
+        target: config.json
+        mode: "0440"

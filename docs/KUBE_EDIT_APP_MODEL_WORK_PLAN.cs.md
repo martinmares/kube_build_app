@@ -1,5 +1,9 @@
 # kube-edit-app: pracovní plán podle modelů
 
+> Aktualizace 2026-09-11: pro sladeni s aktualnim metamodellem builderu
+> pouzijte [novy implementacni plan](KUBE_EDIT_APP_METAMODEL_ALIGNMENT_PLAN.cs.md).
+> Nize uvedene poradi, nazvy modelu a nektere YAML kontrakty jsou historicke.
+
 Tento dokument slouží jako praktický checklist pro další vývoj `kube-edit-app`.
 Cílem je šetřit tokeny a používat dražší model jen tam, kde má jasný přínos.
 

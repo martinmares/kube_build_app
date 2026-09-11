@@ -1,0 +1,36 @@
+vars:
+  - name: APP_NAME
+    value: ui
+name: "{{var:APP_NAME}}"
+replicas: 1
+runtime_asset_ref_names:
+  - ui-config
+sidecar_ref_names:
+  - process-exporter
+sidecars:
+  - name: process-exporter
+    envs:
+      - name: TARGET_PROCESS
+        value: nginx
+containers:
+  - name: "{{var:APP_NAME}}"
+    image: "{{env:REGISTRY_URL}}/{{var:APP_NAME}}:{{env:RELEASE_ID}}"
+    ports:
+      - name: http
+        port: 8080
+        expose_as:
+          - service_name: ui
+            port: 80
+            external:
+              - name: ui-public
+                as_route: true
+                http:
+                  - hostname: ui.example.test
+                    path: /
+                annotations:
+                  haproxy.router.openshift.io/timeout: "5m"
+                tls:
+                  termination: edge
+    resources:
+      cpu: {from: 50m, to: 200m}
+      memory: {from: 64Mi, to: 256Mi}

@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"kube-env/internal/appinfo"
+	"kube-env/internal/buildapp"
 	"kube-env/internal/repository"
 	"kube-env/internal/webapp"
 )
@@ -33,6 +34,7 @@ type cliOptions struct {
 	authHeaderEmail   string
 	authHeaderGroups  string
 	authGroupPrefix   string
+	build             buildapp.Options
 	showVersion       bool
 }
 
@@ -92,6 +94,29 @@ func newServeCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	cmd.Flags().StringVar(&opts.authHeaderEmail, "auth-header-email", envDefault("KUBE_EDIT_AUTH_HEADER_EMAIL", "X-Auth-Email"), "trusted proxy email header")
 	cmd.Flags().StringVar(&opts.authHeaderGroups, "auth-header-groups", envDefault("KUBE_EDIT_AUTH_HEADER_GROUPS", "X-Auth-Groups"), "trusted proxy groups header")
 	cmd.Flags().StringVar(&opts.authGroupPrefix, "auth-group-prefix", envDefault("KUBE_EDIT_AUTH_GROUP_PREFIX", "kube-edit-app"), "trusted proxy group prefix")
+	cmd.Flags().StringVar(&opts.build.Namespace, "namespace", "", "override target namespace for build and cluster inspection")
+	cmd.Flags().StringVarP(&opts.build.ResourcePolicyRoot, "resource-policy-root", "P", "", "external resource policy root directory")
+	cmd.Flags().StringVarP(&opts.build.Profile, "profile", "p", "", "replica profile name")
+	cmd.Flags().StringVar(&opts.build.ProfilesFile, "profiles-file", "", "replica profiles file path")
+	cmd.Flags().BoolVarP(&opts.build.DecryptSecured, "decrypt-secured", "d", false, "enable secured JSON variables for build operations")
+	cmd.Flags().StringVarP(&opts.build.EnvFile, "env-file", "E", "", "explicit .env file for build operations")
+	cmd.Flags().StringVar(&opts.build.EnvURL, "env-url", "", "HTTP(S) URL returning .env content for build operations")
+	cmd.Flags().StringArrayVar(&opts.build.EnvURLHeaders, "env-url-header", nil, "HTTP header for --env-url; repeatable")
+	cmd.Flags().BoolVar(&opts.build.EnvURLInsecure, "env-url-insecure", false, "skip TLS verification for --env-url")
+	cmd.Flags().StringArrayVar(&opts.build.VarsSources, "vars-source", nil, "variable sources: env, json, dot-env; repeatable")
+	cmd.Flags().BoolVar(&opts.build.LegacyApplyEnv, "legacy-apply-env", false, "resolve legacy placeholders in generated preview files")
+	cmd.Flags().BoolVar(&opts.build.HelmEscapeAssets, "helm-escape-assets", false, "escape remaining placeholders in text assets")
+	cmd.Flags().StringVarP(&opts.build.ReleaseManifest, "release-manifest", "r", "", "release manifest YAML path")
+	cmd.Flags().StringArrayVar(&opts.build.ImageOverrides, "image", nil, "image override app/container=image; repeatable")
+	cmd.Flags().StringVar(&opts.build.ImagePolicy, "image-policy", "fallback", "image policy: fallback or strict")
+	cmd.Flags().StringVar(&opts.build.ImageReference, "image-reference", "auto", "release image reference: auto, digest, or tag")
+	cmd.Flags().StringVar(&opts.build.ForceImageTag, "force-image-tag", "", "force one release image tag")
+	cmd.Flags().StringVar(&opts.build.ForceImagePrefix, "force-image-prefix", "", "replace release image repository prefixes")
+	cmd.Flags().StringVar(&opts.build.SyncProfile, "sync-metadata-profile", "", "sync metadata profile")
+	cmd.Flags().StringVar(&opts.build.SyncPrefix, "sync-metadata-prefix", "kube-build-app.io", "sync metadata prefix")
+	cmd.Flags().StringVar(&opts.build.SyncSet, "sync-set", "", "sync metadata set name")
+	cmd.Flags().StringArrayVarP(&opts.build.Down, "down", "w", nil, "scale named app to zero; repeatable")
+	cmd.Flags().IntVar(&opts.build.YAMLIndent, "yaml-indent", 2, "preview YAML indentation: 2 or 4")
 	return cmd
 }
 
@@ -101,6 +126,13 @@ func runServe(_ *cobra.Command, info appinfo.Info, opts *cliOptions) error {
 	}
 	if opts.root == "" {
 		return errors.New("--root is required or ENVIRONMENTS_ROOT must be set")
+	}
+	opts.build.Root = opts.root
+	opts.build.EncjsonPath = opts.encjsonPath
+	opts.build.EncjsonLegacyPath = opts.encjsonLegacyPath
+	opts.build.EncjsonKeydir = opts.encjsonKeydir
+	if _, err := buildapp.DescribeBuildContext(opts.build); err != nil {
+		return fmt.Errorf("invalid build context: %w", err)
 	}
 
 	repo, err := repository.New(opts.root)
@@ -117,6 +149,7 @@ func runServe(_ *cobra.Command, info appinfo.Info, opts *cliOptions) error {
 		ClusterStatus:     opts.clusterStatus,
 		Kubeconfig:        opts.kubeconfig,
 		KubeContext:       opts.kubeContext,
+		BuildOptions:      opts.build,
 		TrustedProxyAuth: webapp.TrustedProxyAuthOptions{
 			Enabled:      opts.trustedProxy,
 			HeaderUser:   opts.authHeaderUser,

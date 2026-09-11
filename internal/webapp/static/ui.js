@@ -1469,7 +1469,7 @@ function renderPortsPreview(index, ports) {
 }
 function renderContainerEnvsPreview(index, vars) {
   const edit = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="container-envs" data-container-index="${index}"><i class="ti ti-pencil me-1"></i>Edit envs</button>`;
-  const chips = (vars || []).slice(0, 8).map((item) => chip(item.name || '?', item.kind === 'value' ? (item.value || '') : item.kind)).join('');
+  const chips = (vars || []).slice(0, 8).map((item) => chip(item.name || '?', envVarPreviewValue(item))).join('');
   const more = (vars || []).length > 8 ? `<span class="badge bg-secondary-lt">+${vars.length - 8} more</span>` : '';
   return `
     <div class="overview-section">
@@ -1479,6 +1479,13 @@ function renderContainerEnvsPreview(index, vars) {
       </div>
       ${(vars || []).length ? `<div class="chip-row">${chips}${more}</div>` : emptyState('ti-variable', 'No container envs', state.readOnly ? '' : 'Use Edit envs to add container envs.')}
     </div>`;
+}
+function envVarPreviewValue(item) {
+  if (item.kind === 'value') return item.value ?? '';
+  if (item.kind === 'workload_identity_token') return `token: ${item.workload_identity_token_ref_name || '?'}`;
+  if (item.kind === 'shared_asset') return `asset: ${item.shared_asset_ref_name || '?'}`;
+  if (item.kind === 'remove') return 'remove inherited';
+  return envVarReadOnlyValue(item) || item.kind || 'unknown';
 }
 function renderPortPreviewLine(port) {
   const exposes = (port.expose_as || []).map((expose) => {
@@ -1732,7 +1739,7 @@ async function saveDefaultsVars() {
   } catch (e) { showError(e); }
 }
 function openDefaultsContainerEnvsEditor() {
-  openEditorModal('Edit defaults container envs', 'Default container envs in apps/_defaults.yml grouped by container name or "*".', renderDefaultsContainerEnvsEditor(state.defaults?.container_envs || []));
+  openEditorModal('Edit defaults container envs', 'Default container envs in apps/_defaults.yml grouped by container reference name or "*".', renderDefaultsContainerEnvsEditor(state.defaults?.container_envs || []));
 }
 function renderDefaultsContainerEnvsEditor(groups) {
   const rows = (groups || []).map((group) => renderDefaultsEnvGroup(group)).join('');
@@ -1747,12 +1754,12 @@ function renderDefaultsContainerEnvsEditor(groups) {
     </div>`;
 }
 function renderDefaultsEnvGroup(group = {}) {
-  const envs = (group.envs || []).filter((item) => item.is_value_editable !== false);
+  const envs = group.envs || [];
   const rows = envs.map((item) => renderDefaultsEnvRow(item)).join('');
   return `
     <div class="resource-editor mb-3" data-defaults-env-group>
       <div class="row g-2 align-items-end mb-2">
-        <div class="col-12 col-lg-8"><label class="form-label small mb-1">Container name</label><input class="form-control form-control-sm font-monospace defaults-env-group-name" placeholder="* or container name" value="${esc(group.name || '')}"></div>
+        <div class="col-12 col-lg-8"><label class="form-label small mb-1">Container reference</label><input class="form-control form-control-sm font-monospace defaults-env-group-name" placeholder="* or container name" value="${esc(group.container_ref_name || '')}"></div>
         <div class="col-6 col-lg-2"><button class="btn btn-sm btn-outline-primary w-100" type="button" data-add-defaults-env><i class="ti ti-plus me-1"></i>Add env</button></div>
         <div class="col-6 col-lg-2"><button class="btn btn-sm btn-outline-danger w-100" type="button" data-remove-defaults-env-group><i class="ti ti-trash me-1"></i>Remove</button></div>
       </div>
@@ -1760,8 +1767,15 @@ function renderDefaultsEnvGroup(group = {}) {
     </div>`;
 }
 function renderDefaultsEnvRow(item = {}) {
+  const editable = item.is_value_editable !== false;
+  if (!editable) return `
+    <tr data-defaults-env-editable="false">
+      <td><span class="font-monospace">${esc(item.name || '?')}</span></td>
+      <td><span class="text-muted font-monospace">${esc(envVarReadOnlyValue(item))}</span></td>
+      <td class="table-action-col"><span class="badge bg-secondary-lt">${esc(item.kind || 'read-only')}</span></td>
+    </tr>`;
   return `
-    <tr>
+    <tr data-defaults-env-editable="true">
       <td><input class="form-control form-control-sm font-monospace defaults-env-name" placeholder="NAME" value="${esc(item.name || '')}"></td>
       <td><input class="form-control form-control-sm font-monospace defaults-env-value" placeholder="value" value="${esc(item.value || '')}"></td>
       <td class="table-action-col"><button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-defaults-env title="Remove env"><i class="ti ti-trash"></i></button></td>
@@ -1774,7 +1788,7 @@ function addDefaultsEnvGroup() {
   const host = qs('[data-defaults-env-groups]');
   if (!host) return;
   if (!host.querySelector('[data-defaults-env-group]')) host.innerHTML = '';
-  host.insertAdjacentHTML('beforeend', renderDefaultsEnvGroup({name: '*'}));
+  host.insertAdjacentHTML('beforeend', renderDefaultsEnvGroup({container_ref_name: '*'}));
   host.querySelector('[data-defaults-env-group]:last-child .defaults-env-group-name')?.focus();
 }
 function addDefaultsEnvRow(groupEl) {
@@ -1792,12 +1806,12 @@ async function saveDefaultsContainerEnvs() {
     if (!validation.ok) return showError(validation.message);
   }
   const groups = qsa('[data-defaults-env-group]').map((groupEl) => ({
-    name: groupEl.querySelector('.defaults-env-group-name')?.value?.trim() || '',
-    envs: Array.from(groupEl.querySelectorAll('tbody tr')).map((row) => ({
+    container_ref_name: groupEl.querySelector('.defaults-env-group-name')?.value?.trim() || '',
+    envs: Array.from(groupEl.querySelectorAll('tbody tr[data-defaults-env-editable="true"]')).map((row) => ({
       name: row.querySelector('.defaults-env-name')?.value?.trim() || '',
       value: row.querySelector('.defaults-env-value')?.value || '',
     })).filter((item) => item.name !== ''),
-  })).filter((group) => group.name !== '');
+  })).filter((group) => group.container_ref_name !== '');
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults/container-envs`, {groups, expected_hash: state.assetContentHash});
     state.editModalClose?.();
@@ -2244,6 +2258,9 @@ function renderContainerEnvRow(index, item = {}) {
     </tr>`;
 }
 function envVarReadOnlyValue(item) {
+  if (item.kind === 'workload_identity_token') return item.workload_identity_token_ref_name || 'workload identity token';
+  if (item.kind === 'shared_asset') return item.shared_asset_ref_name || 'shared asset';
+  if (item.kind === 'remove') return 'remove inherited value';
   if (item.kind === 'secret') return `${item.secret_name || '?'}:${item.key || '?'}`;
   if (item.kind === 'resource') return [item.resource_name, item.divisor].filter(Boolean).join(' / ') || 'resourceFieldRef';
   if (item.kind === 'field') return item.field_path || 'fieldRef';
@@ -2506,7 +2523,7 @@ function renderDefaultsGroupPreview(group) {
   return `
     <div class="metric-card mb-2">
       <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
-        <div class="fw-semibold font-monospace">${esc(group.name || '?')}</div>
+        <div class="fw-semibold font-monospace">${esc(group.container_ref_name || '?')}</div>
         <span class="badge bg-secondary-lt">${envs.length} envs</span>
       </div>
       ${envs.length ? `<div class="chip-row">${envs.slice(0, 8).map((item) => chip(item.name || '?', item.kind === 'value' ? (item.value || '') : item.kind)).join('')}${envs.length > 8 ? `<span class="badge bg-secondary-lt">+${envs.length - 8} more</span>` : ''}</div>` : '<div class="text-muted small">No envs in this group.</div>'}

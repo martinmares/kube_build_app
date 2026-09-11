@@ -1,0 +1,10 @@
+release_id: "2026.09.11"
+images:
+  - app_name: java-api
+    container_name: java-api
+    image: registry.release.example.test/java-api
+    tag: "2026.09.11"
+  - app_name: ui
+    container_name: ui
+    image: registry.release.example.test/ui
+    tag: "2026.09.11"

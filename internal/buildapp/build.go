@@ -37,6 +37,9 @@ type Options struct {
 	ProfilesFile       string
 	Inventory          bool
 	DecryptSecured     bool
+	EncjsonPath        string
+	EncjsonLegacyPath  string
+	EncjsonKeydir      string
 	EnvFile            string
 	EnvURL             string
 	EnvURLHeaders      []string
@@ -1024,40 +1027,8 @@ func ensureMap(parent map[string]any, key string) map[string]any {
 }
 
 func Inventory(opts Options) (map[string]any, error) {
-	if strings.TrimSpace(opts.Environment) == "" {
-		return nil, errors.New("environment is required")
-	}
-	if strings.TrimSpace(opts.Root) == "" {
-		opts.Root = "environments"
-	}
-	envDir := filepath.Join(opts.Root, opts.Environment)
-	appsDir := filepath.Join(envDir, "apps")
-	if !isDir(appsDir) {
-		return nil, fmt.Errorf("apps directory not found: %s", appsDir)
-	}
-	vars, err := loadBuildVars(envDir, opts)
+	apps, envDir, _, err := loadPreparedApps(opts, true)
 	if err != nil {
-		return nil, err
-	}
-	appFiles, err := listAppFiles(appsDir)
-	if err != nil {
-		return nil, err
-	}
-	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars, opts.Environment)
-	if err != nil {
-		return nil, err
-	}
-	if err := applyResourcePolicies(apps, appFiles, opts); err != nil {
-		return nil, err
-	}
-	sharedAssets, err := loadSharedAssets(envDir, vars, opts)
-	if err != nil {
-		return nil, err
-	}
-	if err := applyImageOverrides(apps, opts); err != nil {
-		return nil, err
-	}
-	if err := validateApps(apps, sharedAssets); err != nil {
 		return nil, err
 	}
 
@@ -1120,44 +1091,8 @@ func Inventory(opts Options) (map[string]any, error) {
 }
 
 func Validate(opts Options) error {
-	if strings.TrimSpace(opts.Environment) == "" {
-		return errors.New("environment is required")
-	}
-	if strings.TrimSpace(opts.Root) == "" {
-		opts.Root = "environments"
-	}
-	envDir := filepath.Join(opts.Root, opts.Environment)
-	appsDir := filepath.Join(envDir, "apps")
-	if !isDir(appsDir) {
-		return fmt.Errorf("apps directory not found: %s", appsDir)
-	}
-	vars, err := loadBuildVars(envDir, opts)
-	if err != nil {
-		return err
-	}
-	appFiles, err := listAppFiles(appsDir)
-	if err != nil {
-		return err
-	}
-	apps, err := loadApps(appFiles, filepath.Join(appsDir, "_defaults.yml"), vars, opts.Environment)
-	if err != nil {
-		return err
-	}
-	if err := applyResourcePolicies(apps, appFiles, opts); err != nil {
-		return err
-	}
-	sharedAssets, err := loadSharedAssets(envDir, vars, opts)
-	if err != nil {
-		return err
-	}
-	if err := applyImageOverrides(apps, opts); err != nil {
-		return err
-	}
-	if err := applyReplicaProfile(apps, envDir, opts); err != nil {
-		return err
-	}
-	applyScaleDown(apps, opts.Down)
-	return validateApps(apps, sharedAssets)
+	_, _, _, err := loadPreparedApps(opts, true)
+	return err
 }
 
 func ListApps(opts Options) ([]string, error) {
@@ -1476,11 +1411,11 @@ func loadVars(envDir string, opts Options) (map[string]string, error) {
 		switch source {
 		case "json":
 			if decryptSecured {
-				if err := loadEnvJSONFile(vars, filepath.Join(envDir, "env.secured.json"), true); err != nil {
+				if err := loadEnvJSONFile(vars, filepath.Join(envDir, "env.secured.json"), true, opts); err != nil {
 					return nil, err
 				}
 			}
-			if err := loadEnvJSONFile(vars, filepath.Join(envDir, "env.unsecured.json"), false); err != nil {
+			if err := loadEnvJSONFile(vars, filepath.Join(envDir, "env.unsecured.json"), false, opts); err != nil {
 				return nil, err
 			}
 		case "env":
@@ -1602,7 +1537,7 @@ func effectiveVarsSources(opts Options) ([]string, string, string, []string, boo
 	return sources, "", "", nil, false, opts.DecryptSecured, nil
 }
 
-func loadEnvJSONFile(vars map[string]string, path string, secured bool) error {
+func loadEnvJSONFile(vars map[string]string, path string, secured bool, opts Options) error {
 	if !isFile(path) {
 		return nil
 	}
@@ -1611,7 +1546,7 @@ func loadEnvJSONFile(vars map[string]string, path string, secured bool) error {
 		return err
 	}
 	if secured {
-		content, err = decryptEnvJSONFile(path)
+		content, err = decryptEnvJSONFile(path, opts)
 		if err != nil {
 			return err
 		}
@@ -1635,10 +1570,14 @@ func loadEnvJSONFile(vars map[string]string, path string, secured bool) error {
 	return nil
 }
 
-func decryptEnvJSONFile(path string) ([]byte, error) {
-	bin := encjsonBinForFile(path)
+func decryptEnvJSONFile(path string, opts Options) ([]byte, error) {
+	bin := encjsonBinForFile(path, opts)
 	args := []string{"decrypt"}
-	if keydir := strings.TrimSpace(os.Getenv("ENCJSON_KEYDIR")); keydir != "" {
+	keydir := strings.TrimSpace(opts.EncjsonKeydir)
+	if keydir == "" {
+		keydir = strings.TrimSpace(os.Getenv("ENCJSON_KEYDIR"))
+	}
+	if keydir != "" {
 		args = append(args, "-k", keydir)
 	}
 	args = append(args, "-f", path)
@@ -1656,11 +1595,17 @@ func decryptEnvJSONFile(path string) ([]byte, error) {
 	return out, nil
 }
 
-func encjsonBinForFile(path string) string {
+func encjsonBinForFile(path string, opts Options) string {
 	switch detectEncjsonAPI(path) {
 	case "1.0":
+		if value := strings.TrimSpace(opts.EncjsonLegacyPath); value != "" {
+			return value
+		}
 		return legacyEncjsonBin()
 	case "2.0":
+		if value := strings.TrimSpace(opts.EncjsonPath); value != "" {
+			return value
+		}
 		return rustEncjsonBin()
 	default:
 		if value := strings.TrimSpace(os.Getenv("ENCJSON_BIN")); value != "" {
