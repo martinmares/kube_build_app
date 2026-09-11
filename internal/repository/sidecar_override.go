@@ -26,6 +26,218 @@ type SidecarEnvOverrideUpdate struct {
 	Value  string `json:"value"`
 }
 
+type SidecarResourcesOverride struct {
+	Env              string         `json:"env"`
+	FileName         string         `json:"file_name"`
+	SidecarName      string         `json:"sidecar_name"`
+	ContentHash      string         `json:"content_hash"`
+	DefaultsHash     string         `json:"defaults_hash"`
+	SharedDefinition bool           `json:"shared_definition"`
+	LocalPatch       bool           `json:"local_patch"`
+	Local            *ResourceModel `json:"local,omitempty"`
+}
+
+type SidecarResourcesOverrideUpdate struct {
+	Action    string         `json:"action"`
+	Resources ResourceUpdate `json:"resources"`
+}
+
+type SidecarStartupModel struct {
+	CommandPresent   bool     `json:"command_present"`
+	Command          []string `json:"command"`
+	ArgumentsPresent bool     `json:"arguments_present"`
+	Arguments        []string `json:"arguments"`
+}
+
+type SidecarStartupOverride struct {
+	Env              string               `json:"env"`
+	FileName         string               `json:"file_name"`
+	SidecarName      string               `json:"sidecar_name"`
+	ContentHash      string               `json:"content_hash"`
+	DefaultsHash     string               `json:"defaults_hash"`
+	SharedDefinition bool                 `json:"shared_definition"`
+	LocalPatch       bool                 `json:"local_patch"`
+	Local            *SidecarStartupModel `json:"local,omitempty"`
+}
+
+type SidecarStartupOverrideUpdate struct {
+	Action  string              `json:"action"`
+	Startup SidecarStartupModel `json:"startup"`
+}
+
+func (r *Repository) AppSidecarStartupOverride(envName, appFile, sidecarName string) (SidecarStartupOverride, error) {
+	if !referenceNamePattern.MatchString(sidecarName) {
+		return SidecarStartupOverride{}, errors.New("invalid sidecar name")
+	}
+	references, err := r.AppReferences(envName, appFile)
+	if err != nil {
+		return SidecarStartupOverride{}, err
+	}
+	detail, err := r.AppDetail(envName, appFile)
+	if err != nil {
+		return SidecarStartupOverride{}, err
+	}
+	root, err := sourceModelRoot(detail.Content)
+	if err != nil {
+		return SidecarStartupOverride{}, err
+	}
+	shared := stringSet(references.Catalog.SidecarDefinitions)[sidecarName]
+	selected := stringSet(references.SidecarRefNames)[sidecarName]
+	localIndex, localSidecar := namedSourceItem(root["sidecars"], sidecarName)
+	if shared && !selected {
+		return SidecarStartupOverride{}, fmt.Errorf("shared sidecar %q is not selected in sidecar_ref_names", sidecarName)
+	}
+	if !shared && localIndex < 0 {
+		return SidecarStartupOverride{}, fmt.Errorf("sidecar %q is neither a selected shared sidecar nor an app-local sidecar", sidecarName)
+	}
+	out := SidecarStartupOverride{
+		Env: envName, FileName: detail.FileName, SidecarName: sidecarName,
+		ContentHash: detail.ContentHash, DefaultsHash: references.DefaultsHash,
+		SharedDefinition: shared, LocalPatch: localIndex >= 0,
+	}
+	if startup, ok := localSidecar["startup"].(map[string]any); ok {
+		if err := rejectUnknownKeys(startup, "startup", "command", "arguments"); err != nil {
+			return SidecarStartupOverride{}, err
+		}
+		_, commandPresent := startup["command"]
+		_, argumentsPresent := startup["arguments"]
+		out.Local = &SidecarStartupModel{
+			CommandPresent: commandPresent, Command: stringSlice(startup["command"]),
+			ArgumentsPresent: argumentsPresent, Arguments: stringSlice(startup["arguments"]),
+		}
+	}
+	return out, nil
+}
+
+func (r *Repository) UpdateAppSidecarStartupOverride(envName, appFile, sidecarName string, update SidecarStartupOverrideUpdate, expectedHash, expectedDefaultsHash string) (SidecarStartupOverride, error) {
+	current, err := r.AppSidecarStartupOverride(envName, appFile, sidecarName)
+	if err != nil {
+		return SidecarStartupOverride{}, err
+	}
+	if expectedHash == "" || expectedHash != current.ContentHash {
+		return SidecarStartupOverride{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	if expectedDefaultsHash == "" || expectedDefaultsHash != current.DefaultsHash {
+		return SidecarStartupOverride{}, NewConflictError("defaults file changed before save; refresh inherited values and apply the edit again")
+	}
+	action := strings.TrimSpace(update.Action)
+	if action != "set" && action != "reset" {
+		return SidecarStartupOverride{}, errors.New("action must be set or reset")
+	}
+	if action == "set" && !update.Startup.CommandPresent && !update.Startup.ArgumentsPresent {
+		return SidecarStartupOverride{}, errors.New("select command or arguments to override; use reset to remove the local startup block")
+	}
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return SidecarStartupOverride{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return SidecarStartupOverride{}, err
+	}
+	if contentHash(contentBytes) != current.ContentHash {
+		return SidecarStartupOverride{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	updated, err := replaceSidecarStartupOverride(string(contentBytes), sidecarName, action, update.Startup, current.SharedDefinition)
+	if err != nil {
+		return SidecarStartupOverride{}, err
+	}
+	if updated != string(contentBytes) {
+		if err := atomicWriteFile(path, []byte(updated)); err != nil {
+			return SidecarStartupOverride{}, err
+		}
+	}
+	return r.AppSidecarStartupOverride(envName, filepath.Base(path), sidecarName)
+}
+
+func (r *Repository) AppSidecarResourcesOverride(envName, appFile, sidecarName string) (SidecarResourcesOverride, error) {
+	if !referenceNamePattern.MatchString(sidecarName) {
+		return SidecarResourcesOverride{}, errors.New("invalid sidecar name")
+	}
+	references, err := r.AppReferences(envName, appFile)
+	if err != nil {
+		return SidecarResourcesOverride{}, err
+	}
+	detail, err := r.AppDetail(envName, appFile)
+	if err != nil {
+		return SidecarResourcesOverride{}, err
+	}
+	root, err := sourceModelRoot(detail.Content)
+	if err != nil {
+		return SidecarResourcesOverride{}, err
+	}
+	shared := stringSet(references.Catalog.SidecarDefinitions)[sidecarName]
+	selected := stringSet(references.SidecarRefNames)[sidecarName]
+	localIndex, localSidecar := namedSourceItem(root["sidecars"], sidecarName)
+	if shared && !selected {
+		return SidecarResourcesOverride{}, fmt.Errorf("shared sidecar %q is not selected in sidecar_ref_names", sidecarName)
+	}
+	if !shared && localIndex < 0 {
+		return SidecarResourcesOverride{}, fmt.Errorf("sidecar %q is neither a selected shared sidecar nor an app-local sidecar", sidecarName)
+	}
+	out := SidecarResourcesOverride{
+		Env: envName, FileName: detail.FileName, SidecarName: sidecarName,
+		ContentHash: detail.ContentHash, DefaultsHash: references.DefaultsHash,
+		SharedDefinition: shared, LocalPatch: localIndex >= 0,
+	}
+	if resources, ok := localSidecar["resources"].(map[string]any); ok {
+		model := resourceModel(resources)
+		out.Local = &model
+	}
+	return out, nil
+}
+
+func (r *Repository) UpdateAppSidecarResourcesOverride(envName, appFile, sidecarName string, update SidecarResourcesOverrideUpdate, expectedHash, expectedDefaultsHash string) (SidecarResourcesOverride, error) {
+	current, err := r.AppSidecarResourcesOverride(envName, appFile, sidecarName)
+	if err != nil {
+		return SidecarResourcesOverride{}, err
+	}
+	if expectedHash == "" || expectedHash != current.ContentHash {
+		return SidecarResourcesOverride{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	if expectedDefaultsHash == "" || expectedDefaultsHash != current.DefaultsHash {
+		return SidecarResourcesOverride{}, NewConflictError("defaults file changed before save; refresh inherited values and apply the edit again")
+	}
+	action := strings.TrimSpace(update.Action)
+	if action != "set" && action != "reset" {
+		return SidecarResourcesOverride{}, errors.New("action must be set or reset")
+	}
+	if action == "set" {
+		if err := validateResourceUpdate(update.Resources); err != nil {
+			return SidecarResourcesOverride{}, err
+		}
+		if resourceUpdateEmpty(update.Resources) {
+			return SidecarResourcesOverride{}, errors.New("at least one resource value is required; use reset to remove the local override")
+		}
+	}
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return SidecarResourcesOverride{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return SidecarResourcesOverride{}, err
+	}
+	if contentHash(contentBytes) != current.ContentHash {
+		return SidecarResourcesOverride{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	updated, err := replaceSidecarResourcesOverride(string(contentBytes), sidecarName, action, update.Resources, current.SharedDefinition)
+	if err != nil {
+		return SidecarResourcesOverride{}, err
+	}
+	if updated != string(contentBytes) {
+		if err := atomicWriteFile(path, []byte(updated)); err != nil {
+			return SidecarResourcesOverride{}, err
+		}
+	}
+	return r.AppSidecarResourcesOverride(envName, filepath.Base(path), sidecarName)
+}
+
+func resourceUpdateEmpty(resources ResourceUpdate) bool {
+	return strings.TrimSpace(resources.CPURequest) == "" && strings.TrimSpace(resources.CPULimit) == "" &&
+		strings.TrimSpace(resources.MemoryRequest) == "" && strings.TrimSpace(resources.MemoryLimit) == ""
+}
+
 func (r *Repository) AppSidecarEnvOverride(envName, appFile, sidecarName, variableName string) (SidecarEnvOverride, error) {
 	if !referenceNamePattern.MatchString(sidecarName) {
 		return SidecarEnvOverride{}, errors.New("invalid sidecar name")
@@ -153,28 +365,148 @@ func replaceSidecarEnvOverride(content, sidecarName, envName, action, value stri
 	}
 	updated := joinLikeSource(lines, content)
 	if shared && action == "reset" {
-		updatedRoot, err := sourceModelRoot(updated)
-		if err != nil {
-			return "", err
-		}
-		updatedIndex, item := namedSourceItem(updatedRoot["sidecars"], sidecarName)
-		if updatedIndex >= 0 && len(item) == 1 {
-			updatedLines, itemStart, itemEnd, err := collectionItemBlockRange(updated, "sidecars", updatedIndex)
-			if err != nil {
-				return "", err
-			}
-			updatedLines = append(updatedLines[:itemStart], updatedLines[itemEnd:]...)
-			updated = joinLikeSource(updatedLines, updated)
-			rootAfterRemoval, err := sourceModelRoot(updated)
-			if err != nil {
-				return "", err
-			}
-			if len(anySlice(rootAfterRemoval["sidecars"])) == 0 {
-				updated = replaceTopLevelBlock(updated, "sidecars", nil)
-			}
-		}
+		return cleanupEmptySharedSidecarPatch(updated, sidecarName)
 	}
 	return updated, nil
+}
+
+func replaceSidecarResourcesOverride(content, sidecarName, action string, resources ResourceUpdate, shared bool) (string, error) {
+	root, err := sourceModelRoot(content)
+	if err != nil {
+		return "", err
+	}
+	localIndex, _ := namedSourceItem(root["sidecars"], sidecarName)
+	if localIndex < 0 {
+		if action == "reset" {
+			return content, nil
+		}
+		item := append([]string{"  - name: " + sidecarName}, renderResourcesBlock(resources)...)
+		lines := strings.Split(content, "\n")
+		start, end := topLevelBlockRange(lines, "sidecars")
+		if start < 0 {
+			return replaceTopLevelBlock(content, "sidecars", append([]string{"sidecars:"}, item...)), nil
+		}
+		return joinLikeSource(insertLines(lines, end, item), content), nil
+	}
+	lines, start, end, err := collectionItemBlockRange(content, "sidecars", localIndex)
+	if err != nil {
+		return "", err
+	}
+	blockStart, blockEnd := containerChildBlockRange(lines, start, end, "resources")
+	if blockStart >= 0 {
+		lines = append(lines[:blockStart], lines[blockEnd:]...)
+	}
+	if action == "set" {
+		replacement := renderResourcesBlock(resources)
+		insertAt := start + 1
+		if blockStart >= 0 {
+			insertAt = blockStart
+		}
+		lines = insertLines(lines, insertAt, replacement)
+	}
+	updated := joinLikeSource(lines, content)
+	if shared && action == "reset" {
+		return cleanupEmptySharedSidecarPatch(updated, sidecarName)
+	}
+	return updated, nil
+}
+
+func replaceSidecarStartupOverride(content, sidecarName, action string, startup SidecarStartupModel, shared bool) (string, error) {
+	root, err := sourceModelRoot(content)
+	if err != nil {
+		return "", err
+	}
+	localIndex, _ := namedSourceItem(root["sidecars"], sidecarName)
+	replacement := renderSidecarStartupBlock(startup)
+	if localIndex < 0 {
+		if action == "reset" {
+			return content, nil
+		}
+		item := append([]string{"  - name: " + sidecarName}, replacement...)
+		lines := strings.Split(content, "\n")
+		start, end := topLevelBlockRange(lines, "sidecars")
+		if start < 0 {
+			return replaceTopLevelBlock(content, "sidecars", append([]string{"sidecars:"}, item...)), nil
+		}
+		return joinLikeSource(insertLines(lines, end, item), content), nil
+	}
+	lines, start, end, err := collectionItemBlockRange(content, "sidecars", localIndex)
+	if err != nil {
+		return "", err
+	}
+	blockStart, blockEnd := containerChildBlockRange(lines, start, end, "startup")
+	if blockStart >= 0 {
+		lines = append(lines[:blockStart], lines[blockEnd:]...)
+	}
+	if action == "set" {
+		insertAt := start + 1
+		if blockStart >= 0 {
+			insertAt = blockStart
+		}
+		lines = insertLines(lines, insertAt, replacement)
+	}
+	updated := joinLikeSource(lines, content)
+	if shared && action == "reset" {
+		return cleanupEmptySharedSidecarPatch(updated, sidecarName)
+	}
+	return updated, nil
+}
+
+func renderSidecarStartupBlock(startup SidecarStartupModel) []string {
+	lines := []string{"    startup:"}
+	if startup.CommandPresent {
+		lines = append(lines, renderNestedStringList("      command:", startup.Command)...)
+	}
+	if startup.ArgumentsPresent {
+		lines = append(lines, renderNestedStringList("      arguments:", startup.Arguments)...)
+	}
+	return lines
+}
+
+func renderNestedStringList(header string, values []string) []string {
+	if len(values) == 0 {
+		return []string{header + " []"}
+	}
+	lines := []string{header}
+	for _, value := range values {
+		lines = append(lines, "        - "+strconv.Quote(value))
+	}
+	return lines
+}
+
+func cleanupEmptySharedSidecarPatch(content, sidecarName string) (string, error) {
+	root, err := sourceModelRoot(content)
+	if err != nil {
+		return "", err
+	}
+	index, item := namedSourceItem(root["sidecars"], sidecarName)
+	if index < 0 || len(item) != 1 {
+		return content, nil
+	}
+	lines, start, end, err := collectionItemBlockRange(content, "sidecars", index)
+	if err != nil {
+		return "", err
+	}
+	updated := joinLikeSource(append(lines[:start], lines[end:]...), content)
+	updatedRoot, err := sourceModelRoot(updated)
+	if err != nil {
+		return "", err
+	}
+	if len(anySlice(updatedRoot["sidecars"])) == 0 {
+		updated = replaceTopLevelBlock(updated, "sidecars", nil)
+	}
+	return updated, nil
+}
+
+func resourceModel(resources map[string]any) ResourceModel {
+	return ResourceModel{
+		CPURequest:    stringPtr(firstNonEmpty(nestedString(resources, "cpu", "requests"), nestedString(resources, "cpu", "from"))),
+		CPULimit:      stringPtr(firstNonEmpty(nestedString(resources, "cpu", "limits"), nestedString(resources, "cpu", "to"))),
+		MemoryRequest: stringPtr(firstNonEmpty(nestedString(resources, "memory", "requests"), nestedString(resources, "memory", "from"))),
+		MemoryLimit:   stringPtr(firstNonEmpty(nestedString(resources, "memory", "limits"), nestedString(resources, "memory", "to"))),
+		CPUFrom:       stringPtr(nestedString(resources, "cpu", "from")), CPUTo: stringPtr(nestedString(resources, "cpu", "to")),
+		MemoryFrom: stringPtr(nestedString(resources, "memory", "from")), MemoryTo: stringPtr(nestedString(resources, "memory", "to")),
+	}
 }
 
 func appendSidecarEnvOverride(content, sidecarName, envName, action, value string) string {

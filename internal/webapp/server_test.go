@@ -238,6 +238,8 @@ func TestMutatingEndpointsRequireWriteMode(t *testing.T) {
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/vars", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/references", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/sidecars/exporter/envs/MODE/override", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/sidecars/exporter/resources/override", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/sidecars/exporter/startup/override", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/vars", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/container-envs", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/replicas", `{}`},
@@ -511,6 +513,53 @@ func TestAppSidecarEnvOverrideEndpoint(t *testing.T) {
 	}
 	if strings.Contains(string(content), "image: exporter:1") || !strings.Contains(string(content), "value: \"nginx\"") {
 		t.Fatalf("override materialized inherited sidecar fields:\n%s", content)
+	}
+}
+
+func TestAppSidecarResourcesOverrideEndpoint(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), "sidecar_definitions:\n  - name: exporter\n    image: exporter:1\n    resources:\n      cpu: {from: 2m, to: 10m}\n")
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, "name: api\nsidecar_ref_names:\n  - exporter\ncontainers:\n  - name: api\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.AppSidecarResourcesOverride("test", "api.yml", "exporter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	body := fmt.Sprintf(`{"expected_hash":%q,"expected_defaults_hash":%q,"override":{"action":"set","resources":{"cpu_request":"5m","cpu_limit":"20m"}}}`, current.ContentHash, current.DefaultsHash)
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/sidecars/exporter/resources/override", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"cpu_request":"5m"`) {
+		t.Fatalf("override response = %d: %s", response.Code, response.Body.String())
+	}
+	content, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "image: exporter:1") || !strings.Contains(string(content), `requests: "5m"`) {
+		t.Fatalf("resources override materialized inherited fields:\n%s", content)
+	}
+}
+
+func TestAppSidecarResourcesOverrideRejectsExternalPolicy(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), "sidecar_definitions:\n  - name: exporter\n    image: exporter:1\n")
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\nsidecar_ref_names:\n  - exporter\ncontainers:\n  - name: api\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false, BuildOptions: buildapp.Options{ResourcePolicyRoot: "/policy"}})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/apps/api.yml/sidecars/exporter/resources/override", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "authoritative") {
+		t.Fatalf("policy response = %d: %s", response.Code, response.Body.String())
 	}
 }
 

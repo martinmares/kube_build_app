@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -265,6 +265,10 @@ async function init() {
   qs('#app-overview')?.addEventListener('click', (e) => {
     const sidecarEnv = e.target.closest('[data-edit-sidecar-env]');
     if (sidecarEnv && !state.readOnly) return openSidecarEnvOverride(sidecarEnv.dataset.sidecarName, sidecarEnv.dataset.envName, sidecarEnv.dataset.effectiveValue);
+    const sidecarResources = e.target.closest('[data-edit-sidecar-resources]');
+    if (sidecarResources && !state.readOnly) return openSidecarResourcesOverride(sidecarResources.dataset.sidecarName);
+    const sidecarStartup = e.target.closest('[data-edit-sidecar-startup]');
+    if (sidecarStartup && !state.readOnly) return openSidecarStartupOverride(sidecarStartup.dataset.sidecarName);
     const saveResources = e.target.closest('[data-save-resources]');
     if (saveResources && !state.readOnly) return saveContainerResources(Number(saveResources.dataset.saveResources));
     const saveVars = e.target.closest('[data-save-container-envs]');
@@ -786,6 +790,8 @@ function resetSelectedDetails() {
   state.appVars = [];
   state.appReferences = null;
   state.sidecarEnvOverride = null;
+  state.sidecarResourcesOverride = null;
+  state.sidecarStartupOverride = null;
   state.inspectedApp = null;
   state.inspection = null;
   state.inspectionEnv = null;
@@ -1258,8 +1264,8 @@ function renderEffectiveContainer(container, role) {
     </div>
     <div class="d-flex flex-wrap gap-1 mb-3">${origins.length ? origins.map(renderOriginBadge).join('') : '<span class="badge bg-secondary-lt">origin unavailable</span>'}</div>
     <div class="row g-2">
-      <div class="col-12 col-xl-4"><div class="overview-subtitle">Resources</div><div class="chip-row">${effectiveResourceChips(resources)}</div></div>
-      <div class="col-12 col-xl-4"><div class="overview-subtitle">Startup</div><div class="font-monospace small text-break">${esc(compactEffectiveValue(startup) || '-')}</div></div>
+      <div class="col-12 col-xl-4"><div class="overview-subtitle">Resources</div><div class="chip-row">${effectiveResourceChips(resources)}</div>${renderEffectiveResourcesAction(container, role)}</div>
+      <div class="col-12 col-xl-4"><div class="overview-subtitle">Startup</div><div class="font-monospace small text-break">${esc(compactEffectiveValue(startup) || '-')}</div>${renderEffectiveStartupAction(container, role)}</div>
       <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div><div class="font-monospace small text-break">${esc(compactEffectiveValue(pruneDisplayValue(probes)) || '-')}</div></div>
     </div>
     <div class="row g-2 mt-1">
@@ -1268,6 +1274,22 @@ function renderEffectiveContainer(container, role) {
     </div>
     <div class="overview-section"><div class="overview-subtitle">Environment</div>${envs.length ? `<div class="d-flex flex-column gap-1">${envs.map((entry) => renderEffectiveEnvEntry(container, entry, role)).join('')}</div>` : '<div class="text-muted small">No environment entries.</div>'}</div>
   </div>`;
+}
+
+function renderEffectiveResourcesAction(container, role) {
+  const field = container.fields?.resources;
+  const editable = role === 'sidecar' && !state.readOnly && field?.capabilities?.can_override && field?.write_target?.name_assertion;
+  if (!editable) return '';
+  const label = field.capabilities.can_reset ? 'Edit override' : 'Override';
+  return `<button class="btn btn-sm btn-ghost-secondary mt-2" type="button" data-edit-sidecar-resources data-sidecar-name="${esc(container.name)}"><i class="ti ti-pencil me-1"></i>${label}</button>`;
+}
+
+function renderEffectiveStartupAction(container, role) {
+  const field = container.fields?.startup;
+  const editable = role === 'sidecar' && !state.readOnly && field?.capabilities?.can_override && field?.write_target?.name_assertion;
+  if (!editable) return '';
+  const label = field.capabilities.can_reset ? 'Edit override' : 'Override';
+  return `<button class="btn btn-sm btn-ghost-secondary mt-2" type="button" data-edit-sidecar-startup data-sidecar-name="${esc(container.name)}"><i class="ti ti-pencil me-1"></i>${label}</button>`;
 }
 
 function renderEffectiveEnvEntry(container, entry, role) {
@@ -1953,6 +1975,10 @@ function openEditPanel(panel, index) {
 function handleEditModalClick(e) {
   if (e.target.closest('[data-save-sidecar-env-override]') && !state.readOnly) return saveSidecarEnvOverride('set');
   if (e.target.closest('[data-reset-sidecar-env-override]') && !state.readOnly) return confirmResetSidecarEnvOverride();
+  if (e.target.closest('[data-save-sidecar-resources-override]') && !state.readOnly) return saveSidecarResourcesOverride('set');
+  if (e.target.closest('[data-reset-sidecar-resources-override]') && !state.readOnly) return confirmResetSidecarResourcesOverride();
+  if (e.target.closest('[data-save-sidecar-startup-override]') && !state.readOnly) return saveSidecarStartupOverride('set');
+  if (e.target.closest('[data-reset-sidecar-startup-override]') && !state.readOnly) return confirmResetSidecarStartupOverride();
   const saveResources = e.target.closest('[data-save-resources]');
   if (saveResources && !state.readOnly) return saveContainerResources(Number(saveResources.dataset.saveResources));
   const saveRuntime = e.target.closest('[data-save-runtime]');
@@ -2070,6 +2096,189 @@ async function saveSidecarEnvOverride(action) {
     state.editModalClose?.();
     state.editModalClose = null;
     state.sidecarEnvOverride = null;
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
+}
+
+function sidecarResourcesOverrideURL(sidecarName) {
+  return `/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/sidecars/${encodeURIComponent(sidecarName)}/resources/override`;
+}
+
+function effectiveResourceForm(resources) {
+  const value = (name, side) => resources?.[name]?.[side] ?? resources?.[name]?.[side === 'requests' ? 'from' : 'to'] ?? '';
+  return {cpu_request: value('cpu', 'requests'), cpu_limit: value('cpu', 'limits'), memory_request: value('memory', 'requests'), memory_limit: value('memory', 'limits')};
+}
+
+function renderSidecarResourcesOverrideEditor(current, local, effective) {
+  const input = (field, label) => `<div class="col-6"><label class="form-label small mb-1" for="sidecar-resource-${field}">${esc(label)}</label><input class="form-control form-control-sm font-monospace" id="sidecar-resource-${field}" data-sidecar-resource-field="${field}" value="${esc(local?.[field] || '')}" placeholder="Effective: ${esc(effective[field] || '-')}"></div>`;
+  const reset = current.local ? `<button class="btn btn-outline-warning" type="button" data-reset-sidecar-resources-override><i class="ti ti-arrow-back-up me-1"></i>${current.shared_definition ? 'Reset to inherited' : 'Remove local resources'}</button>` : '';
+  return `<div data-sidecar-resources-override-editor>
+    <div class="alert alert-info py-2"><i class="ti ti-info-circle me-2"></i>${esc(current.shared_definition ? 'This writes only a minimal app-local resources patch. Other sidecar fields remain inherited.' : 'This sidecar is defined only in the application YAML.')}</div>
+    <div class="row g-2">
+      ${input('cpu_request', 'CPU request')}${input('cpu_limit', 'CPU limit')}
+      ${input('memory_request', 'Memory request')}${input('memory_limit', 'Memory limit')}
+    </div>
+    <div class="d-flex align-items-center justify-content-between gap-2 mt-3">${reset}<button class="btn btn-primary ms-auto" type="button" data-save-sidecar-resources-override><i class="ti ti-device-floppy me-1"></i>Save override</button></div>
+  </div>`;
+}
+
+async function openSidecarResourcesOverride(sidecarName) {
+  if (state.readOnly || !state.appFile) return;
+  clearError();
+  try {
+    const current = await api(sidecarResourcesOverrideURL(sidecarName));
+    const effectiveContainer = (state.inspectedApp?.effective?.sidecars || []).find((item) => item.name === sidecarName);
+    const effective = effectiveResourceForm(effectiveContainer?.resources || {});
+    state.sidecarResourcesOverride = current;
+    state.editModalClose = openContentModal({
+      modal: qs('#edit-modal'), titleSelector: '#edit-modal-title', subtitleSelector: '#edit-modal-subtitle', bodySelector: '#edit-modal-body',
+      title: `Edit resources: ${sidecarName}`, subtitle: current.shared_definition ? 'App-local override of a shared sidecar.' : 'App-only sidecar resources.',
+      body: renderSidecarResourcesOverrideEditor(current, current.local, effective), focusSelector: '[data-sidecar-resource-field]',
+      onClosed: () => { state.editModalClose = null; state.sidecarResourcesOverride = null; },
+    });
+  } catch (e) { showError(e); }
+}
+
+function sidecarResourceValues() {
+  const value = (field) => qs(`[data-sidecar-resource-field="${field}"]`)?.value?.trim() || '';
+  return {cpu_request: value('cpu_request'), cpu_limit: value('cpu_limit'), memory_request: value('memory_request'), memory_limit: value('memory_limit')};
+}
+
+function validateSidecarResourcesForm() {
+  clearInvalidInputs('[data-sidecar-resources-override-editor]');
+  const checks = [
+    ['cpu_request', 'CPU request', cpuQuantityRe, 'Use values like 100m, 0.5 or 1.'],
+    ['cpu_limit', 'CPU limit', cpuQuantityRe, 'Use values like 100m, 0.5 or 1.'],
+    ['memory_request', 'Memory request', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+    ['memory_limit', 'Memory limit', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+  ];
+  let populated = false;
+  for (const [field, label, pattern, hint] of checks) {
+    const input = qs(`[data-sidecar-resource-field="${field}"]`);
+    const value = input?.value?.trim() || '';
+    populated ||= value !== '';
+    if (value && !pattern.test(value)) return invalidInput(input, `${label} is invalid. ${hint}`);
+  }
+  if (!populated) return {ok: false, message: 'Enter at least one resource value, or use Reset to inherited.'};
+  return {ok: true};
+}
+
+async function confirmResetSidecarResourcesOverride() {
+  const current = state.sidecarResourcesOverride;
+  if (!current) return;
+  const confirmed = await confirmAction({
+    title: current.shared_definition ? 'Reset resources to inherited?' : 'Remove local resources?',
+    body: current.shared_definition ? 'Only the local resources block will be removed. The shared sidecar reference and other local patch fields remain unchanged.' : 'The resources block will be removed from this app-only sidecar.',
+    subject: current.sidecar_name, confirmLabel: current.shared_definition ? 'Reset resources' : 'Remove resources', confirmClass: 'btn-warning', statusClass: 'bg-warning',
+  });
+  if (confirmed) await saveSidecarResourcesOverride('reset');
+}
+
+async function saveSidecarResourcesOverride(action) {
+  const current = state.sidecarResourcesOverride;
+  if (state.readOnly || !current) return;
+  clearError();
+  const resources = sidecarResourceValues();
+  if (action === 'set') {
+    const validation = validateSidecarResourcesForm();
+    if (!validation.ok) return showError(validation.message);
+  }
+  try {
+    await apiPatch(sidecarResourcesOverrideURL(current.sidecar_name), {
+      expected_hash: current.content_hash, expected_defaults_hash: current.defaults_hash,
+      override: {action, resources},
+    });
+    state.editModalClose?.();
+    state.editModalClose = null;
+    state.sidecarResourcesOverride = null;
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
+}
+
+function sidecarStartupOverrideURL(sidecarName) {
+  return `/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/sidecars/${encodeURIComponent(sidecarName)}/startup/override`;
+}
+
+function startupLines(value) {
+  return Array.isArray(value) ? value.map((item) => String(item)).join('\n') : '';
+}
+
+function renderSidecarStartupOverrideEditor(current, effective) {
+  const local = current.local || {};
+  const row = (field, label, present, values, effectiveValues) => `<div class="mb-3" data-startup-list-row="${field}">
+    <label class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" data-startup-list-enabled="${field}" ${present ? 'checked' : ''}><span class="form-check-label">Override ${esc(label.toLowerCase())}</span></label>
+    <textarea class="form-control font-monospace" rows="3" data-startup-list-value="${field}" placeholder="Effective, one item per line:\n${esc(startupLines(effectiveValues))}" ${present ? '' : 'disabled'}>${esc(startupLines(values))}</textarea>
+  </div>`;
+  const reset = current.local ? `<button class="btn btn-outline-warning" type="button" data-reset-sidecar-startup-override><i class="ti ti-arrow-back-up me-1"></i>${current.shared_definition ? 'Reset to inherited' : 'Remove local startup'}</button>` : '';
+  return `<div data-sidecar-startup-override-editor>
+    <div class="alert alert-info py-2"><i class="ti ti-info-circle me-2"></i>Command and arguments are whole-list overrides. Enable only the lists that should be local.</div>
+    ${row('command', 'Command', local.command_present, local.command, effective.command)}
+    ${row('arguments', 'Arguments', local.arguments_present, local.arguments, effective.arguments)}
+    <div class="d-flex align-items-center justify-content-between gap-2">${reset}<button class="btn btn-primary ms-auto" type="button" data-save-sidecar-startup-override><i class="ti ti-device-floppy me-1"></i>Save override</button></div>
+  </div>`;
+}
+
+async function openSidecarStartupOverride(sidecarName) {
+  if (state.readOnly || !state.appFile) return;
+  clearError();
+  try {
+    const current = await api(sidecarStartupOverrideURL(sidecarName));
+    const effectiveContainer = (state.inspectedApp?.effective?.sidecars || []).find((item) => item.name === sidecarName);
+    state.sidecarStartupOverride = current;
+    state.editModalClose = openContentModal({
+      modal: qs('#edit-modal'), titleSelector: '#edit-modal-title', subtitleSelector: '#edit-modal-subtitle', bodySelector: '#edit-modal-body',
+      title: `Edit startup: ${sidecarName}`, subtitle: current.shared_definition ? 'App-local override of a shared sidecar.' : 'App-only sidecar startup.',
+      body: renderSidecarStartupOverrideEditor(current, effectiveContainer?.startup || {}), focusSelector: '[data-startup-list-enabled]',
+      onClosed: () => { state.editModalClose = null; state.sidecarStartupOverride = null; },
+    });
+    qsa('[data-startup-list-enabled]').forEach((toggle) => toggle.addEventListener('change', () => {
+      const field = toggle.dataset.startupListEnabled;
+      const textarea = qs(`[data-startup-list-value="${field}"]`);
+      if (textarea) textarea.disabled = !toggle.checked;
+    }));
+  } catch (e) { showError(e); }
+}
+
+function sidecarStartupValues() {
+  const list = (field) => {
+    const present = Boolean(qs(`[data-startup-list-enabled="${field}"]`)?.checked);
+    const raw = qs(`[data-startup-list-value="${field}"]`)?.value || '';
+    return {present, values: raw.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)};
+  };
+  const command = list('command');
+  const args = list('arguments');
+  return {command_present: command.present, command: command.values, arguments_present: args.present, arguments: args.values};
+}
+
+async function confirmResetSidecarStartupOverride() {
+  const current = state.sidecarStartupOverride;
+  if (!current) return;
+  const confirmed = await confirmAction({
+    title: current.shared_definition ? 'Reset startup to inherited?' : 'Remove local startup?',
+    body: current.shared_definition ? 'Only the local startup block will be removed. The shared sidecar reference and other local patch fields remain unchanged.' : 'The startup block will be removed from this app-only sidecar.',
+    subject: current.sidecar_name, confirmLabel: current.shared_definition ? 'Reset startup' : 'Remove startup', confirmClass: 'btn-warning', statusClass: 'bg-warning',
+  });
+  if (confirmed) await saveSidecarStartupOverride('reset');
+}
+
+async function saveSidecarStartupOverride(action) {
+  const current = state.sidecarStartupOverride;
+  if (state.readOnly || !current) return;
+  clearError();
+  const startup = sidecarStartupValues();
+  if (action === 'set' && !startup.command_present && !startup.arguments_present) return showError('Enable command or arguments, or use Reset to inherited.');
+  try {
+    await apiPatch(sidecarStartupOverrideURL(current.sidecar_name), {
+      expected_hash: current.content_hash, expected_defaults_hash: current.defaults_hash,
+      override: {action, startup},
+    });
+    state.editModalClose?.();
+    state.editModalClose = null;
+    state.sidecarStartupOverride = null;
     await refreshRepositorySnapshot();
     await loadApps();
     await selectApp(state.appFile);

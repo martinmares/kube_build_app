@@ -62,11 +62,37 @@ func TestInspectUsesBuilderCompositionAndPreservesSourceTemplates(t *testing.T) 
 	if !processEnv.Capabilities.CanOverride || processEnv.Capabilities.CanReset || processEnv.WriteTarget == nil || processEnv.WriteTarget.NameAssertion != "process-exporter" || processEnv.WriteTarget.SourceIndex != -1 || processEnv.WriteTarget.ExpectedDependencyHash != inspection.Defaults.ContentHash {
 		t.Fatalf("shared sidecar env write target is unsafe: %#v", processEnv)
 	}
+	processResources := processExporter.Fields["resources"]
+	if !processResources.Capabilities.CanOverride || processResources.Capabilities.CanReset || processResources.WriteTarget == nil || processResources.WriteTarget.NameAssertion != "process-exporter" || processResources.WriteTarget.SourceIndex != -1 || processResources.WriteTarget.ExpectedDependencyHash != inspection.Defaults.ContentHash {
+		t.Fatalf("shared sidecar resources write target is unsafe: %#v", processResources)
+	}
+	processStartup := processExporter.Fields["startup"]
+	if !processStartup.Capabilities.CanOverride || processStartup.Capabilities.CanReset || processStartup.WriteTarget == nil || processStartup.WriteTarget.NameAssertion != "process-exporter" || processStartup.WriteTarget.SourceIndex != -1 || processStartup.WriteTarget.ExpectedDependencyHash != inspection.Defaults.ContentHash {
+		t.Fatalf("shared sidecar startup write target is unsafe: %#v", processStartup)
+	}
 	if !hasInspectOrigin(java.Origins, "container_profile", "java-service") || !hasInspectOrigin(java.Origins, "sidecar_definition", "process-exporter") {
 		t.Fatalf("composition origins missing: %#v", java.Origins)
 	}
 	if !hasResolvedReferenceUsage(inspection.Usage, "workload_identity_token", "runtime-config", "java-api") || !hasResolvedReferenceUsage(inspection.Usage, "shared_asset", "test-ca", "java-api") {
 		t.Fatalf("transitive runtime asset usage missing: %#v", inspection.Usage)
+	}
+}
+
+func TestInspectDoesNotOfferResourcesOverrideWithExternalPolicy(t *testing.T) {
+	root := editMetamodelFixtureRoot(t)
+	policyRoot, err := filepath.Abs(filepath.Join("..", "..", "fixtures", "edit-metamodel", "resources"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := Inspect(Options{Environment: "dev", Root: root, ResourcePolicyRoot: policyRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	java := inspectedAppByName(t, inspection, "java-api.yml")
+	processExporter := effectiveContainerByName(t, java.Effective.Sidecars, "process-exporter")
+	resources := processExporter.Fields["resources"]
+	if resources.Capabilities.CanOverride || resources.WriteTarget != nil || !strings.Contains(resources.Capabilities.Reason, "authoritative") {
+		t.Fatalf("external resource policy exposed an ineffective writer: %#v", resources)
 	}
 }
 

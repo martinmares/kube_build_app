@@ -709,20 +709,35 @@ func inspectContainerFields(container EffectiveContainer, source, defaults Sourc
 	for field, value := range values {
 		path := fmt.Sprintf("%s[%d].%s", scope, index, field)
 		_, local := source.Fields[path]
+		sourceIndex := index
 		if scope == "sidecars" {
-			local = false
+			sourceIndex = sourceContainerIndexByName(source, scope, container.Name)
+			localSidecar := sourceContainer(source, scope, sourceIndex)
+			_, local = localSidecar[field]
+			path = fmt.Sprintf("sidecars[name=%s].%s", container.Name, field)
 		}
-		origins := inspectFieldOrigins(source, defaults, opts, scope, index, field, local)
+		origins := inspectFieldOrigins(source, defaults, opts, scope, index, sourceIndex, field, local)
 		reason := ""
 		canEdit := scope == "containers"
-		if !canEdit {
-			reason = "effective sidecar index is not a safe source selector"
+		if scope == "sidecars" && (field == "resources" || field == "startup") {
+			selectedShared := stringListContains(stringValues(source.Model["sidecar_ref_names"]), container.Name)
+			canEdit = sourceIndex >= 0 || selectedShared
+			if strings.TrimSpace(opts.ResourcePolicyRoot) != "" {
+				canEdit = false
+				reason = "external resource policy is authoritative"
+			}
+		}
+		if !canEdit && reason == "" {
+			reason = "field has no safe app-local writer"
 		}
 		var writeTarget *InspectWriteTarget
 		if canEdit {
 			writeTarget = &InspectWriteTarget{
 				Document: source.Path, YAMLPath: path, Scope: "app_" + strings.TrimSuffix(scope, "s"),
-				SourceIndex: index, NameAssertion: sourceContainerName(source, scope, index), ExpectedHash: source.ContentHash,
+				SourceIndex: sourceIndex, NameAssertion: container.Name, ExpectedHash: source.ContentHash,
+			}
+			if scope == "sidecars" {
+				writeTarget.ExpectedDependencyHash = defaults.ContentHash
 			}
 		}
 		result[field] = InspectField{
@@ -735,10 +750,10 @@ func inspectContainerFields(container EffectiveContainer, source, defaults Sourc
 	return result
 }
 
-func inspectFieldOrigins(source, defaults SourceDocument, opts Options, scope string, index int, field string, local bool) []InspectOrigin {
+func inspectFieldOrigins(source, defaults SourceDocument, opts Options, scope string, index, sourceIndex int, field string, local bool) []InspectOrigin {
 	target := fmt.Sprintf("%s[%d].%s", scope, index, field)
 	origins := []InspectOrigin{}
-	container := sourceContainer(source, scope, index)
+	container := sourceContainer(source, scope, sourceIndex)
 	if scope == "containers" {
 		for _, ref := range stringValues(container["profile_ref_names"]) {
 			if definitionHasField(defaults, "container_profiles", ref, field) {
@@ -750,7 +765,8 @@ func inspectFieldOrigins(source, defaults SourceDocument, opts Options, scope st
 		}
 	}
 	if local {
-		origins = append(origins, InspectOrigin{Kind: "local", Document: source.Path, YAMLPath: target, Target: target})
+		localPath := fmt.Sprintf("%s[%d].%s", scope, sourceIndex, field)
+		origins = append(origins, InspectOrigin{Kind: "local", Document: source.Path, YAMLPath: localPath, Target: target})
 	}
 	if field == "resources" && strings.TrimSpace(opts.ResourcePolicyRoot) != "" {
 		origins = append(origins, InspectOrigin{Kind: "external_resource_policy", Document: filepath.ToSlash(filepath.Join(opts.ResourcePolicyRoot, opts.Environment, "apps", filepath.Base(source.Path))), YAMLPath: scope, Target: target})

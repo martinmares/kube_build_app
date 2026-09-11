@@ -141,6 +141,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/references", s.handleAppReferencesUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/sidecars/{sidecar_name}/envs/{env_name}/override", s.handleAppSidecarEnvOverride)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/sidecars/{sidecar_name}/envs/{env_name}/override", s.handleAppSidecarEnvOverrideUpdate)
+	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/sidecars/{sidecar_name}/resources/override", s.handleAppSidecarResourcesOverride)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/sidecars/{sidecar_name}/resources/override", s.handleAppSidecarResourcesOverrideUpdate)
+	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/sidecars/{sidecar_name}/startup/override", s.handleAppSidecarStartupOverride)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/sidecars/{sidecar_name}/startup/override", s.handleAppSidecarStartupOverrideUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/defaults", s.handleDefaults)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/vars", s.handleDefaultsVarsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/container-envs", s.handleDefaultsContainerEnvsUpdate)
@@ -474,6 +478,92 @@ func (s *Server) handleAppSidecarEnvOverrideUpdate(w http.ResponseWriter, r *htt
 		return
 	}
 	override, err := s.repo.UpdateAppSidecarEnvOverride(r.PathValue("env"), r.PathValue("app_file"), r.PathValue("sidecar_name"), r.PathValue("env_name"), payload.Override, payload.ExpectedHash, payload.ExpectedDefaultsHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, override)
+}
+
+func (s *Server) handleAppSidecarResourcesOverride(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if strings.TrimSpace(s.options.BuildOptions.ResourcePolicyRoot) != "" {
+		writeError(w, http.StatusConflict, "external resource policy is authoritative; app-local resources cannot be edited here")
+		return
+	}
+	override, err := s.repo.AppSidecarResourcesOverride(r.PathValue("env"), r.PathValue("app_file"), r.PathValue("sidecar_name"))
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, override)
+}
+
+func (s *Server) handleAppSidecarResourcesOverrideUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	if strings.TrimSpace(s.options.BuildOptions.ResourcePolicyRoot) != "" {
+		writeError(w, http.StatusConflict, "external resource policy is authoritative; app-local resources cannot be edited here")
+		return
+	}
+	var payload struct {
+		ExpectedHash         string                                    `json:"expected_hash"`
+		ExpectedDefaultsHash string                                    `json:"expected_defaults_hash"`
+		Override             repository.SidecarResourcesOverrideUpdate `json:"override"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	override, err := s.repo.UpdateAppSidecarResourcesOverride(r.PathValue("env"), r.PathValue("app_file"), r.PathValue("sidecar_name"), payload.Override, payload.ExpectedHash, payload.ExpectedDefaultsHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, override)
+}
+
+func (s *Server) handleAppSidecarStartupOverride(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	override, err := s.repo.AppSidecarStartupOverride(r.PathValue("env"), r.PathValue("app_file"), r.PathValue("sidecar_name"))
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, override)
+}
+
+func (s *Server) handleAppSidecarStartupOverrideUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	var payload struct {
+		ExpectedHash         string                                  `json:"expected_hash"`
+		ExpectedDefaultsHash string                                  `json:"expected_defaults_hash"`
+		Override             repository.SidecarStartupOverrideUpdate `json:"override"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	override, err := s.repo.UpdateAppSidecarStartupOverride(r.PathValue("env"), r.PathValue("app_file"), r.PathValue("sidecar_name"), payload.Override, payload.ExpectedHash, payload.ExpectedDefaultsHash)
 	if err != nil {
 		writeError(w, statusForError(err), err.Error())
 		return

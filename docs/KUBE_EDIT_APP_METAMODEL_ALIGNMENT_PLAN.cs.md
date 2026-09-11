@@ -364,6 +364,32 @@ Checkpoint P3.2a 2026-09-11:
   P3 dale pokracuje resources/startup scope a pravidlem pro odebrani ref s
   existujicim patchem; proto zbyle checkboxy zatim nejsou uzavrene.
 
+Checkpoint P3.2b 2026-09-11:
+
+- stejny name-based selector a dual-hash kontrakt plati pro resources
+  sdilene i app-only sidecary; modal ukazuje effective hodnoty jako kontext,
+  ale zapisuje jen explicitne vyplnene lokalni hodnoty;
+- zmena jednoho pole proto vytvori napriklad pouze
+  `resources.cpu.requests`, ne kopii celeho zdedeneho resources bloku;
+- reset odstrani jen lokalni resources blok a zachova env patch, reference i
+  app-only sidecaru. Prazdny shared patch se uklidi;
+- pri externi resource policy UI editaci nenabizi a API ji odmitne, protoze
+  policy je autoritativni. Unit/API testy a browser override/reset smoke
+  prosly. Dalsi samostatny inkrement je startup.
+
+Checkpoint P3.2c 2026-09-11:
+
+- sidecar `startup.command` a `startup.arguments` pouzivaji stejny name-based
+  selector a dual-hash writer; oba seznamy jsou explicitni whole-list
+  overrides s vlastnim prepinacem;
+- nezaskrtnuty seznam se nematerializuje, zaskrtnuty prazdny seznam se zapise
+  jako `[]`. Nezname klice v existujicim startup bloku zablokuji editaci;
+- reset odstrani jen lokalni startup blok a zachova resources/env patch,
+  reference i app-only sidecaru. Unit testy a browser override/reset smoke
+  prosly;
+- dalsi P3 inkrement musi vyresit odebrani sidecar reference s lokalnim
+  patchem jako jednu explicitni, potvrzenou operaci.
+
 ### P4: Editace sdilenych definic a identity
 
 - [ ] Container profiles a sidecar definitions: create/edit/duplicate,

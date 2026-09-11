@@ -179,3 +179,183 @@ func TestSharedSidecarEnvOverrideRejectsStaleDefaults(t *testing.T) {
 		t.Fatalf("stale defaults error = %v, want conflict", err)
 	}
 }
+
+func TestSharedSidecarResourcesOverrideAndResetAreMinimal(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), `sidecar_definitions:
+  - name: exporter
+    image: exporter:1
+    startup:
+      command: ["/exporter"]
+    resources:
+      cpu: {from: 2m, to: 10m}
+      memory: {from: 8Mi, to: 32Mi}
+`)
+	appPath := filepath.Join(root, "dev", "apps", "api.yml")
+	original := "name: api\nsidecar_ref_names:\n  - exporter\ncontainers:\n  - name: api\n"
+	writeFile(t, appPath, original)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.AppSidecarResourcesOverride("dev", "api.yml", "exporter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := repo.UpdateAppSidecarResourcesOverride("dev", "api.yml", "exporter", SidecarResourcesOverrideUpdate{
+		Action: "set", Resources: ResourceUpdate{CPURequest: "5m", CPULimit: "20m", MemoryRequest: "16Mi", MemoryLimit: "64Mi"},
+	}, current.ContentHash, current.DefaultsHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Local == nil || updated.Local.CPURequest == nil || *updated.Local.CPURequest != "5m" {
+		t.Fatalf("unexpected resources override: %#v", updated)
+	}
+	content, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "  - name: exporter\n    resources:\n") || strings.Contains(string(content), "image:") || strings.Contains(string(content), "startup:") {
+		t.Fatalf("resources override materialized inherited fields:\n%s", content)
+	}
+	reset, err := repo.UpdateAppSidecarResourcesOverride("dev", "api.yml", "exporter", SidecarResourcesOverrideUpdate{Action: "reset"}, updated.ContentHash, updated.DefaultsHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reset.LocalPatch || reset.Local != nil {
+		t.Fatalf("resources override was not reset: %#v", reset)
+	}
+	content, err = os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != original {
+		t.Fatalf("resources reset did not restore original source:\n%s", content)
+	}
+}
+
+func TestSharedSidecarResourcesResetKeepsEnvPatch(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), "sidecar_definitions:\n  - name: exporter\n    image: exporter:1\n")
+	appPath := filepath.Join(root, "dev", "apps", "api.yml")
+	writeFile(t, appPath, `name: api
+sidecar_ref_names:
+  - exporter
+sidecars:
+  - name: exporter
+    resources:
+      cpu: {requests: 5m}
+    envs:
+      - name: MODE
+        value: nginx
+containers:
+  - name: api
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.AppSidecarResourcesOverride("dev", "api.yml", "exporter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset, err := repo.UpdateAppSidecarResourcesOverride("dev", "api.yml", "exporter", SidecarResourcesOverrideUpdate{Action: "reset"}, current.ContentHash, current.DefaultsHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reset.LocalPatch || reset.Local != nil {
+		t.Fatalf("unexpected reset state: %#v", reset)
+	}
+	content, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "resources:") || !strings.Contains(string(content), "name: MODE") {
+		t.Fatalf("resources reset damaged env patch:\n%s", content)
+	}
+}
+
+func TestSharedSidecarStartupOverrideAndResetAreMinimal(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), `sidecar_definitions:
+  - name: proxy
+    image: proxy:1
+    startup:
+      command: ["proxy"]
+      arguments: ["--listen", "8080"]
+    resources:
+      cpu: {from: 2m, to: 10m}
+`)
+	appPath := filepath.Join(root, "dev", "apps", "api.yml")
+	original := "name: api\nsidecar_ref_names:\n  - proxy\ncontainers:\n  - name: api\n"
+	writeFile(t, appPath, original)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.AppSidecarStartupOverride("dev", "api.yml", "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := repo.UpdateAppSidecarStartupOverride("dev", "api.yml", "proxy", SidecarStartupOverrideUpdate{
+		Action: "set", Startup: SidecarStartupModel{ArgumentsPresent: true, Arguments: []string{"--listen", "9090"}},
+	}, current.ContentHash, current.DefaultsHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Local == nil || updated.Local.CommandPresent || !updated.Local.ArgumentsPresent || len(updated.Local.Arguments) != 2 {
+		t.Fatalf("unexpected startup override: %#v", updated)
+	}
+	content, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "    startup:\n      arguments:\n        - \"--listen\"") || strings.Contains(string(content), "command:") || strings.Contains(string(content), "resources:") || strings.Contains(string(content), "image:") {
+		t.Fatalf("startup override materialized inherited fields:\n%s", content)
+	}
+	reset, err := repo.UpdateAppSidecarStartupOverride("dev", "api.yml", "proxy", SidecarStartupOverrideUpdate{Action: "reset"}, updated.ContentHash, updated.DefaultsHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reset.LocalPatch || reset.Local != nil {
+		t.Fatalf("startup override was not reset: %#v", reset)
+	}
+	content, err = os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != original {
+		t.Fatalf("startup reset did not restore original source:\n%s", content)
+	}
+}
+
+func TestSharedSidecarStartupSupportsExplicitEmptyList(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), "sidecar_definitions:\n  - name: proxy\n    startup:\n      arguments: [default]\n")
+	appPath := filepath.Join(root, "dev", "apps", "api.yml")
+	writeFile(t, appPath, "name: api\nsidecar_ref_names:\n  - proxy\ncontainers:\n  - name: api\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.AppSidecarStartupOverride("dev", "api.yml", "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := repo.UpdateAppSidecarStartupOverride("dev", "api.yml", "proxy", SidecarStartupOverrideUpdate{
+		Action: "set", Startup: SidecarStartupModel{ArgumentsPresent: true, Arguments: []string{}},
+	}, current.ContentHash, current.DefaultsHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Local == nil || !updated.Local.ArgumentsPresent || len(updated.Local.Arguments) != 0 {
+		t.Fatalf("explicit empty list was lost: %#v", updated)
+	}
+	content, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "      arguments: []") {
+		t.Fatalf("explicit empty list missing:\n%s", content)
+	}
+}
