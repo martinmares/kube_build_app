@@ -59,6 +59,9 @@ func TestInspectUsesBuilderCompositionAndPreservesSourceTemplates(t *testing.T) 
 	if !hasInspectOrigin(processEnv.Origins, "sidecar_definition", "process-exporter") || hasInspectOrigin(processEnv.Origins, "local", "TARGET_PROCESS") {
 		t.Fatalf("shared sidecar env provenance is incorrect: %#v", processEnv)
 	}
+	if !processEnv.Capabilities.CanOverride || processEnv.Capabilities.CanReset || processEnv.WriteTarget == nil || processEnv.WriteTarget.NameAssertion != "process-exporter" || processEnv.WriteTarget.SourceIndex != -1 || processEnv.WriteTarget.ExpectedDependencyHash != inspection.Defaults.ContentHash {
+		t.Fatalf("shared sidecar env write target is unsafe: %#v", processEnv)
+	}
 	if !hasInspectOrigin(java.Origins, "container_profile", "java-service") || !hasInspectOrigin(java.Origins, "sidecar_definition", "process-exporter") {
 		t.Fatalf("composition origins missing: %#v", java.Origins)
 	}

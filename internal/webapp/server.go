@@ -139,6 +139,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVarsUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/references", s.handleAppReferences)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/references", s.handleAppReferencesUpdate)
+	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/sidecars/{sidecar_name}/envs/{env_name}/override", s.handleAppSidecarEnvOverride)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/sidecars/{sidecar_name}/envs/{env_name}/override", s.handleAppSidecarEnvOverrideUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/defaults", s.handleDefaults)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/vars", s.handleDefaultsVarsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/container-envs", s.handleDefaultsContainerEnvsUpdate)
@@ -438,6 +440,45 @@ func (s *Server) handleAppReferencesUpdate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, references)
+}
+
+func (s *Server) handleAppSidecarEnvOverride(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	override, err := s.repo.AppSidecarEnvOverride(r.PathValue("env"), r.PathValue("app_file"), r.PathValue("sidecar_name"), r.PathValue("env_name"))
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, override)
+}
+
+func (s *Server) handleAppSidecarEnvOverrideUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	var payload struct {
+		ExpectedHash         string                              `json:"expected_hash"`
+		ExpectedDefaultsHash string                              `json:"expected_defaults_hash"`
+		Override             repository.SidecarEnvOverrideUpdate `json:"override"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	override, err := s.repo.UpdateAppSidecarEnvOverride(r.PathValue("env"), r.PathValue("app_file"), r.PathValue("sidecar_name"), r.PathValue("env_name"), payload.Override, payload.ExpectedHash, payload.ExpectedDefaultsHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, override)
 }
 
 func (s *Server) handleDefaults(w http.ResponseWriter, r *http.Request) {

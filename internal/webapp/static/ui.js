@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -263,6 +263,8 @@ async function init() {
     syncAppVarsEmptyState();
   });
   qs('#app-overview')?.addEventListener('click', (e) => {
+    const sidecarEnv = e.target.closest('[data-edit-sidecar-env]');
+    if (sidecarEnv && !state.readOnly) return openSidecarEnvOverride(sidecarEnv.dataset.sidecarName, sidecarEnv.dataset.envName, sidecarEnv.dataset.effectiveValue);
     const saveResources = e.target.closest('[data-save-resources]');
     if (saveResources && !state.readOnly) return saveContainerResources(Number(saveResources.dataset.saveResources));
     const saveVars = e.target.closest('[data-save-container-envs]');
@@ -783,6 +785,7 @@ function resetSelectedDetails() {
   state.model = null;
   state.appVars = [];
   state.appReferences = null;
+  state.sidecarEnvOverride = null;
   state.inspectedApp = null;
   state.inspection = null;
   state.inspectionEnv = null;
@@ -1263,8 +1266,17 @@ function renderEffectiveContainer(container, role) {
       <div class="col-12 col-xl-6"><div class="overview-subtitle">Ports</div>${(container.ports || []).length ? `<div class="chip-row">${container.ports.map((port) => chip(port.name || 'port', port.port ?? '?')).join('')}</div>` : '<div class="text-muted small">No ports.</div>'}</div>
       <div class="col-12 col-xl-6"><div class="overview-subtitle">Runtime assets</div>${(container.runtime_asset_ref_names || []).length ? `<div class="chip-row">${container.runtime_asset_ref_names.map((name) => chip('asset', name)).join('')}</div>` : '<div class="text-muted small">No direct asset references.</div>'}</div>
     </div>
-    <div class="overview-section"><div class="overview-subtitle">Environment</div>${envs.length ? `<div class="chip-row">${envs.map((entry) => chip(entry.name || '?', effectiveEnvValue(entry.effective))).join('')}</div>` : '<div class="text-muted small">No environment entries.</div>'}</div>
+    <div class="overview-section"><div class="overview-subtitle">Environment</div>${envs.length ? `<div class="d-flex flex-column gap-1">${envs.map((entry) => renderEffectiveEnvEntry(container, entry, role)).join('')}</div>` : '<div class="text-muted small">No environment entries.</div>'}</div>
   </div>`;
+}
+
+function renderEffectiveEnvEntry(container, entry, role) {
+  const value = effectiveEnvValue(entry.effective);
+  const simpleValue = entry.effective && Object.prototype.hasOwnProperty.call(entry.effective, 'value');
+  const editable = role === 'sidecar' && !state.readOnly && simpleValue && entry.capabilities?.can_override && entry.write_target?.name_assertion;
+  const local = (entry.origins || []).some((origin) => origin.kind === 'local');
+  const action = editable ? `<button class="btn btn-sm btn-ghost-secondary" type="button" data-edit-sidecar-env data-sidecar-name="${esc(container.name)}" data-env-name="${esc(entry.name)}" data-effective-value="${esc(value)}"><i class="ti ti-pencil me-1"></i>${local ? 'Edit override' : 'Override'}</button>` : '';
+  return `<div class="d-flex align-items-center justify-content-between gap-2"><div class="chip-row">${chip(entry.name || '?', value)}</div>${action}</div>`;
 }
 
 function effectiveContainerOrigins(container) {
@@ -1939,6 +1951,8 @@ function openEditPanel(panel, index) {
   syncAutoscalingEditor();
 }
 function handleEditModalClick(e) {
+  if (e.target.closest('[data-save-sidecar-env-override]') && !state.readOnly) return saveSidecarEnvOverride('set');
+  if (e.target.closest('[data-reset-sidecar-env-override]') && !state.readOnly) return confirmResetSidecarEnvOverride();
   const saveResources = e.target.closest('[data-save-resources]');
   if (saveResources && !state.readOnly) return saveContainerResources(Number(saveResources.dataset.saveResources));
   const saveRuntime = e.target.closest('[data-save-runtime]');
@@ -1998,6 +2012,68 @@ function handleEditModalClick(e) {
   if (specialValue && !state.readOnly) return openSpecialValueDialog(specialValue.closest('[data-special-entry-row]'));
   const specialAction = e.target.closest('[data-special-entry-action]');
   if (specialAction && !state.readOnly) return handleSpecialEntryAction(specialAction);
+}
+
+function sidecarEnvOverrideURL(sidecarName, envName) {
+  return `/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/sidecars/${encodeURIComponent(sidecarName)}/envs/${encodeURIComponent(envName)}/override`;
+}
+
+async function openSidecarEnvOverride(sidecarName, envName, effectiveValue) {
+  if (state.readOnly || !state.appFile) return;
+  clearError();
+  try {
+    const override = await api(sidecarEnvOverrideURL(sidecarName, envName));
+    state.sidecarEnvOverride = {...override, effective_value: effectiveValue};
+    const localValue = override.local?.is_value_editable ? (override.local.value ?? '') : effectiveValue;
+    const reset = override.local ? `<button class="btn btn-outline-warning" type="button" data-reset-sidecar-env-override><i class="ti ti-arrow-back-up me-1"></i>${override.shared_definition ? 'Reset to inherited' : 'Remove local value'}</button>` : '';
+    const context = override.shared_definition
+      ? (override.local ? 'This value currently has an app-local patch over the shared sidecar definition.' : 'This creates a minimal app-local patch. Other sidecar fields remain inherited.')
+      : 'This sidecar is defined only in the application YAML.';
+    const body = `<div data-sidecar-env-override-editor>
+      <div class="alert alert-info py-2"><i class="ti ti-info-circle me-2"></i>${esc(context)}</div>
+      <div class="mb-3"><label class="form-label">Sidecar</label><input class="form-control font-monospace" value="${esc(sidecarName)}" disabled></div>
+      <div class="mb-3"><label class="form-label">Environment variable</label><input class="form-control font-monospace" value="${esc(envName)}" disabled></div>
+      <div class="mb-3"><label class="form-label" for="sidecar-env-override-value">Local value</label><input class="form-control font-monospace" id="sidecar-env-override-value" value="${esc(localValue)}"></div>
+      <div class="d-flex align-items-center justify-content-between gap-2">${reset}<button class="btn btn-primary ms-auto" type="button" data-save-sidecar-env-override><i class="ti ti-device-floppy me-1"></i>Save override</button></div>
+    </div>`;
+    state.editModalClose = openContentModal({
+      modal: qs('#edit-modal'), titleSelector: '#edit-modal-title', subtitleSelector: '#edit-modal-subtitle', bodySelector: '#edit-modal-body',
+      title: `Override ${envName}`, subtitle: `Sidecar ${sidecarName}`, body, focusSelector: '#sidecar-env-override-value',
+      onClosed: () => { state.editModalClose = null; state.sidecarEnvOverride = null; },
+    });
+  } catch (e) { showError(e); }
+}
+
+async function confirmResetSidecarEnvOverride() {
+  const current = state.sidecarEnvOverride;
+  if (!current) return;
+  const confirmed = await confirmAction({
+    title: current.shared_definition ? 'Reset to inherited value?' : 'Remove local value?',
+    body: current.shared_definition ? 'Only the local environment override will be removed. The shared sidecar reference and inherited definition remain unchanged.' : 'The environment item will be removed from this app-only sidecar.',
+    subject: `${current.sidecar_name} / ${current.env_name}`,
+    confirmLabel: current.shared_definition ? 'Reset override' : 'Remove value',
+    confirmClass: 'btn-warning', statusClass: 'bg-warning',
+  });
+  if (confirmed) await saveSidecarEnvOverride('reset');
+}
+
+async function saveSidecarEnvOverride(action) {
+  const current = state.sidecarEnvOverride;
+  if (state.readOnly || !current) return;
+  clearError();
+  try {
+    await apiPatch(sidecarEnvOverrideURL(current.sidecar_name, current.env_name), {
+      expected_hash: current.content_hash,
+      expected_defaults_hash: current.defaults_hash,
+      override: {action, value: action === 'set' ? (qs('#sidecar-env-override-value')?.value ?? '') : ''},
+    });
+    state.editModalClose?.();
+    state.editModalClose = null;
+    state.sidecarEnvOverride = null;
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
 }
 
 function referenceCatalogForList(list) {

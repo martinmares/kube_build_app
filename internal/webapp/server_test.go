@@ -237,6 +237,7 @@ func TestMutatingEndpointsRequireWriteMode(t *testing.T) {
 		{http.MethodPost, "/api/v1/git/commit", `{"paths":["test/apps/api.yml"],"message":"test"}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/vars", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/references", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/sidecars/exporter/envs/MODE/override", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/vars", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/container-envs", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/replicas", `{}`},
@@ -480,6 +481,36 @@ runtime_asset_definitions:
 		if !strings.Contains(string(content), expected) {
 			t.Fatalf("updated app missing %q:\n%s", expected, content)
 		}
+	}
+}
+
+func TestAppSidecarEnvOverrideEndpoint(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), "sidecar_definitions:\n  - name: exporter\n    image: exporter:1\n    envs:\n      - name: MODE\n        value: java\n")
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, "name: api\nsidecar_ref_names:\n  - exporter\ncontainers:\n  - name: api\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.AppSidecarEnvOverride("test", "api.yml", "exporter", "MODE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	body := fmt.Sprintf(`{"expected_hash":%q,"expected_defaults_hash":%q,"override":{"action":"set","value":"nginx"}}`, current.ContentHash, current.DefaultsHash)
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/sidecars/exporter/envs/MODE/override", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"local_patch":true`) || !strings.Contains(response.Body.String(), `"value":"nginx"`) {
+		t.Fatalf("override response = %d: %s", response.Code, response.Body.String())
+	}
+	content, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "image: exporter:1") || !strings.Contains(string(content), "value: \"nginx\"") {
+		t.Fatalf("override materialized inherited sidecar fields:\n%s", content)
 	}
 }
 

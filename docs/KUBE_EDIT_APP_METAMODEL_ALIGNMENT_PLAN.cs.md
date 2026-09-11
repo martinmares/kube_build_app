@@ -350,6 +350,20 @@ Checkpoint P3.1 2026-09-11:
 - Tabler modal pouziva ordered radky se selectem, move up/down a remove; nic
   nematerializuje z effective modelu. Lokalni patch scope pokracuje v P3.2.
 
+Checkpoint P3.2a 2026-09-11:
+
+- effective sidecar env s jednoduchou `value` lze editovat pres jmeno sidecaru
+  a env polozky; effective index se pro zapis nepouziva;
+- zapis je vazany na hash app dokumentu i `_defaults.yml` a pro vybranou
+  sdilenou sidecaru vytvori pouze minimalni lokalni `sidecars[].envs` patch;
+- **Reset to inherited** odstrani jen lokalni env override. Pokud po nem
+  zustane patch pouze se jmenem, odstrani se cely patch, ale
+  `sidecar_ref_names` zustane beze zmeny. Ostatni lokalni patch pole a
+  app-only sidecara se zachovaji;
+- backend, endpoint, read-only guard, unit testy a browser smoke jsou hotove.
+  P3 dale pokracuje resources/startup scope a pravidlem pro odebrani ref s
+  existujicim patchem; proto zbyle checkboxy zatim nejsou uzavrene.
+
 ### P4: Editace sdilenych definic a identity
 
 - [ ] Container profiles a sidecar definitions: create/edit/duplicate,

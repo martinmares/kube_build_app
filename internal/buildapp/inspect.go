@@ -147,12 +147,13 @@ type InspectField struct {
 }
 
 type InspectWriteTarget struct {
-	Document      string `json:"document"`
-	YAMLPath      string `json:"yaml_path"`
-	Scope         string `json:"scope"`
-	SourceIndex   int    `json:"source_index"`
-	NameAssertion string `json:"name_assertion,omitempty"`
-	ExpectedHash  string `json:"expected_hash"`
+	Document               string `json:"document"`
+	YAMLPath               string `json:"yaml_path"`
+	Scope                  string `json:"scope"`
+	SourceIndex            int    `json:"source_index"`
+	NameAssertion          string `json:"name_assertion,omitempty"`
+	ExpectedHash           string `json:"expected_hash"`
+	ExpectedDependencyHash string `json:"expected_dependency_hash,omitempty"`
 }
 
 type InspectCapabilities struct {
@@ -608,17 +609,25 @@ func inspectEnvEntries(container EffectiveContainer, source, defaults SourceDocu
 	for _, env := range container.Envs {
 		name := strings.TrimSpace(fmt.Sprint(env["name"]))
 		origins, localIndex := inspectEnvOrigins(name, container.Name, source, defaults, scope, index)
-		canEdit := scope == "containers"
+		sourceIndex := index
+		if scope == "sidecars" {
+			sourceIndex = sourceContainerIndexByName(source, scope, container.Name)
+		}
+		selectedSharedSidecar := scope == "sidecars" && stringListContains(stringValues(source.Model["sidecar_ref_names"]), container.Name)
+		canEdit := scope == "containers" || sourceIndex >= 0 || selectedSharedSidecar
 		reason := ""
 		if !canEdit {
-			reason = "effective sidecar index is not a safe source selector"
+			reason = "sidecar has no safe local name selector"
 		}
 		path := fmt.Sprintf("%s[%d].envs[name=%s]", scope, index, name)
 		var writeTarget *InspectWriteTarget
 		if canEdit {
 			writeTarget = &InspectWriteTarget{
 				Document: source.Path, YAMLPath: path, Scope: "app_" + strings.TrimSuffix(scope, "s") + "_env",
-				SourceIndex: index, NameAssertion: sourceContainerName(source, scope, index), ExpectedHash: source.ContentHash,
+				SourceIndex: sourceIndex, NameAssertion: container.Name, ExpectedHash: source.ContentHash,
+			}
+			if scope == "sidecars" {
+				writeTarget.ExpectedDependencyHash = defaults.ContentHash
 			}
 		}
 		result = append(result, InspectEnvEntry{
@@ -628,6 +637,15 @@ func inspectEnvEntries(container EffectiveContainer, source, defaults SourceDocu
 		})
 	}
 	return result
+}
+
+func stringListContains(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func inspectEnvOrigins(name, effectiveContainerName string, source, defaults SourceDocument, scope string, index int) ([]InspectOrigin, int) {
