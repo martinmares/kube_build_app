@@ -334,8 +334,8 @@ Implementacni checkpoint 2026-09-11:
 - [ ] Lokalni patch vytvorit pouze po explicitni akci, zachovat ref.
   App-only sidecar je samostatna akce s image a startup/env/resources.
 - [ ] Znovupouzit resource/env/startup modal nad ruznymi source scopes.
-- [ ] Reset scalaru/map a explicitni whole-list override podle kontraktu.
-- [ ] Test UI cgroup override meni jen regexp; image/startup/resources
+- [x] Reset scalaru/map a explicitni whole-list override podle kontraktu.
+- [x] Test UI cgroup override meni jen regexp; image/startup/resources
   zustavaji z definice. Reset obnovi java regexp. Odebrani ref s patchem
   nenecha nevalidni fragment. App-only mtls gateway zustava samostatny.
 
@@ -389,6 +389,16 @@ Checkpoint P3.2c 2026-09-11:
   prosly;
 - dalsi P3 inkrement musi vyresit odebrani sidecar reference s lokalnim
   patchem jako jednu explicitni, potvrzenou operaci.
+
+Checkpoint P3.3 2026-09-11:
+
+- odebrani sdilene sidecar reference s existujicim lokalnim patchem je jedna
+  explicitni operace. Bez `remove_sidecar_patches` backend zapis odmitne;
+- UI pred zapisem zobrazi potvrzovaci modal se jmeny sidecaru a po potvrzeni
+  odstrani referenci i cely odpovidajici lokalni patch;
+- writer pracuje podle jmena, zachova app-only sidecary i nesouvisejici YAML
+  a prazdny `sidecar_ref_names` blok uklidi. Repository/API testy a browser
+  smoke nad realnym UI prosly.
 
 ### P4: Editace sdilenych definic a identity
 

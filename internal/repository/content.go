@@ -256,6 +256,7 @@ type AppReferencesUpdate struct {
 	RuntimeAssetRefNames []string              `json:"runtime_asset_ref_names"`
 	Containers           []ContainerReferences `json:"containers"`
 	Sidecars             []ContainerReferences `json:"sidecars"`
+	RemoveSidecarPatches []string              `json:"remove_sidecar_patches,omitempty"`
 }
 
 type EnvVarModel struct {
@@ -956,6 +957,10 @@ func (r *Repository) UpdateAppReferences(envName string, appFile string, update 
 	if err != nil {
 		return AppReferences{}, err
 	}
+	updated, err = removeNamedCollectionItems(updated, "sidecars", update.RemoveSidecarPatches)
+	if err != nil {
+		return AppReferences{}, err
+	}
 	if err := atomicWriteFile(path, []byte(updated)); err != nil {
 		return AppReferences{}, err
 	}
@@ -1001,12 +1006,65 @@ func validateAppReferencesUpdate(current AppReferences, update AppReferencesUpda
 	}
 	selectedSidecars := stringSet(update.SidecarRefNames)
 	sharedSidecars := stringSet(current.Catalog.SidecarDefinitions)
+	removePatches := stringSet(update.RemoveSidecarPatches)
+	if len(removePatches) != len(update.RemoveSidecarPatches) {
+		return errors.New("remove_sidecar_patches contains duplicate names")
+	}
+	currentRefs := stringSet(current.SidecarRefNames)
+	localSidecars := map[string]bool{}
+	for _, sidecar := range current.Sidecars {
+		localSidecars[sidecar.Name] = true
+	}
+	for name := range removePatches {
+		if !referenceNamePattern.MatchString(name) || !sharedSidecars[name] || !currentRefs[name] || selectedSidecars[name] || !localSidecars[name] {
+			return fmt.Errorf("remove_sidecar_patches contains invalid removal %q", name)
+		}
+	}
+	for name := range currentRefs {
+		if !selectedSidecars[name] && localSidecars[name] && !removePatches[name] {
+			return fmt.Errorf("removing sidecar reference %q also requires explicit removal of its local patch", name)
+		}
+	}
 	for _, sidecar := range update.Sidecars {
-		if sharedSidecars[sidecar.Name] && !selectedSidecars[sidecar.Name] {
+		if sharedSidecars[sidecar.Name] && !selectedSidecars[sidecar.Name] && !removePatches[sidecar.Name] {
 			return fmt.Errorf("sidecars %q matches a shared definition but is not selected in sidecar_ref_names", sidecar.Name)
 		}
 	}
 	return nil
+}
+
+func removeNamedCollectionItems(content, collection string, names []string) (string, error) {
+	if len(names) == 0 {
+		return content, nil
+	}
+	root, err := sourceModelRoot(content)
+	if err != nil {
+		return "", err
+	}
+	remove := stringSet(names)
+	indices := []int{}
+	for index, raw := range anySlice(root[collection]) {
+		item, _ := raw.(map[string]any)
+		if remove[strings.TrimSpace(stringValue(item["name"]))] {
+			indices = append(indices, index)
+		}
+	}
+	updated := content
+	for index := len(indices) - 1; index >= 0; index-- {
+		lines, start, end, err := collectionItemBlockRange(updated, collection, indices[index])
+		if err != nil {
+			return "", err
+		}
+		updated = joinLikeSource(append(lines[:start], lines[end:]...), updated)
+	}
+	updatedRoot, err := sourceModelRoot(updated)
+	if err != nil {
+		return "", err
+	}
+	if len(anySlice(updatedRoot[collection])) == 0 {
+		updated = replaceTopLevelBlock(updated, collection, nil)
+	}
+	return updated, nil
 }
 
 func validateReferenceScopes(label string, current []ContainerReferences, updates []ContainerReferences, catalog ReferenceCatalog) error {

@@ -1610,3 +1610,50 @@ func TestUpdateAppReferencesRejectsStaleDefaultsAndUnknownReference(t *testing.T
 		t.Fatalf("unknown reference error = %v", err)
 	}
 }
+
+func TestUpdateAppReferencesRequiresExplicitSharedPatchRemoval(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), "sidecar_definitions:\n  - name: exporter\n    image: exporter:1\n")
+	appPath := filepath.Join(root, "dev", "apps", "api.yml")
+	writeFile(t, appPath, `name: api
+sidecar_ref_names:
+  - exporter
+sidecars:
+  - name: gateway
+    image: gateway:1
+  - name: exporter
+    # remove this patch with the reference
+    envs:
+      - name: MODE
+        value: custom
+containers:
+  - name: api
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.AppReferences("dev", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := AppReferencesUpdate{Containers: current.Containers, Sidecars: current.Sidecars}
+	if _, err := repo.UpdateAppReferences("dev", "api.yml", update, current.ContentHash, current.DefaultsHash); err == nil || !strings.Contains(err.Error(), "explicit removal") {
+		t.Fatalf("missing patch removal error = %v", err)
+	}
+	update.RemoveSidecarPatches = []string{"exporter"}
+	result, err := repo.UpdateAppReferences("dev", "api.yml", update, current.ContentHash, current.DefaultsHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.SidecarRefNames) != 0 || len(result.Sidecars) != 1 || result.Sidecars[0].Name != "gateway" {
+		t.Fatalf("unexpected references after removal: %#v", result)
+	}
+	content, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "name: exporter") || strings.Contains(string(content), "remove this patch") || !strings.Contains(string(content), "name: gateway") {
+		t.Fatalf("atomic reference/patch removal damaged YAML:\n%s", content)
+	}
+}

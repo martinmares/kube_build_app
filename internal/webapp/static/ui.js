@@ -2350,6 +2350,18 @@ async function saveAppReferences() {
     const values = referenceValues(list);
     if (new Set(values).size !== values.length) return showError('A reference list contains duplicate definitions.');
   }
+  const selectedSidecars = new Set(references.sidecar_ref_names);
+  const localSidecars = new Set((state.appReferences.sidecars || []).map((item) => item.name));
+  const removedPatches = (state.appReferences.sidecar_ref_names || []).filter((name) => !selectedSidecars.has(name) && localSidecars.has(name));
+  if (removedPatches.length) {
+    const confirmed = await confirmAction({
+      title: 'Remove sidecar reference and local patch?',
+      body: 'These sidecars have app-local patch data. Saving will remove both the shared reference and the complete local patch.',
+      subject: removedPatches.join(', '), confirmLabel: 'Remove both', confirmClass: 'btn-danger', statusClass: 'bg-danger',
+    });
+    if (!confirmed) return;
+  }
+  references.remove_sidecar_patches = removedPatches;
   clearError();
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/references`, {
