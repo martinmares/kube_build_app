@@ -1,7 +1,7 @@
 # kube-edit-app: sladeni s aktualnim metamodellem builderu
 
 Datum: 2026-09-11. Vychozi commit: `162e6e2`, VERSION `0.13.1`.
-Stav: etapy P0 a P1 implementovany; P2-P6 cekaji.
+Stav: etapy P0-P2 implementovany; P3-P6 cekaji.
 Autor zadani chce implementaci predat dalsi session/modelu.
 Tento dokument nahrazuje stare poradi praci v
 `KUBE_EDIT_APP_MODEL_WORK_PLAN.cs.md` pro tento konkretni ukol.
@@ -304,16 +304,26 @@ Implementacni zaznam P0/P1:
 
 ### P2: Read-only orientace v modelu
 
-- [ ] Defaults stranka + backwards/deep-link navigace pres Assets.
-- [ ] Katalogy, source/effective app, sidecars a puvod hodnot.
-- [ ] Index pouziti profil/sidecar/runtime asset/token/shared asset ->
+- [x] Defaults stranka + backwards/deep-link navigace pres Assets.
+- [x] Katalogy, source/effective app, sidecars a puvod hodnot.
+- [x] Index pouziti profil/sidecar/runtime asset/token/shared asset ->
   app/container. Nevytvaret DB; vypocitat ze zdroju a inspection snapshotu.
-- [ ] Assets zpristupni shared.assets.yml jako metadata dokument a odkazy
+- [x] Assets zpristupni shared.assets.yml jako metadata dokument a odkazy
   na jeho soubory. Build vstupy ukazat v Build kontextu; secret `.env`
   neexponovat automaticky jako dalsi verejny asset.
-- [ ] Summary counts nepredstiraji jen lokalni kontejnery jako cele Pod.
-- [ ] Source mode jde otevrit offline, unquoted placeholders se zobrazi
+- [x] Summary counts nepredstiraji jen lokalni kontejnery jako cele Pod.
+- [x] Source mode jde otevrit offline, unquoted placeholders se zobrazi
   v puvodni podobe. Zvolene env ma vzdy vlastni stale/loading/error stav.
+
+Implementacni checkpoint 2026-09-11:
+
+- `buildapp.Inspect` vraci source dokumenty defaults/shared assets, efektivni
+  aplikace, puvod poli a vypocteny used-by index vcetne tranzitivnich referenci;
+- UI ma read-only Defaults katalog a prepinac Effective / Local source v Apps;
+- Assets strom obsahuje korenova metadata a `shared.assets.yml` ma
+  strukturovany detail s odkazy na fyzicke asset soubory;
+- browser smoke overil deep-link Defaults -> Apps, browser Back, efektivni
+  sidecary/provenance a shared asset metadata -> asset soubor.
 
 ### P3: Explicitni reference a lokalni override
 

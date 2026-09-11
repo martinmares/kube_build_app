@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -162,7 +162,8 @@ function setActive(page) {
   }
   for (const pageEl of qsa('[data-page]')) pageEl.classList.toggle('hidden', pageEl.dataset.page !== page);
   setText('#page-pretitle', state.env ? `Environment ${state.env}` : 'Environment repository');
-  setText('#page-title', page === 'dashboard' ? 'Select environment' : page === 'changes' ? 'Changed files' : page === 'apps' ? 'Inspect applications' : page === 'assets' ? 'Inspect assets' : 'Build preview');
+  setText('#page-title', page === 'dashboard' ? 'Select environment' : page === 'changes' ? 'Changed files' : page === 'apps' ? 'Inspect applications' : page === 'defaults' ? 'Inspect defaults' : page === 'assets' ? 'Inspect assets' : 'Build preview');
+  if (page === 'defaults') loadInspection();
   if (page === 'build') loadBuildData();
 }
 function routeHash({env = state.env, page = state.active, app = state.appFile, asset = state.assetPath} = {}) {
@@ -196,7 +197,7 @@ async function restoreRouteFromHash() {
   const route = parseRouteHash();
   const env = state.envs.some((item) => item.name === route.env) ? route.env : (state.env || localStorage.getItem('activeEnv') || state.envs[0].name);
   if (env !== state.env) await selectEnv(env, {updateRoute: false});
-  const page = ['dashboard', 'changes', 'apps', 'assets', 'build'].includes(route.page) ? route.page : state.active;
+  const page = ['dashboard', 'changes', 'apps', 'defaults', 'assets', 'build'].includes(route.page) ? route.page : state.active;
   setActive(page || 'dashboard');
   if (page === 'apps' && route.app) await selectApp(route.app, {updateRoute: false});
   if (page === 'assets' && route.asset) await selectAsset(route.asset, {updateRoute: false});
@@ -223,6 +224,10 @@ async function init() {
   }));
   qs('#refresh-btn')?.addEventListener('click', () => refreshCurrentView());
   qs('#apps-filter')?.addEventListener('input', () => renderApps());
+  qs('#defaults-filter')?.addEventListener('input', () => renderDefaultsOverview());
+  qs('#defaults-open-source')?.addEventListener('click', () => openDefaultsSource());
+  qs('#app-view-effective')?.addEventListener('click', () => setAppView('effective'));
+  qs('#app-view-local')?.addEventListener('click', () => setAppView('local'));
   qs('#assets-filter')?.addEventListener('input', () => renderAssets());
   qs('#build-validate-btn')?.addEventListener('click', () => runBuildValidate());
   qs('#build-refresh-btn')?.addEventListener('click', () => loadBuildData());
@@ -284,6 +289,18 @@ async function init() {
     }
   });
   qs('#asset-structured')?.addEventListener('click', (e) => handleAssetStructuredClick(e));
+  qs('#defaults-overview')?.addEventListener('click', async (e) => {
+    const app = e.target.closest('[data-defaults-app]');
+    if (app) {
+      setActive('apps');
+      return selectApp(app.dataset.defaultsApp);
+    }
+    const asset = e.target.closest('[data-defaults-asset]');
+    if (asset) {
+      setActive('assets');
+      return selectAsset(asset.dataset.defaultsAsset);
+    }
+  });
   qs('#asset-structured')?.addEventListener('input', (e) => handleAssetStructuredInput(e));
   qs('#ports-edit-modal')?.addEventListener('click', (e) => handlePortsModalClick(e));
   qs('#edit-modal')?.addEventListener('click', (e) => handleEditModalClick(e));
@@ -322,6 +339,9 @@ async function refreshRepositorySnapshot() {
   state.git = git;
   renderGitStatus();
   state.envs = data.items || [];
+  state.inspection = null;
+  state.inspectionEnv = null;
+  state.inspectionError = '';
   setText('#repo-root', data.root || '-');
   setText('#env-count', state.envs.length);
   renderEnvs();
@@ -332,7 +352,7 @@ async function refreshCurrentView() {
   try {
     await refreshRepositorySnapshot();
     if (state.env) {
-      await Promise.all([loadApps(), loadAssets()]);
+      await Promise.all([loadApps(), loadAssets(), loadInspection(true)]);
       if (state.active === 'apps' && state.appFile) await selectApp(state.appFile);
       if (state.active === 'assets' && state.assetPath) await selectAsset(state.assetPath);
       if (state.active === 'build') resetBuildView();
@@ -385,7 +405,7 @@ async function selectEnv(env, options = {}) {
   if (changedEnv) resetSelectedDetails();
   renderEnvs();
   renderEnvChanges();
-  await Promise.all([loadApps(), loadAssets()]);
+  await Promise.all([loadApps(), loadAssets(), loadInspection()]);
   const hasChanges = gitFilesForEnv(env).length > 0;
   setActive(state.active === 'dashboard' ? (hasChanges ? 'changes' : 'apps') : state.active);
   if (options.updateRoute !== false) pushRoute({env, page: state.active});
@@ -762,6 +782,10 @@ function resetSelectedDetails() {
   state.appFile = null;
   state.model = null;
   state.appVars = [];
+  state.inspectedApp = null;
+  state.inspection = null;
+  state.inspectionEnv = null;
+  state.inspectionError = '';
   state.assetPath = null;
   state.assetOpenDirs = new Set();
   state.inventory = null;
@@ -771,6 +795,10 @@ function resetSelectedDetails() {
   state.appContentHash = null;
   setHTML('#app-detail-badges', '');
   setHTML('#app-overview', '<div class="text-muted">Select an application to show structured model overview.</div>');
+  setHTML('#app-effective-status', '');
+  setText('#app-overview-title', 'Effective overview');
+  setHTML('#defaults-status', '');
+  setHTML('#defaults-overview', '');
   setText('#app-raw', '');
   setText('#app-rendered', '');
   renderAppReplicasEditor(null);
@@ -815,6 +843,159 @@ function resetBuildView() {
 	renderBuildPreviewContent(null);
 }
 
+async function loadInspection(force = false) {
+  if (!state.env) return null;
+  const env = state.env;
+  if (!force && state.inspection && state.inspectionEnv === env) {
+    if (state.active === 'defaults') renderDefaultsOverview();
+    return state.inspection;
+  }
+  state.inspectionError = '';
+  if (state.active === 'defaults') {
+    setHTML('#defaults-status', '<div class="alert alert-info py-2 mb-0"><i class="ti ti-loader me-2"></i>Loading source and effective model...</div>');
+  }
+  try {
+    const inspection = await api(`/api/v1/envs/${encodeURIComponent(env)}/inspect`);
+    if (state.env !== env) return null;
+    state.inspection = inspection;
+    state.inspectionEnv = env;
+    state.inspectionError = '';
+    renderApps();
+    if (state.appFile) state.inspectedApp = inspectedAppForFile(state.appFile);
+    if (state.active === 'defaults') renderDefaultsOverview();
+    return inspection;
+  } catch (e) {
+    if (state.env !== env) return null;
+    state.inspection = null;
+    state.inspectionEnv = env;
+    state.inspectionError = String(e);
+    renderApps();
+    if (state.active === 'defaults') renderDefaultsOverview();
+    return null;
+  }
+}
+
+function inspectedAppForFile(file) {
+  return (state.inspection?.apps || []).find((item) => item.file_name === file) || null;
+}
+
+function setAppView(view) {
+  state.appView = view === 'local' ? 'local' : 'effective';
+  renderSelectedAppView();
+}
+
+function renderSelectedAppView() {
+  const effectiveButton = qs('#app-view-effective');
+  const localButton = qs('#app-view-local');
+  effectiveButton?.classList.toggle('btn-primary', state.appView === 'effective');
+  effectiveButton?.classList.toggle('btn-outline-secondary', state.appView !== 'effective');
+  localButton?.classList.toggle('btn-primary', state.appView === 'local');
+  localButton?.classList.toggle('btn-outline-secondary', state.appView !== 'local');
+  if (!state.appFile || !state.model) return;
+  if (state.appView === 'local') {
+    setText('#app-overview-title', 'Local source overview');
+    setHTML('#app-effective-status', '<div class="alert alert-info py-2"><i class="ti ti-file-code me-2"></i>This view contains only declarations stored in the application YAML. Shared defaults are not materialized here.</div>');
+    renderAppOverview(state.model);
+    return;
+  }
+  setText('#app-overview-title', 'Effective overview');
+  if (state.inspectionError) {
+    setHTML('#app-effective-status', `<div class="alert alert-warning py-2"><i class="ti ti-alert-triangle me-2"></i>Effective model is unavailable: ${esc(state.inspectionError)}. Local source remains available.</div>`);
+    setHTML('#app-overview', emptyState('ti-alert-triangle', 'Effective model unavailable', 'Switch to Local source to inspect and repair this app.'));
+    return;
+  }
+  const inspected = state.inspectedApp;
+  if (!inspected) {
+    setHTML('#app-effective-status', '<div class="alert alert-info py-2"><i class="ti ti-loader me-2"></i>Loading effective model...</div>');
+    setHTML('#app-overview', emptyState('ti-hourglass', 'Loading effective model'));
+    return;
+  }
+  if (!inspected.effective) {
+    const message = inspected.effective_error || state.inspection?.effective_error || 'Effective composition failed.';
+    setHTML('#app-effective-status', `<div class="alert alert-warning py-2"><i class="ti ti-alert-triangle me-2"></i>${esc(message)} Local source remains available.</div>`);
+    setHTML('#app-overview', emptyState('ti-alert-triangle', 'Effective model unavailable', 'Switch to Local source to inspect and repair this app.'));
+    return;
+  }
+  setHTML('#app-effective-status', renderEffectiveContextStatus(state.inspection));
+  renderEffectiveAppOverview(inspected);
+}
+
+function renderEffectiveContextStatus(inspection) {
+  const context = inspection?.context || {};
+  const sources = (context.variable_sources || []).join(' + ') || 'none';
+  return `<div class="alert alert-success py-2"><i class="ti ti-layers-linked me-2"></i>Resolved for namespace <span class="font-monospace">${esc(inspection.namespace || '?')}</span> from ${esc(sources)} variables${context.release_manifest ? ' and release manifest' : ''}.</div>`;
+}
+
+function renderDefaultsOverview() {
+  const host = qs('#defaults-overview');
+  if (!host) return;
+  if (state.inspectionError) {
+    setHTML('#defaults-status', `<div class="alert alert-danger py-2 mb-0"><i class="ti ti-alert-circle me-2"></i>${esc(state.inspectionError)}</div>`);
+    host.innerHTML = emptyState('ti-alert-circle', 'Defaults snapshot unavailable', 'The Apps local source view remains usable.');
+    return;
+  }
+  const inspection = state.inspection;
+  if (!inspection) {
+    host.innerHTML = emptyState('ti-hourglass', 'Loading defaults');
+    return;
+  }
+  const effectiveError = inspection.effective_error;
+  setHTML('#defaults-status', effectiveError
+    ? `<div class="alert alert-warning py-2 mb-0"><i class="ti ti-alert-triangle me-2"></i>Source catalogs are available, but effective evaluation failed: ${esc(effectiveError)}</div>`
+    : `<div class="alert alert-success py-2 mb-0"><i class="ti ti-check me-2"></i>Source catalogs loaded for namespace <span class="font-monospace">${esc(inspection.namespace || '?')}</span>.</div>`);
+  const model = inspection.defaults?.model || {};
+  const shared = inspection.shared_assets?.model || {};
+  const sections = defaultsCatalogSections(model, shared);
+  const query = (qs('#defaults-filter')?.value || '').trim().toLowerCase();
+  let visible = 0;
+  const rendered = sections.map((section) => {
+    const items = section.items.filter((item) => !query || JSON.stringify(item).toLowerCase().includes(query) || section.label.toLowerCase().includes(query));
+    visible += items.length;
+    if (!items.length) return '';
+    return `<div class="mb-4"><div class="d-flex align-items-center justify-content-between mb-2"><h3 class="h4 mb-0"><i class="ti ${section.icon} me-2 text-muted"></i>${esc(section.label)}</h3><span class="badge bg-secondary-lt">${items.length}</span></div><div class="row g-2">${items.map((item) => renderDefaultsCatalogItem(section.kind, item)).join('')}</div></div>`;
+  }).join('');
+  setText('#defaults-filter-count', `${visible} visible`);
+  host.innerHTML = rendered || emptyState('ti-search', 'No matching definitions', 'Try a different filter.');
+}
+
+function defaultsCatalogSections(model, shared) {
+  const named = (value) => Array.isArray(value) ? value : [];
+  const singleton = (name, value) => value && typeof value === 'object' && Object.keys(value).length ? [{name, ...value}] : [];
+  const workload = model.workload_identity || {};
+  return [
+    {label: 'Variables', kind: 'variable', icon: 'ti-variable', items: named(model.vars)},
+    {label: 'Container env defaults', kind: 'container_env_defaults', icon: 'ti-braces', items: named(model.container_envs).map((item) => ({name: item.container_ref_name || '?', ...item}))},
+    {label: 'Container profiles', kind: 'container_profile', icon: 'ti-template', items: named(model.container_profiles)},
+    {label: 'Sidecar definitions', kind: 'sidecar_definition', icon: 'ti-box-multiple', items: named(model.sidecar_definitions)},
+    {label: 'Workload identity tokens', kind: 'workload_identity_token', icon: 'ti-key', items: named(workload.tokens)},
+    {label: 'Runtime asset defaults', kind: 'runtime_asset_defaults', icon: 'ti-settings', items: singleton('runtime asset defaults', model.runtime_asset_defaults)},
+    {label: 'Runtime asset definitions', kind: 'runtime_asset_definition', icon: 'ti-file-settings', items: named(model.runtime_asset_definitions)},
+    {label: 'Shared assets', kind: 'shared_asset', icon: 'ti-files', items: named(shared.assets)},
+    {label: 'Pod, registry and metadata', kind: 'app_defaults', icon: 'ti-adjustments', items: [
+      ...singleton('pod', model.pod), ...singleton('registry', model.registry),
+      ...singleton('labels', model.labels), ...singleton('annotations', model.annotations),
+      ...singleton('workload identity', workload.service_account ? {service_account: workload.service_account} : null),
+    ]},
+  ];
+}
+
+function renderDefaultsCatalogItem(kind, item) {
+  const name = String(item.name || '?');
+  const usages = (state.inspection?.usage || []).filter((usage) => usage.kind === kind && usage.name === name);
+  const keys = Object.keys(item).filter((key) => key !== 'name');
+  const summary = keys.slice(0, 7).map((key) => `<span class="badge bg-secondary-lt">${esc(key)}</span>`).join('');
+  const usedBy = usages.slice(0, 6).map((usage) => `<button class="btn btn-sm btn-ghost-secondary" type="button" data-defaults-app="${esc(usage.app_file)}" title="${esc(usage.yaml_path)}"><i class="ti ti-apps me-1"></i>${esc(usage.app)}${usage.container ? ` / ${esc(usage.container)}` : ''}</button>`).join('');
+  const assetLink = kind === 'shared_asset' && item.file ? `<button class="btn btn-sm btn-outline-secondary" type="button" data-defaults-asset="${esc(sharedAssetBrowserPath(item.file))}"><i class="ti ti-file me-1"></i>Open file</button>` : '';
+  return `<div class="col-12 col-lg-6"><div class="card card-sm h-100"><div class="card-body"><div class="d-flex align-items-start justify-content-between gap-2"><div class="fw-semibold font-monospace text-break">${esc(name)}</div><span class="badge ${usages.length ? 'bg-blue-lt' : 'bg-secondary-lt'}">${usages.length} use${usages.length === 1 ? '' : 's'}</span></div><div class="d-flex flex-wrap gap-1 mt-2">${summary || '<span class="text-muted small">No additional fields.</span>'}</div>${usedBy || assetLink ? `<div class="d-flex flex-wrap gap-1 mt-3">${usedBy}${assetLink}</div>` : ''}</div></div></div>`;
+}
+
+async function openDefaultsSource() {
+  if (!state.env) return;
+  setActive('assets');
+  const sourcePath = state.inspection?.defaults?.path || '_defaults.yml';
+  await selectAsset(sourcePath.split('/').at(-1));
+}
+
 async function loadApps() {
   if (!state.env) return;
   const data = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps`);
@@ -836,7 +1017,11 @@ function renderApps() {
     return [a.app_name, a.file_name, a.replicas, a.containers_count].some((value) => String(value ?? '').toLowerCase().includes(query));
   });
   setText('#apps-filter-count', `${apps.length}/${state.apps.length}`);
-  body.innerHTML = apps.map((a) => `
+  body.innerHTML = apps.map((a) => {
+    const inspected = inspectedAppForFile(a.file_name);
+    const effective = inspected?.effective;
+    const runtime = effective ? `${effective.containers?.length || 0} main + ${effective.sidecars?.length || 0} sidecar` : inspected?.effective_error ? 'effective error' : `${a.containers_count ?? 0} local`;
+    return `
     <tr class="row-link ${state.appFile === a.file_name ? 'selected-row' : ''}" data-app="${esc(a.file_name)}">
       <td>
         <div class="fw-semibold app-list-name">${esc(a.app_name || a.file_name)}${dirtyBadge(gitFile(`${state.env}/apps/${a.file_name}`))}</div>
@@ -844,9 +1029,10 @@ function renderApps() {
       </td>
       <td class="text-end">
         <div class="badge bg-blue-lt" title="replicas">${a.replicas ?? '-'}</div>
-        <div class="text-muted small mt-1">${a.containers_count ?? 0} ctr</div>
+        <div class="text-muted small mt-1">${esc(runtime)}</div>
       </td>
-    </tr>`).join('') || `<tr><td colspan="2">${emptyState('ti-apps', query ? 'No matching apps' : 'No apps', query ? 'Try a different filter.' : 'No app YAML files were found.')}</td></tr>`;
+    </tr>`;
+  }).join('') || `<tr><td colspan="2">${emptyState('ti-apps', query ? 'No matching apps' : 'No apps', query ? 'Try a different filter.' : 'No app YAML files were found.')}</td></tr>`;
   qsa('[data-app]').forEach((x) => x.addEventListener('click', () => selectApp(x.dataset.app)));
 }
 async function selectApp(file, options = {}) {
@@ -864,12 +1050,14 @@ async function selectApp(file, options = {}) {
     ]);
     state.model = model;
     state.appVars = vars.items || [];
+    await loadInspection();
+    state.inspectedApp = inspectedAppForFile(file);
     setText('#app-detail-title', model.app_name || detail.summary?.app_name || detail.file_name);
     state.appContentHash = detail.content_hash || vars.content_hash || null;
     setText('#app-detail-path', detail.path);
     setText('#app-detail-meta', `${model.containers?.length || 0} container(s), ${vars.items?.length || 0} local variable(s)${detail.is_dirty ? ', dirty file' : ''}`);
     setHTML('#app-detail-badges', renderAppDetailBadges(model, detail));
-    renderAppOverview(model);
+    renderSelectedAppView();
     setText('#app-raw', detail.content);
     setText('#app-rendered', rendered.content);
     await loadGitDiff(`${state.env}/apps/${detail.file_name}`, detail.is_dirty, '#app-diff-section', '#app-diff');
@@ -967,8 +1155,12 @@ function renderAppDetailBadges(model, detail) {
   const hasJava = containers.some((container) => container.runtime?.java?.enabled);
   const hasLegacyProbes = containers.some((container) => container.probes?.legacy);
   const hasProbes = containers.some((container) => container.probes?.enabled);
+  const effective = state.inspectedApp?.effective;
   const badges = [
     detail.is_dirty ? badge('dirty', 'bg-yellow-lt', 'ti-alert-triangle') : '',
+    effective ? badge(`${effective.containers?.length || 0} main`, 'bg-blue-lt', 'ti-box') : '',
+    effective?.sidecars?.length ? badge(`${effective.sidecars.length} sidecar`, 'bg-cyan-lt', 'ti-box-multiple') : '',
+    state.inspectedApp?.effective_error ? badge('effective error', 'bg-yellow-lt', 'ti-alert-triangle') : '',
     model.autoscaling?.enabled ? badge('autoscaling', 'bg-blue-lt', 'ti-arrows-maximize') : '',
     model.init_containers_count ? badge(`init ${model.init_containers_count}`, 'bg-purple-lt', 'ti-player-skip-forward') : '',
     hasJava ? badge('java runtime', 'bg-orange-lt', 'ti-coffee') : '',
@@ -1010,6 +1202,129 @@ function renderAppOverview(model) {
       <div class="overview-title"><i class="ti ti-box me-1"></i>Containers</div>
       <div class="container-stack">${containers || emptyState('ti-box', 'No containers', 'This app model does not declare containers.')}</div>
     </div>`;
+}
+
+function renderEffectiveAppOverview(inspected) {
+  const host = qs('#app-overview');
+  if (!host) return;
+  const app = inspected.effective;
+  const appFacts = [
+    fact('Kind', app.kind || 'Deployment', 'ti-cube'),
+    fact('Replicas', app.replicas ?? '-', 'ti-copy'),
+    fact('Main containers', (app.containers || []).length, 'ti-box'),
+    fact('Sidecars', (app.sidecars || []).length, 'ti-box-multiple'),
+    fact('Init containers', (app.init_containers || []).length, 'ti-player-skip-forward'),
+  ];
+  const appMetadata = [
+    app.workload_identity && Object.keys(app.workload_identity).length ? effectiveSummaryCard('Workload identity', app.workload_identity, 'ti-id-badge-2') : '',
+    app.pod && Object.keys(app.pod).length ? effectiveSummaryCard('Pod defaults', app.pod, 'ti-box-model-2') : '',
+    (app.runtime_assets || []).length ? effectiveSummaryCard('Runtime assets', app.runtime_assets.map((asset) => asset.name || '?'), 'ti-file-settings') : '',
+    app.autoscaling?.enabled ? effectiveSummaryCard('Autoscaling', app.autoscaling, 'ti-arrows-maximize') : '',
+  ].filter(Boolean).join('');
+  host.innerHTML = `
+    <div class="overview-grid">${appFacts.join('')}</div>
+    ${appMetadata ? `<div class="row g-2 mb-3">${appMetadata}</div>` : ''}
+    ${renderEffectiveContainerSection('Main containers', app.containers || [], 'main')}
+    ${renderEffectiveContainerSection('Sidecars', app.sidecars || [], 'sidecar')}
+    ${renderEffectiveInitContainers(app.init_containers || [])}`;
+}
+
+function effectiveSummaryCard(title, value, icon) {
+  return `<div class="col-12 col-lg-6"><div class="metric-card"><div class="overview-subtitle"><i class="ti ${icon} me-1"></i>${esc(title)}</div><div class="font-monospace small text-break">${esc(compactEffectiveValue(value))}</div></div></div>`;
+}
+
+function renderEffectiveContainerSection(title, containers, role) {
+  if (!containers.length) return '';
+  return `<div class="overview-section"><div class="overview-title"><i class="ti ${role === 'sidecar' ? 'ti-box-multiple' : 'ti-box'} me-1"></i>${esc(title)}</div><div class="container-stack">${containers.map((container) => renderEffectiveContainer(container, role)).join('')}</div></div>`;
+}
+
+function renderEffectiveContainer(container, role) {
+  const resources = container.resources || {};
+  const startup = container.startup || {};
+  const probes = container.probes || {};
+  const origins = effectiveContainerOrigins(container);
+  const envs = container.env_entries || [];
+  return `<div class="container-card">
+    <div class="d-flex align-items-start justify-content-between gap-2 mb-3">
+      <div><div class="fw-semibold font-monospace text-break">${esc(container.name || '?')}</div><div class="text-muted small font-monospace text-break">${esc(container.image || 'image not configured')}</div></div>
+      <span class="badge ${role === 'sidecar' ? 'bg-cyan-lt' : 'bg-blue-lt'}">${esc(role)}</span>
+    </div>
+    <div class="d-flex flex-wrap gap-1 mb-3">${origins.length ? origins.map(renderOriginBadge).join('') : '<span class="badge bg-secondary-lt">origin unavailable</span>'}</div>
+    <div class="row g-2">
+      <div class="col-12 col-xl-4"><div class="overview-subtitle">Resources</div><div class="chip-row">${effectiveResourceChips(resources)}</div></div>
+      <div class="col-12 col-xl-4"><div class="overview-subtitle">Startup</div><div class="font-monospace small text-break">${esc(compactEffectiveValue(startup) || '-')}</div></div>
+      <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div><div class="font-monospace small text-break">${esc(compactEffectiveValue(pruneDisplayValue(probes)) || '-')}</div></div>
+    </div>
+    <div class="row g-2 mt-1">
+      <div class="col-12 col-xl-6"><div class="overview-subtitle">Ports</div>${(container.ports || []).length ? `<div class="chip-row">${container.ports.map((port) => chip(port.name || 'port', port.port ?? '?')).join('')}</div>` : '<div class="text-muted small">No ports.</div>'}</div>
+      <div class="col-12 col-xl-6"><div class="overview-subtitle">Runtime assets</div>${(container.runtime_asset_ref_names || []).length ? `<div class="chip-row">${container.runtime_asset_ref_names.map((name) => chip('asset', name)).join('')}</div>` : '<div class="text-muted small">No direct asset references.</div>'}</div>
+    </div>
+    <div class="overview-section"><div class="overview-subtitle">Environment</div>${envs.length ? `<div class="chip-row">${envs.map((entry) => chip(entry.name || '?', effectiveEnvValue(entry.effective))).join('')}</div>` : '<div class="text-muted small">No environment entries.</div>'}</div>
+  </div>`;
+}
+
+function effectiveContainerOrigins(container) {
+  const seen = new Set();
+  const result = [];
+  for (const origin of container.origins || []) {
+    const key = `${origin.kind}:${origin.definition_name || ''}:${origin.document || ''}`;
+    if (!seen.has(key)) { seen.add(key); result.push(origin); }
+  }
+  for (const field of Object.values(container.fields || {})) {
+    for (const origin of field.origins || []) {
+      const key = `${origin.kind}:${origin.definition_name || ''}:${origin.document || ''}`;
+      if (!seen.has(key)) { seen.add(key); result.push(origin); }
+    }
+  }
+  return result;
+}
+
+function renderOriginBadge(origin) {
+  const styles = {
+    local: ['bg-green-lt', 'Local'], container_profile: ['bg-blue-lt', 'Profile'],
+    container_env_defaults: ['bg-secondary-lt', 'Defaults env'], sidecar_definition: ['bg-cyan-lt', 'Shared sidecar'],
+    external_resource_policy: ['bg-orange-lt', 'External policy'], release_manifest: ['bg-purple-lt', 'Release'],
+  };
+  const [style, label] = styles[origin.kind] || ['bg-secondary-lt', origin.kind || 'origin'];
+  const detail = origin.definition_name ? `: ${origin.definition_name}` : '';
+  return `<span class="badge ${style}" title="${esc(`${origin.document || ''} ${origin.yaml_path || ''}`)}">${esc(label + detail)}</span>`;
+}
+
+function effectiveResourceChips(resources) {
+  const value = (name, side) => resources?.[name]?.[side] ?? resources?.[name]?.[side === 'requests' ? 'from' : 'to'] ?? '-';
+  return [chip('CPU req', value('cpu', 'requests')), chip('CPU lim', value('cpu', 'limits')), chip('Mem req', value('memory', 'requests')), chip('Mem lim', value('memory', 'limits'))].join('');
+}
+
+function effectiveEnvValue(env) {
+  if (!env) return '';
+  if (Object.prototype.hasOwnProperty.call(env, 'value')) return env.value ?? '';
+  if (env.workload_identity_token_ref_name) return `token: ${env.workload_identity_token_ref_name}`;
+  if (env.shared_asset_ref_name) return `asset: ${env.shared_asset_ref_name}`;
+  if (env.remove) return 'remove inherited';
+  return compactEffectiveValue(env.valueFrom || env);
+}
+
+function compactEffectiveValue(value) {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) return value.map((item) => typeof item === 'object' ? (item.name || JSON.stringify(item)) : item).join(', ');
+  if (typeof value === 'object') return Object.entries(value).map(([key, item]) => `${key}=${typeof item === 'object' ? JSON.stringify(item) : item}`).join(', ');
+  return String(value);
+}
+
+function pruneDisplayValue(value) {
+  if (Array.isArray(value)) return value.map(pruneDisplayValue).filter((item) => item !== null);
+  if (!value || typeof value !== 'object') return value === 0 || value === false || value === '' ? null : value;
+  const result = {};
+  for (const [key, item] of Object.entries(value)) {
+    const pruned = pruneDisplayValue(item);
+    if (pruned !== null && (!Array.isArray(pruned) || pruned.length) && (typeof pruned !== 'object' || Array.isArray(pruned) || Object.keys(pruned).length)) result[key] = pruned;
+  }
+  return result;
+}
+
+function renderEffectiveInitContainers(containers) {
+  if (!containers.length) return '';
+  return `<div class="overview-section"><div class="overview-title"><i class="ti ti-player-skip-forward me-1"></i>Init containers</div><div class="runtime-list">${containers.map((container) => `<div class="runtime-row"><div class="runtime-row-main">${esc(container.name || '?')}</div><div class="runtime-row-meta">${esc(container.image || '')}</div></div>`).join('')}</div></div>`;
 }
 function renderContainerOverview(container) {
   const resources = container.resources || {};
@@ -2430,7 +2745,7 @@ function formatBytes(bytes) {
 }
 function assetGitPath(relativePath) {
   if (isDefaultsAsset(relativePath)) return `${state.env}/apps/${relativePath}`;
-  return isSpecial(relativePath) ? `${state.env}/${relativePath}` : `${state.env}/assets/${relativePath}`;
+  return isRootMetadataAsset(relativePath) ? `${state.env}/${relativePath}` : `${state.env}/assets/${relativePath}`;
 }
 async function selectAsset(path, options = {}) {
   state.assetPath = path; renderAssets(); clearError();
@@ -2479,6 +2794,15 @@ async function selectAsset(path, options = {}) {
       setHTML('#asset-structured', renderDefaultsPreview(defaults));
       setText('#asset-raw', detail.content);
       await loadGitDiff(assetGitPath(detail.relative_path), detail.is_dirty, '#asset-diff-section', '#asset-diff');
+    } else if (isSharedAssetsAsset(path)) {
+      const detail = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/content/${path.split('/').map(encodeURIComponent).join('/')}`);
+      const inspection = await loadInspection();
+      state.assetContentHash = detail.content_hash || null;
+      setText('#asset-detail-path', detail.path);
+      setHTML('#asset-detail-badges', renderAssetDetailBadges(selectedAsset, detail));
+      setHTML('#asset-structured', renderSharedAssetsMetadata(inspection?.shared_assets));
+      setText('#asset-raw', detail.content);
+      await loadGitDiff(assetGitPath(detail.relative_path), detail.is_dirty, '#asset-diff-section', '#asset-diff');
     } else {
       const detail = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/assets/content/${path.split('/').map(encodeURIComponent).join('/')}`);
       state.assetContentHash = detail.content_hash || null;
@@ -2503,6 +2827,7 @@ function renderDefaultsPreview(defaults) {
   const editVars = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-defaults-vars><i class="ti ti-pencil me-1"></i>Edit vars</button>`;
   const editEnvs = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-defaults-container-envs><i class="ti ti-pencil me-1"></i>Edit container envs</button>`;
   return `
+    <div class="d-flex justify-content-end mb-3"><button class="btn btn-sm btn-outline-secondary" type="button" data-open-defaults-catalog><i class="ti ti-adjustments-horizontal me-1"></i>Open Defaults catalog</button></div>
     <div class="overview-section mb-3">
       <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
         <div class="overview-subtitle mb-0">Defaults local variables</div>
@@ -2517,6 +2842,16 @@ function renderDefaultsPreview(defaults) {
       </div>
       ${groups.length ? groups.map(renderDefaultsGroupPreview).join('') : emptyState('ti-variable', 'No container env defaults', state.readOnly ? '' : 'Use Edit container envs to add default envs.')}
     </div>`;
+}
+function renderSharedAssetsMetadata(document) {
+  const assets = document?.model?.assets || [];
+  return `<div class="overview-section mb-3">
+    <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+      <div><div class="overview-subtitle mb-1">Shared asset definitions</div><div class="text-muted small">Metadata references source files stored under the environment assets directory.</div></div>
+      <span class="badge bg-secondary-lt">${assets.length} asset${assets.length === 1 ? '' : 's'}</span>
+    </div>
+    ${assets.length ? `<div class="row g-2">${assets.map((item) => renderDefaultsCatalogItem('shared_asset', item)).join('')}</div>` : emptyState('ti-files', 'No shared assets', 'This metadata document contains no asset definitions.')}
+  </div>`;
 }
 function renderDefaultsGroupPreview(group) {
   const envs = group.envs || [];
@@ -2579,6 +2914,13 @@ function filterSpecialPreviewRows(query) {
 function handleAssetStructuredClick(e) {
   const copyButton = e.target.closest('[data-copy-special-entry]');
   if (copyButton) return copySpecialEntryValue(copyButton);
+  if (e.target.closest('[data-open-defaults-catalog]')) {
+    setActive('defaults');
+    pushRoute({page: 'defaults'});
+    return;
+  }
+  const sharedAsset = e.target.closest('[data-defaults-asset]');
+  if (sharedAsset) return selectAsset(sharedAsset.dataset.defaultsAsset);
   if (state.readOnly) return;
   if (e.target.closest('[data-edit-defaults-vars]')) return openDefaultsVarsEditor();
   if (e.target.closest('[data-edit-defaults-container-envs]')) return openDefaultsContainerEnvsEditor();
@@ -2604,6 +2946,9 @@ async function copySpecialEntryValue(button) {
 function isSpecial(path) { return ['env.secured.json','env.unsecured.json','assets.secured.json','assets.unsecured.json'].includes(path); }
 function isSecuredSpecial(path) { return ['env.secured.json','assets.secured.json'].includes(path); }
 function isDefaultsAsset(path) { return path === '_defaults.yml' || path === '_defaults.yaml'; }
+function isSharedAssetsAsset(path) { return path === 'shared.assets.yml'; }
+function isRootMetadataAsset(path) { return isSpecial(path) || isSharedAssetsAsset(path) || path === 'replica-profiles.yml'; }
+function sharedAssetBrowserPath(path) { return String(path || '').replace(/^assets\//, ''); }
 async function loadGitDiff(relativePath, isDirty, sectionSelector, targetSelector) {
   const section = qs(sectionSelector);
   const target = qs(targetSelector);

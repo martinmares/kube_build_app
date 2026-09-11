@@ -17,6 +17,14 @@ func TestInspectUsesBuilderCompositionAndPreservesSourceTemplates(t *testing.T) 
 	if inspection.EffectiveError != "" || inspection.Namespace != "edit-metamodel-dev" || len(inspection.Apps) != 2 {
 		t.Fatalf("unexpected inspection: %#v", inspection)
 	}
+	if inspection.Defaults == nil || inspection.SharedAssets == nil {
+		t.Fatalf("catalog sources missing: defaults=%#v shared=%#v", inspection.Defaults, inspection.SharedAssets)
+	}
+	if !hasReferenceUsage(inspection.Usage, "container_profile", "java-service", "java-api") ||
+		!hasReferenceUsage(inspection.Usage, "sidecar_definition", "process-exporter", "") ||
+		!hasReferenceUsage(inspection.Usage, "runtime_asset_definition", "java-config", "*") {
+		t.Fatalf("reference usage missing: %#v", inspection.Usage)
+	}
 	java := inspectedAppByName(t, inspection, "java-api.yml")
 	if java.Source.Model["name"] != "{{var:APP_NAME}}" || !strings.Contains(java.Source.RawContent, "{{env:REGISTRY_URL}}") {
 		t.Fatalf("source templates were not preserved: %#v", java.Source)
@@ -43,8 +51,19 @@ func TestInspectUsesBuilderCompositionAndPreservesSourceTemplates(t *testing.T) 
 	if len(java.Effective.RuntimeAssets) != 1 {
 		t.Fatalf("runtime assets = %#v, want selected java-config", java.Effective.RuntimeAssets)
 	}
+	processExporter := effectiveContainerByName(t, java.Effective.Sidecars, "process-exporter")
+	if !hasInspectOrigin(processExporter.Origins, "sidecar_definition", "process-exporter") || hasInspectOrigin(processExporter.Fields["image"].Origins, "local", "") {
+		t.Fatalf("shared sidecar provenance mapped to local effective index: %#v", processExporter)
+	}
+	processEnv := inspectedEnvByName(t, processExporter.EnvEntries, "TARGET_PROCESS")
+	if !hasInspectOrigin(processEnv.Origins, "sidecar_definition", "process-exporter") || hasInspectOrigin(processEnv.Origins, "local", "TARGET_PROCESS") {
+		t.Fatalf("shared sidecar env provenance is incorrect: %#v", processEnv)
+	}
 	if !hasInspectOrigin(java.Origins, "container_profile", "java-service") || !hasInspectOrigin(java.Origins, "sidecar_definition", "process-exporter") {
 		t.Fatalf("composition origins missing: %#v", java.Origins)
+	}
+	if !hasResolvedReferenceUsage(inspection.Usage, "workload_identity_token", "runtime-config", "java-api") || !hasResolvedReferenceUsage(inspection.Usage, "shared_asset", "test-ca", "java-api") {
+		t.Fatalf("transitive runtime asset usage missing: %#v", inspection.Usage)
 	}
 }
 
@@ -61,6 +80,9 @@ func TestInspectKeepsSourceWhenBuildVariablesFail(t *testing.T) {
 		if app.Source.RawContent == "" || app.Source.Model == nil || app.Effective != nil {
 			t.Fatalf("source unavailable after effective failure: %#v", app)
 		}
+	}
+	if inspection.Defaults == nil || inspection.SharedAssets == nil || len(inspection.Usage) == 0 {
+		t.Fatalf("source catalogs unavailable after effective failure: %#v", inspection)
 	}
 }
 
@@ -137,4 +159,33 @@ func inspectedEnvByName(t *testing.T, entries []InspectEnvEntry, name string) In
 	}
 	t.Fatalf("env %s not found", name)
 	return InspectEnvEntry{}
+}
+
+func hasReferenceUsage(usage []ReferenceUsage, kind, name, container string) bool {
+	for _, item := range usage {
+		if item.Kind == kind && item.Name == name && item.Container == container {
+			return true
+		}
+	}
+	return false
+}
+
+func effectiveContainerByName(t *testing.T, containers []EffectiveContainer, name string) EffectiveContainer {
+	t.Helper()
+	for _, container := range containers {
+		if container.Name == name {
+			return container
+		}
+	}
+	t.Fatalf("effective container %s not found", name)
+	return EffectiveContainer{}
+}
+
+func hasResolvedReferenceUsage(usage []ReferenceUsage, kind, name, app string) bool {
+	for _, item := range usage {
+		if item.Kind == kind && item.Name == name && item.App == app {
+			return true
+		}
+	}
+	return false
 }

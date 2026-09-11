@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -41,11 +42,24 @@ type BuildContext struct {
 }
 
 type Inspection struct {
-	Environment    string         `json:"environment"`
-	Namespace      string         `json:"namespace,omitempty"`
-	Context        BuildContext   `json:"context"`
-	EffectiveError string         `json:"effective_error,omitempty"`
-	Apps           []InspectedApp `json:"apps"`
+	Environment    string           `json:"environment"`
+	Namespace      string           `json:"namespace,omitempty"`
+	Context        BuildContext     `json:"context"`
+	EffectiveError string           `json:"effective_error,omitempty"`
+	Defaults       *SourceDocument  `json:"defaults,omitempty"`
+	SharedAssets   *SourceDocument  `json:"shared_assets,omitempty"`
+	Usage          []ReferenceUsage `json:"usage,omitempty"`
+	Apps           []InspectedApp   `json:"apps"`
+}
+
+type ReferenceUsage struct {
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	App       string `json:"app"`
+	AppFile   string `json:"app_file"`
+	Container string `json:"container,omitempty"`
+	Document  string `json:"document"`
+	YAMLPath  string `json:"yaml_path"`
 }
 
 type InspectedApp struct {
@@ -104,6 +118,7 @@ type EffectiveContainer struct {
 	EnvFrom              []map[string]any        `json:"env_from,omitempty"`
 	SecurityContext      map[string]any          `json:"security_context,omitempty"`
 	Raw                  map[string]any          `json:"raw,omitempty"`
+	Origins              []InspectOrigin         `json:"origins,omitempty"`
 	Fields               map[string]InspectField `json:"fields,omitempty"`
 	EnvEntries           []InspectEnvEntry       `json:"env_entries,omitempty"`
 }
@@ -232,6 +247,26 @@ func Inspect(opts Options) (Inspection, error) {
 		}
 		result.Apps = append(result.Apps, InspectedApp{FileName: filepath.Base(path), Source: source})
 	}
+	defaultsPath := filepath.Join(appsDir, "_defaults.yml")
+	if !isFile(defaultsPath) {
+		defaultsPath = filepath.Join(appsDir, "_defaults.yaml")
+	}
+	if isFile(defaultsPath) {
+		defaultsSource, sourceErr := inspectSourceDocument(defaultsPath, opts.Root)
+		if sourceErr != nil {
+			return Inspection{}, sourceErr
+		}
+		result.Defaults = &defaultsSource
+	}
+	sharedAssetsPath := filepath.Join(envDir, "shared.assets.yml")
+	if isFile(sharedAssetsPath) {
+		sharedSource, sourceErr := inspectSourceDocument(sharedAssetsPath, opts.Root)
+		if sourceErr != nil {
+			return Inspection{}, sourceErr
+		}
+		result.SharedAssets = &sharedSource
+	}
+	result.Usage = inspectReferenceUsage(result.Apps, result.Defaults)
 
 	vars, err := loadBuildVars(envDir, opts)
 	if err != nil {
@@ -244,8 +279,10 @@ func Inspect(opts Options) (Inspection, error) {
 		result.EffectiveError = err.Error()
 		return result, nil
 	}
-	defaultsPath := filepath.Join(appsDir, "_defaults.yml")
-	defaultsSource, _ := inspectSourceDocument(defaultsPath, opts.Root)
+	defaultsSource := SourceDocument{}
+	if result.Defaults != nil {
+		defaultsSource = *result.Defaults
+	}
 	for index, path := range appFiles {
 		app, appErr := loadApp(path, defaultsPath, vars)
 		if appErr == nil {
@@ -276,7 +313,138 @@ func Inspect(opts Options) (Inspection, error) {
 		}
 		result.Apps[index].Origins = inspectionOrigins(result.Apps[index].Source, defaultsPath, opts)
 	}
+	normalizeInspectionUsage(result.Usage, result.Apps)
 	return result, nil
+}
+
+func inspectReferenceUsage(apps []InspectedApp, defaults *SourceDocument) []ReferenceUsage {
+	usage := []ReferenceUsage{}
+	for _, inspected := range apps {
+		model := inspected.Source.Model
+		appName := strings.TrimSpace(fmt.Sprint(model["name"]))
+		if appName == "" || appName == "<nil>" {
+			appName = strings.TrimSuffix(inspected.FileName, filepath.Ext(inspected.FileName))
+		}
+		appendRefs := func(kind string, value any, container, yamlPath string) {
+			for _, ref := range stringValues(value) {
+				usage = append(usage, ReferenceUsage{Kind: kind, Name: ref, App: appName, AppFile: inspected.FileName, Container: container, Document: inspected.Source.Path, YAMLPath: yamlPath})
+			}
+		}
+		appendRefs("sidecar_definition", model["sidecar_ref_names"], "", "sidecar_ref_names")
+		appendRefs("runtime_asset_definition", model["runtime_asset_ref_names"], "*", "runtime_asset_ref_names")
+		for index, raw := range inspectAnySlice(model["containers"]) {
+			container, _ := raw.(map[string]any)
+			name := strings.TrimSpace(fmt.Sprint(container["name"]))
+			base := fmt.Sprintf("containers[%d]", index)
+			appendRefs("container_profile", container["profile_ref_names"], name, base+".profile_ref_names")
+			appendRefs("runtime_asset_definition", container["runtime_asset_ref_names"], name, base+".runtime_asset_ref_names")
+			usage = append(usage, inspectEnvReferenceUsage(inspected.Source.Path, inspected.FileName, appName, name, base+".envs", container["envs"])...)
+		}
+		for index, raw := range inspectAnySlice(model["sidecars"]) {
+			container, _ := raw.(map[string]any)
+			name := strings.TrimSpace(fmt.Sprint(container["name"]))
+			base := fmt.Sprintf("sidecars[%d]", index)
+			appendRefs("container_profile", container["profile_ref_names"], name, base+".profile_ref_names")
+			appendRefs("runtime_asset_definition", container["runtime_asset_ref_names"], name, base+".runtime_asset_ref_names")
+			usage = append(usage, inspectEnvReferenceUsage(inspected.Source.Path, inspected.FileName, appName, name, base+".envs", container["envs"])...)
+		}
+	}
+	if defaults != nil {
+		usage = expandReferenceUsage(usage, *defaults)
+	}
+	sort.Slice(usage, func(i, j int) bool {
+		left := usage[i].Kind + "\x00" + usage[i].Name + "\x00" + usage[i].App + "\x00" + usage[i].Container
+		right := usage[j].Kind + "\x00" + usage[j].Name + "\x00" + usage[j].App + "\x00" + usage[j].Container
+		return left < right
+	})
+	return usage
+}
+
+func expandReferenceUsage(base []ReferenceUsage, defaults SourceDocument) []ReferenceUsage {
+	usage := append([]ReferenceUsage(nil), base...)
+	for _, item := range base {
+		switch item.Kind {
+		case "runtime_asset_definition":
+			definition := namedDefinition(defaults.Model["runtime_asset_definitions"], item.Name)
+			source, _ := definition["source"].(map[string]any)
+			if len(source) == 0 {
+				source, _ = defaults.Model["runtime_asset_defaults"].(map[string]any)["source"].(map[string]any)
+			}
+			usage = appendReferenceFieldUsage(usage, item, source, "workload_identity_token_ref_name", "workload_identity_token", "runtime_asset_definitions.source")
+			usage = appendReferenceFieldUsage(usage, item, source, "ca_shared_asset_ref_name", "shared_asset", "runtime_asset_definitions.source")
+		case "container_profile":
+			definition := namedDefinition(defaults.Model["container_profiles"], item.Name)
+			body, _ := definition["defaults"].(map[string]any)
+			usage = append(usage, inspectEnvReferenceUsage(item.Document, item.AppFile, item.App, item.Container, "container_profiles.defaults.envs", body["envs"])...)
+		case "sidecar_definition":
+			definition := namedDefinition(defaults.Model["sidecar_definitions"], item.Name)
+			usage = append(usage, inspectEnvReferenceUsage(item.Document, item.AppFile, item.App, item.Name, "sidecar_definitions.envs", definition["envs"])...)
+		}
+	}
+	return deduplicateReferenceUsage(usage)
+}
+
+func appendReferenceFieldUsage(usage []ReferenceUsage, parent ReferenceUsage, values map[string]any, field, kind, yamlPath string) []ReferenceUsage {
+	ref := strings.TrimSpace(fmt.Sprint(values[field]))
+	if ref == "" || ref == "<nil>" {
+		return usage
+	}
+	return append(usage, ReferenceUsage{Kind: kind, Name: ref, App: parent.App, AppFile: parent.AppFile, Container: parent.Container, Document: parent.Document, YAMLPath: yamlPath + "." + field})
+}
+
+func namedDefinition(value any, name string) map[string]any {
+	for _, raw := range inspectAnySlice(value) {
+		definition, _ := raw.(map[string]any)
+		if strings.TrimSpace(fmt.Sprint(definition["name"])) == name {
+			return definition
+		}
+	}
+	return nil
+}
+
+func deduplicateReferenceUsage(usage []ReferenceUsage) []ReferenceUsage {
+	seen := map[string]bool{}
+	result := make([]ReferenceUsage, 0, len(usage))
+	for _, item := range usage {
+		key := item.Kind + "\x00" + item.Name + "\x00" + item.AppFile + "\x00" + item.Container + "\x00" + item.YAMLPath
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func normalizeInspectionUsage(usage []ReferenceUsage, apps []InspectedApp) {
+	for index := range usage {
+		for _, app := range apps {
+			if app.FileName != usage[index].AppFile || app.Effective == nil {
+				continue
+			}
+			rawAppName := strings.TrimSpace(fmt.Sprint(app.Source.Model["name"]))
+			usage[index].App = app.Effective.Name
+			if usage[index].Container == rawAppName && len(app.Effective.Containers) > 0 {
+				usage[index].Container = app.Effective.Containers[0].Name
+			}
+			break
+		}
+	}
+}
+
+func inspectEnvReferenceUsage(document, appFile, app, container, base string, value any) []ReferenceUsage {
+	usage := []ReferenceUsage{}
+	for index, raw := range inspectAnySlice(value) {
+		env, _ := raw.(map[string]any)
+		for field, kind := range map[string]string{
+			"workload_identity_token_ref_name": "workload_identity_token",
+			"shared_asset_ref_name":            "shared_asset",
+		} {
+			if ref := strings.TrimSpace(fmt.Sprint(env[field])); ref != "" && ref != "<nil>" {
+				usage = append(usage, ReferenceUsage{Kind: kind, Name: ref, App: app, AppFile: appFile, Container: container, Document: document, YAMLPath: fmt.Sprintf("%s[%d].%s", base, index, field)})
+			}
+		}
+	}
+	return usage
 }
 
 func inspectSourceDocument(path, root string) (SourceDocument, error) {
@@ -393,17 +561,46 @@ func effectiveInspectionApp(app appModel, source, defaults SourceDocument, opts 
 	}
 	for index, container := range app.Containers {
 		effective := effectiveInspectionContainer(container)
+		effective.Origins = inspectContainerOrigins(source, defaults, "containers", index, effective.Name)
 		effective.Fields = inspectContainerFields(effective, source, defaults, opts, "containers", index)
 		effective.EnvEntries = inspectEnvEntries(effective, source, defaults, "containers", index)
 		result.Containers = append(result.Containers, effective)
 	}
 	for index, sidecar := range app.Sidecars {
 		effective := effectiveInspectionContainer(sidecar)
+		effective.Origins = inspectContainerOrigins(source, defaults, "sidecars", index, effective.Name)
 		effective.Fields = inspectContainerFields(effective, source, defaults, opts, "sidecars", index)
 		effective.EnvEntries = inspectEnvEntries(effective, source, defaults, "sidecars", index)
 		result.Sidecars = append(result.Sidecars, effective)
 	}
 	return result
+}
+
+func inspectContainerOrigins(source, defaults SourceDocument, scope string, index int, effectiveName string) []InspectOrigin {
+	target := fmt.Sprintf("%s[%d]", scope, index)
+	origins := []InspectOrigin{}
+	if scope == "containers" {
+		container := sourceContainer(source, scope, index)
+		for _, ref := range stringValues(container["profile_ref_names"]) {
+			origins = append(origins, InspectOrigin{Kind: "container_profile", Document: defaults.Path, YAMLPath: "container_profiles", DefinitionName: ref, Target: target})
+		}
+		if container != nil {
+			origins = append(origins, InspectOrigin{Kind: "local", Document: source.Path, YAMLPath: target, Target: target})
+		}
+		return origins
+	}
+	for _, ref := range stringValues(source.Model["sidecar_ref_names"]) {
+		if ref == effectiveName {
+			origins = append(origins, InspectOrigin{Kind: "sidecar_definition", Document: defaults.Path, YAMLPath: "sidecar_definitions", DefinitionName: ref, Target: target})
+		}
+	}
+	for sourceIndex, raw := range inspectAnySlice(source.Model["sidecars"]) {
+		container, _ := raw.(map[string]any)
+		if strings.TrimSpace(fmt.Sprint(container["name"])) == effectiveName {
+			origins = append(origins, InspectOrigin{Kind: "local", Document: source.Path, YAMLPath: fmt.Sprintf("sidecars[%d]", sourceIndex), DefinitionName: effectiveName, Target: target})
+		}
+	}
+	return origins
 }
 
 func inspectEnvEntries(container EffectiveContainer, source, defaults SourceDocument, scope string, index int) []InspectEnvEntry {
@@ -436,7 +633,11 @@ func inspectEnvEntries(container EffectiveContainer, source, defaults SourceDocu
 func inspectEnvOrigins(name, effectiveContainerName string, source, defaults SourceDocument, scope string, index int) ([]InspectOrigin, int) {
 	target := fmt.Sprintf("%s[%d].envs[name=%s]", scope, index, name)
 	origins := []InspectOrigin{}
-	container := sourceContainer(source, scope, index)
+	sourceIndex := index
+	if scope == "sidecars" {
+		sourceIndex = sourceContainerIndexByName(source, scope, effectiveContainerName)
+	}
+	container := sourceContainer(source, scope, sourceIndex)
 	if scope == "containers" {
 		for _, selector := range []string{"*", effectiveContainerName} {
 			for _, raw := range inspectAnySlice(defaults.Model["container_envs"]) {
@@ -452,10 +653,16 @@ func inspectEnvOrigins(name, effectiveContainerName string, source, defaults Sou
 				origins = append(origins, InspectOrigin{Kind: "container_profile", Document: defaults.Path, YAMLPath: "container_profiles", DefinitionName: ref, Target: target})
 			}
 		}
+	} else {
+		for _, ref := range stringValues(source.Model["sidecar_ref_names"]) {
+			if ref == effectiveContainerName && definitionHasNamedItem(defaults, "sidecar_definitions", ref, "envs", name) {
+				origins = append(origins, InspectOrigin{Kind: "sidecar_definition", Document: defaults.Path, YAMLPath: "sidecar_definitions", DefinitionName: ref, Target: target})
+			}
+		}
 	}
 	localIndex := namedItemIndex(container["envs"], name)
 	if localIndex >= 0 {
-		origins = append(origins, InspectOrigin{Kind: "local", Document: source.Path, YAMLPath: fmt.Sprintf("%s[%d].envs[%d]", scope, index, localIndex), DefinitionName: name, Target: target})
+		origins = append(origins, InspectOrigin{Kind: "local", Document: source.Path, YAMLPath: fmt.Sprintf("%s[%d].envs[%d]", scope, sourceIndex, localIndex), DefinitionName: name, Target: target})
 	}
 	return origins, localIndex
 }
@@ -484,6 +691,9 @@ func inspectContainerFields(container EffectiveContainer, source, defaults Sourc
 	for field, value := range values {
 		path := fmt.Sprintf("%s[%d].%s", scope, index, field)
 		_, local := source.Fields[path]
+		if scope == "sidecars" {
+			local = false
+		}
 		origins := inspectFieldOrigins(source, defaults, opts, scope, index, field, local)
 		reason := ""
 		canEdit := scope == "containers"
@@ -550,6 +760,16 @@ func sourceContainerName(source SourceDocument, scope string, index int) string 
 	return strings.TrimSpace(fmt.Sprint(container["name"]))
 }
 
+func sourceContainerIndexByName(source SourceDocument, scope, name string) int {
+	for index, raw := range inspectAnySlice(source.Model[scope]) {
+		container, _ := raw.(map[string]any)
+		if strings.TrimSpace(fmt.Sprint(container["name"])) == name {
+			return index
+		}
+	}
+	return -1
+}
+
 func definitionHasField(defaults SourceDocument, catalog, name, field string) bool {
 	for _, raw := range inspectAnySlice(defaults.Model[catalog]) {
 		definition, _ := raw.(map[string]any)
@@ -573,6 +793,9 @@ func definitionHasNamedItem(defaults SourceDocument, catalog, definitionName, fi
 			continue
 		}
 		body, _ := definition["defaults"].(map[string]any)
+		if catalog == "sidecar_definitions" {
+			body = definition
+		}
 		return namedItemIndex(body[field], itemName) >= 0
 	}
 	return false

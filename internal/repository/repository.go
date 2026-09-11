@@ -177,6 +177,18 @@ func (r *Repository) Assets(envName string) ([]Asset, error) {
 		asset.IsDirty = dirty[filepath.ToSlash(filepath.Join(envName, fileName))]
 		assets = append(assets, asset)
 	}
+	for _, fileName := range []string{"shared.assets.yml", "replica-profiles.yml"} {
+		path := filepath.Join(envDir, fileName)
+		if !isFile(path) {
+			continue
+		}
+		asset, err := summarizeAsset(path, fileName, "metadata", "environment-root")
+		if err != nil {
+			return nil, err
+		}
+		asset.IsDirty = dirty[filepath.ToSlash(filepath.Join(envName, fileName))]
+		assets = append(assets, asset)
+	}
 	for _, fileName := range []string{"_defaults.yml", "_defaults.yaml"} {
 		path := filepath.Join(envDir, "apps", fileName)
 		if !isFile(path) {

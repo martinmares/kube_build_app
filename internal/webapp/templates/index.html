@@ -40,6 +40,7 @@
             <li class="nav-item active"><a class="nav-link active" href="#dashboard" data-nav="dashboard"><span class="nav-link-icon"><i class="ti ti-layout-dashboard"></i></span><span class="nav-link-title">Dashboard</span></a></li>
             <li class="nav-item hidden" id="changes-nav-item"><a class="nav-link" href="#changes" data-nav="changes"><span class="nav-link-icon"><i class="ti ti-git-compare"></i></span><span class="nav-link-title">Changed files</span><span class="badge bg-yellow-lt ms-2" id="changes-count">0</span></a></li>
             <li class="nav-item"><a class="nav-link" href="#apps" data-nav="apps"><span class="nav-link-icon"><i class="ti ti-apps"></i></span><span class="nav-link-title">Apps</span></a></li>
+            <li class="nav-item"><a class="nav-link" href="#defaults" data-nav="defaults"><span class="nav-link-icon"><i class="ti ti-adjustments-horizontal"></i></span><span class="nav-link-title">Defaults</span></a></li>
             <li class="nav-item"><a class="nav-link" href="#assets" data-nav="assets"><span class="nav-link-icon"><i class="ti ti-folders"></i></span><span class="nav-link-title">Assets</span></a></li>
             <li class="nav-item"><a class="nav-link" href="#build" data-nav="build"><span class="nav-link-icon"><i class="ti ti-hammer"></i></span><span class="nav-link-title">Build</span></a></li>
           </ul>
@@ -73,7 +74,23 @@
           <section data-page="apps" class="hidden">
             <div class="row g-3">
               <div class="col-12 col-lg-4"><div class="card apps-list-card"><div class="card-header"><div class="w-100"><div class="d-flex align-items-center justify-content-between gap-2 mb-2"><h3 class="card-title mb-0"><i class="ti ti-apps me-2"></i>Applications</h3><div class="d-flex gap-1"><span class="badge bg-secondary-lt" id="apps-filter-count">0</span><span class="badge bg-yellow-lt hidden" id="apps-dirty-count"></span></div></div><div class="input-icon"><span class="input-icon-addon"><i class="ti ti-search"></i></span><input class="form-control" id="apps-filter" placeholder="Filter applications..."></div></div></div><div class="table-responsive apps-list-table"><table class="table table-vcenter table-hover mb-0" id="apps-table"><thead><tr><th>Application</th><th class="text-end">Runtime</th></tr></thead><tbody></tbody></table></div></div></div>
-              <div class="col-12 col-lg-8"><div class="card"><div class="card-header"><div><h3 class="card-title" id="app-detail-title">Select app</h3><div class="text-muted small font-monospace" id="app-detail-path"></div><div class="text-muted small" id="app-detail-meta"></div><div class="d-flex flex-wrap gap-1 mt-2" id="app-detail-badges"></div></div></div><div class="card-body"><div class="row g-3"><div class="col-12"><h4>Overview</h4><div id="app-overview" class="app-overview-empty text-muted">Select an application to show structured model overview.</div></div><div class="col-12"><h4>Raw YAML</h4><pre class="code-block" id="app-raw"></pre></div><div class="col-12"><h4>Rendered preview</h4><pre class="code-block" id="app-rendered"></pre></div><div class="col-12 hidden" id="app-diff-section"><h4>Git diff</h4><pre class="code-block diff-block" id="app-diff"></pre></div></div></div></div></div>
+              <div class="col-12 col-lg-8"><div class="card"><div class="card-header"><div><h3 class="card-title" id="app-detail-title">Select app</h3><div class="text-muted small font-monospace" id="app-detail-path"></div><div class="text-muted small" id="app-detail-meta"></div><div class="d-flex flex-wrap gap-1 mt-2" id="app-detail-badges"></div></div><div class="card-actions"><div class="btn-group" role="group" aria-label="Application model view"><button class="btn btn-sm btn-primary" id="app-view-effective" type="button">Effective</button><button class="btn btn-sm btn-outline-secondary" id="app-view-local" type="button">Local source</button></div></div></div><div class="card-body"><div class="row g-3"><div class="col-12"><div id="app-effective-status"></div><h4 id="app-overview-title">Effective overview</h4><div id="app-overview" class="app-overview-empty text-muted">Select an application to show structured model overview.</div></div><div class="col-12"><h4>Local source YAML</h4><pre class="code-block" id="app-raw"></pre></div><div class="col-12"><h4>Template preview</h4><pre class="code-block" id="app-rendered"></pre></div><div class="col-12 hidden" id="app-diff-section"><h4>Git diff</h4><pre class="code-block diff-block" id="app-diff"></pre></div></div></div></div></div>
+            </div>
+          </section>
+          <section data-page="defaults" class="hidden">
+            <div class="card">
+              <div class="card-header">
+                <div><h3 class="card-title"><i class="ti ti-adjustments-horizontal me-2"></i>Defaults and shared definitions</h3><div class="text-muted small">Read-only catalog composed from apps/_defaults.yml and shared.assets.yml.</div></div>
+                <div class="card-actions"><button class="btn btn-sm btn-outline-secondary" id="defaults-open-source" type="button"><i class="ti ti-file-code me-1"></i>Open source</button></div>
+              </div>
+              <div class="card-body">
+                <div id="defaults-status" class="mb-3"></div>
+                <div class="row g-2 align-items-center mb-3">
+                  <div class="col-12 col-lg"><div class="input-icon"><span class="input-icon-addon"><i class="ti ti-search"></i></span><input class="form-control" id="defaults-filter" placeholder="Filter definitions, references or values..."></div></div>
+                  <div class="col-auto"><span class="badge bg-secondary-lt" id="defaults-filter-count">0</span></div>
+                </div>
+                <div id="defaults-overview"></div>
+              </div>
             </div>
           </section>
           <section data-page="assets" class="hidden">

@@ -771,7 +771,7 @@ func TestInspectionAndBuildContextEndpointsUseConfiguredOptions(t *testing.T) {
 	inspectReq := httptest.NewRequest(http.MethodGet, "/api/v1/envs/dev/inspect", nil)
 	inspectRes := httptest.NewRecorder()
 	server.Handler().ServeHTTP(inspectRes, inspectReq)
-	if inspectRes.Code != http.StatusOK || !strings.Contains(inspectRes.Body.String(), `"namespace":"web-override"`) || !strings.Contains(inspectRes.Body.String(), `"sidecars"`) || !strings.Contains(inspectRes.Body.String(), `"container_profile"`) {
+	if inspectRes.Code != http.StatusOK || !strings.Contains(inspectRes.Body.String(), `"namespace":"web-override"`) || !strings.Contains(inspectRes.Body.String(), `"sidecars"`) || !strings.Contains(inspectRes.Body.String(), `"container_profile"`) || !strings.Contains(inspectRes.Body.String(), `"shared_assets"`) || !strings.Contains(inspectRes.Body.String(), `"app_file":"java-api.yml"`) {
 		t.Fatalf("unexpected inspection response (%d): %s", inspectRes.Code, inspectRes.Body.String())
 	}
 }
