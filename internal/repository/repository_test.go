@@ -1484,3 +1484,129 @@ func TestPatchEnvSecuredJSONInsertsNewEntryAtSubmittedPosition(t *testing.T) {
 		t.Fatalf("content changed unexpectedly:\n%s", got)
 	}
 }
+
+func TestUpdateAppReferencesPreservesOrderAndUnrelatedYAML(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), `container_profiles:
+  - name: base
+    defaults: {image: base}
+  - name: java
+    defaults: {image: java}
+sidecar_definitions:
+  - name: exporter
+    image: exporter
+runtime_asset_definitions:
+  - name: config
+    files: []
+  - name: trust
+    files: []
+`)
+	appPath := filepath.Join(root, "dev", "apps", "api.yml")
+	writeFile(t, appPath, `name: api
+# preserve this comment
+replicas: 2
+runtime_asset_ref_names:
+  - config
+containers:
+  - name: api
+    profile_ref_names:
+      - base
+    resources:
+      cpu: {from: 100m, to: 500m}
+sidecars:
+  - name: local-gateway
+    image: gateway:test
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.AppReferences("dev", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current.Containers) != 1 || current.Containers[0].Name != "api" || len(current.Sidecars) != 1 || current.Sidecars[0].Name != "local-gateway" {
+		t.Fatalf("unexpected scopes: %#v", current)
+	}
+	if _, err := repo.UpdateAppReferences("dev", "api.yml", AppReferencesUpdate{RuntimeAssetRefNames: current.RuntimeAssetRefNames, Containers: current.Containers, Sidecars: current.Sidecars}, current.ContentHash, current.DefaultsHash); err != nil {
+		t.Fatal(err)
+	}
+	noOpContent, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(noOpContent) != `name: api
+# preserve this comment
+replicas: 2
+runtime_asset_ref_names:
+  - config
+containers:
+  - name: api
+    profile_ref_names:
+      - base
+    resources:
+      cpu: {from: 100m, to: 500m}
+sidecars:
+  - name: local-gateway
+    image: gateway:test
+` {
+		t.Fatalf("no-op reference save changed YAML:\n%s", noOpContent)
+	}
+	current, err = repo.AppReferences("dev", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := AppReferencesUpdate{
+		SidecarRefNames:      []string{"exporter"},
+		RuntimeAssetRefNames: []string{"trust", "config"},
+		Containers:           []ContainerReferences{{Index: 0, Name: "api", ProfileRefNames: []string{"java", "base"}, RuntimeAssetRefNames: []string{"config"}}},
+		Sidecars:             []ContainerReferences{{Index: 0, Name: "local-gateway", ProfileRefNames: []string{"base"}, RuntimeAssetRefNames: []string{"trust"}}},
+	}
+	updated, err := repo.UpdateAppReferences("dev", "api.yml", update, current.ContentHash, current.DefaultsHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(updated.RuntimeAssetRefNames, ",") != "trust,config" || strings.Join(updated.Containers[0].ProfileRefNames, ",") != "java,base" {
+		t.Fatalf("reference order was not preserved: %#v", updated)
+	}
+	content, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, preserved := range []string{"# preserve this comment", "replicas: 2", "cpu: {from: 100m, to: 500m}", "image: gateway:test"} {
+		if !strings.Contains(string(content), preserved) {
+			t.Fatalf("updated YAML lost %q:\n%s", preserved, content)
+		}
+	}
+	if !strings.Contains(string(content), "      - java\n      - base") {
+		t.Fatalf("ordered profiles missing:\n%s", content)
+	}
+}
+
+func TestUpdateAppReferencesRejectsStaleDefaultsAndUnknownReference(t *testing.T) {
+	root := t.TempDir()
+	defaultsPath := filepath.Join(root, "dev", "apps", "_defaults.yml")
+	writeFile(t, defaultsPath, "container_profiles:\n  - name: base\n")
+	writeFile(t, filepath.Join(root, "dev", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.AppReferences("dev", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := AppReferencesUpdate{Containers: []ContainerReferences{{Index: 0, Name: "api", ProfileRefNames: []string{"base"}}}}
+	writeFile(t, defaultsPath, "container_profiles:\n  - name: base\n  - name: changed\n")
+	if _, err := repo.UpdateAppReferences("dev", "api.yml", update, current.ContentHash, current.DefaultsHash); !IsConflictError(err) {
+		t.Fatalf("stale defaults error = %v, want conflict", err)
+	}
+	current, err = repo.AppReferences("dev", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	update.Containers[0].ProfileRefNames = []string{"missing"}
+	if _, err := repo.UpdateAppReferences("dev", "api.yml", update, current.ContentHash, current.DefaultsHash); err == nil || !strings.Contains(err.Error(), "unknown definition") {
+		t.Fatalf("unknown reference error = %v", err)
+	}
+}

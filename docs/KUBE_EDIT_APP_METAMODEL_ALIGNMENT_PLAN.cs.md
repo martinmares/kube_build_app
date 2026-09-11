@@ -327,7 +327,7 @@ Implementacni checkpoint 2026-09-11:
 
 ### P3: Explicitni reference a lokalni override
 
-- [ ] App sidecar/runtime asset refs; container/sidecar profile a asset
+- [x] App sidecar/runtime asset refs; container/sidecar profile a asset
   refs. Profiles vybirat s poradi, ne neserazenym checkbox setem.
 - [ ] Bezpecny scope selector a writer pro hlavni container/local
   sidecar patch; source hash + zavisle defaults hash.
@@ -338,6 +338,17 @@ Implementacni checkpoint 2026-09-11:
 - [ ] Test UI cgroup override meni jen regexp; image/startup/resources
   zustavaji z definice. Reset obnovi java regexp. Odebrani ref s patchem
   nenecha nevalidni fragment. App-only mtls gateway zustava samostatny.
+
+Checkpoint P3.1 2026-09-11:
+
+- endpoint `apps/{app}/references` vraci katalogy a source scope refs a zapisuje
+  app/main-container/local-sidecar reference listy;
+- writer kontroluje app i defaults hash, stabilni index+jmeno scope, zname a
+  neduplikovane definice a zachovava poradi profilu;
+- no-op save je byte-for-byte beze zmeny a cilena editace zachovava komentare
+  a nesouvisejici YAML bloky;
+- Tabler modal pouziva ordered radky se selectem, move up/down a remove; nic
+  nematerializuje z effective modelu. Lokalni patch scope pokracuje v P3.2.
 
 ### P4: Editace sdilenych definic a identity
 

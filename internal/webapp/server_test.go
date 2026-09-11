@@ -236,6 +236,7 @@ func TestMutatingEndpointsRequireWriteMode(t *testing.T) {
 		{http.MethodPost, "/api/v1/git/restore/test/apps/api.yml", `{}`},
 		{http.MethodPost, "/api/v1/git/commit", `{"paths":["test/apps/api.yml"],"message":"test"}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/vars", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/references", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/vars", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/container-envs", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/replicas", `{}`},
@@ -432,6 +433,53 @@ func TestAppVarsUpdateEndpointRejectsStaleHash(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAppReferencesEndpoints(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), `container_profiles:
+  - name: base
+sidecar_definitions:
+  - name: exporter
+runtime_asset_definitions:
+  - name: config
+    files: []
+`)
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, "name: api\ncontainers:\n  - name: api\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.AppReferences("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/envs/test/apps/api.yml/references", nil)
+	getRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getRes, getReq)
+	if getRes.Code != http.StatusOK || !strings.Contains(getRes.Body.String(), `"container_profiles":["base"]`) {
+		t.Fatalf("GET references response = %d: %s", getRes.Code, getRes.Body.String())
+	}
+
+	body := fmt.Sprintf(`{"expected_hash":%q,"expected_defaults_hash":%q,"references":{"sidecar_ref_names":["exporter"],"runtime_asset_ref_names":["config"],"containers":[{"index":0,"name":"api","profile_ref_names":["base"],"runtime_asset_ref_names":["config"]}],"sidecars":[]}}`, current.ContentHash, current.DefaultsHash)
+	patchReq := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/references", strings.NewReader(body))
+	patchRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(patchRes, patchReq)
+	if patchRes.Code != http.StatusOK {
+		t.Fatalf("PATCH references response = %d: %s", patchRes.Code, patchRes.Body.String())
+	}
+	content, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"sidecar_ref_names:", "runtime_asset_ref_names:", "    profile_ref_names:"} {
+		if !strings.Contains(string(content), expected) {
+			t.Fatalf("updated app missing %q:\n%s", expected, content)
+		}
 	}
 }
 

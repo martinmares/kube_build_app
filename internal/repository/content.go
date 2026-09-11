@@ -197,28 +197,65 @@ type ContainerEnvGroupUpdate struct {
 }
 
 type AppModel struct {
-	Env                 string           `json:"env"`
-	FileName            string           `json:"file_name"`
-	AppName             *string          `json:"app_name"`
-	Replicas            *int             `json:"replicas"`
-	Kind                *string          `json:"kind"`
-	Autoscaling         AutoscalingModel `json:"autoscaling"`
-	InitContainersCount int              `json:"init_containers_count"`
-	Containers          []ContainerModel `json:"containers"`
+	Env                  string           `json:"env"`
+	FileName             string           `json:"file_name"`
+	AppName              *string          `json:"app_name"`
+	SidecarRefNames      []string         `json:"sidecar_ref_names"`
+	RuntimeAssetRefNames []string         `json:"runtime_asset_ref_names"`
+	Replicas             *int             `json:"replicas"`
+	Kind                 *string          `json:"kind"`
+	Autoscaling          AutoscalingModel `json:"autoscaling"`
+	InitContainersCount  int              `json:"init_containers_count"`
+	Containers           []ContainerModel `json:"containers"`
+	Sidecars             []ContainerModel `json:"sidecars"`
 }
 
 type ContainerModel struct {
-	Index            int           `json:"index"`
-	Name             *string       `json:"name"`
-	StartupCommand   []string      `json:"startup_command"`
-	StartupArguments []string      `json:"startup_arguments"`
-	Envs             []EnvVarModel `json:"envs"`
-	Resources        ResourceModel `json:"resources"`
-	Ports            []PortModel   `json:"ports"`
-	Runtime          RuntimeModel  `json:"runtime"`
-	Probes           ProbesModel   `json:"probes"`
-	EnvFromCount     int           `json:"env_from_count"`
-	MountsCount      int           `json:"mounts_count"`
+	Index                int           `json:"index"`
+	Name                 *string       `json:"name"`
+	ProfileRefNames      []string      `json:"profile_ref_names"`
+	RuntimeAssetRefNames []string      `json:"runtime_asset_ref_names"`
+	StartupCommand       []string      `json:"startup_command"`
+	StartupArguments     []string      `json:"startup_arguments"`
+	Envs                 []EnvVarModel `json:"envs"`
+	Resources            ResourceModel `json:"resources"`
+	Ports                []PortModel   `json:"ports"`
+	Runtime              RuntimeModel  `json:"runtime"`
+	Probes               ProbesModel   `json:"probes"`
+	EnvFromCount         int           `json:"env_from_count"`
+	MountsCount          int           `json:"mounts_count"`
+}
+
+type AppReferences struct {
+	Env                  string                `json:"env"`
+	FileName             string                `json:"file_name"`
+	ContentHash          string                `json:"content_hash"`
+	DefaultsHash         string                `json:"defaults_hash"`
+	SidecarRefNames      []string              `json:"sidecar_ref_names"`
+	RuntimeAssetRefNames []string              `json:"runtime_asset_ref_names"`
+	Containers           []ContainerReferences `json:"containers"`
+	Sidecars             []ContainerReferences `json:"sidecars"`
+	Catalog              ReferenceCatalog      `json:"catalog"`
+}
+
+type ContainerReferences struct {
+	Index                int      `json:"index"`
+	Name                 string   `json:"name"`
+	ProfileRefNames      []string `json:"profile_ref_names"`
+	RuntimeAssetRefNames []string `json:"runtime_asset_ref_names"`
+}
+
+type ReferenceCatalog struct {
+	ContainerProfiles       []string `json:"container_profiles"`
+	SidecarDefinitions      []string `json:"sidecar_definitions"`
+	RuntimeAssetDefinitions []string `json:"runtime_asset_definitions"`
+}
+
+type AppReferencesUpdate struct {
+	SidecarRefNames      []string              `json:"sidecar_ref_names"`
+	RuntimeAssetRefNames []string              `json:"runtime_asset_ref_names"`
+	Containers           []ContainerReferences `json:"containers"`
+	Sidecars             []ContainerReferences `json:"sidecars"`
 }
 
 type EnvVarModel struct {
@@ -747,6 +784,8 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 	rootMap, _ := root.(map[string]any)
 	model := AppModel{Env: envName, FileName: detail.FileName}
 	model.AppName = stringPtr(stringValue(rootMap["name"]))
+	model.SidecarRefNames = stringSlice(rootMap["sidecar_ref_names"])
+	model.RuntimeAssetRefNames = stringSlice(rootMap["runtime_asset_ref_names"])
 	model.Replicas = intPtr(intValue(rootMap["replicas"]))
 	model.Kind = stringPtr(firstNonEmpty(stringValue(rootMap["kind"]), "Deployment"))
 	model.InitContainersCount = len(anySlice(rootMap["init_containers"]))
@@ -755,10 +794,12 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 	for cIdx, rawContainer := range anySlice(rootMap["containers"]) {
 		containerMap, _ := rawContainer.(map[string]any)
 		container := ContainerModel{
-			Index:            cIdx,
-			Name:             stringPtr(stringValue(containerMap["name"])),
-			StartupCommand:   stringSlice(nestedValue(containerMap, "startup", "command")),
-			StartupArguments: stringSlice(nestedValue(containerMap, "startup", "arguments")),
+			Index:                cIdx,
+			Name:                 stringPtr(stringValue(containerMap["name"])),
+			ProfileRefNames:      stringSlice(containerMap["profile_ref_names"]),
+			RuntimeAssetRefNames: stringSlice(containerMap["runtime_asset_ref_names"]),
+			StartupCommand:       stringSlice(nestedValue(containerMap, "startup", "command")),
+			StartupArguments:     stringSlice(nestedValue(containerMap, "startup", "arguments")),
 			Resources: ResourceModel{
 				CPURequest:    stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "cpu", "requests"), nestedString(containerMap, "resources", "cpu", "from"))),
 				CPULimit:      stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "cpu", "limits"), nestedString(containerMap, "resources", "cpu", "to"))),
@@ -825,7 +866,193 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 		}
 		model.Containers = append(model.Containers, container)
 	}
+	for cIdx, rawContainer := range anySlice(rootMap["sidecars"]) {
+		containerMap, _ := rawContainer.(map[string]any)
+		model.Sidecars = append(model.Sidecars, ContainerModel{
+			Index:                cIdx,
+			Name:                 stringPtr(stringValue(containerMap["name"])),
+			ProfileRefNames:      stringSlice(containerMap["profile_ref_names"]),
+			RuntimeAssetRefNames: stringSlice(containerMap["runtime_asset_ref_names"]),
+		})
+	}
 	return model, nil
+}
+
+func (r *Repository) AppReferences(envName string, appFile string) (AppReferences, error) {
+	detail, err := r.AppDetail(envName, appFile)
+	if err != nil {
+		return AppReferences{}, err
+	}
+	model, err := r.AppModel(envName, appFile)
+	if err != nil {
+		return AppReferences{}, err
+	}
+	defaults, err := r.Defaults(envName)
+	if err != nil {
+		return AppReferences{}, err
+	}
+	defaultsDetail, err := r.AssetDetail(envName, defaults.FileName)
+	if err != nil {
+		return AppReferences{}, err
+	}
+	defaultsRoot, err := sourceModelRoot(defaultsDetail.Content)
+	if err != nil {
+		return AppReferences{}, fmt.Errorf("parse defaults references: %w", err)
+	}
+	out := AppReferences{
+		Env:                  envName,
+		FileName:             detail.FileName,
+		ContentHash:          detail.ContentHash,
+		DefaultsHash:         defaultsDetail.ContentHash,
+		SidecarRefNames:      model.SidecarRefNames,
+		RuntimeAssetRefNames: model.RuntimeAssetRefNames,
+		Catalog: ReferenceCatalog{
+			ContainerProfiles:       namedDefinitionNames(defaultsRoot["container_profiles"]),
+			SidecarDefinitions:      namedDefinitionNames(defaultsRoot["sidecar_definitions"]),
+			RuntimeAssetDefinitions: namedDefinitionNames(defaultsRoot["runtime_asset_definitions"]),
+		},
+	}
+	for _, container := range model.Containers {
+		out.Containers = append(out.Containers, containerReferences(container))
+	}
+	for _, sidecar := range model.Sidecars {
+		out.Sidecars = append(out.Sidecars, containerReferences(sidecar))
+	}
+	return out, nil
+}
+
+func (r *Repository) UpdateAppReferences(envName string, appFile string, update AppReferencesUpdate, expectedHash string, expectedDefaultsHash string) (AppReferences, error) {
+	current, err := r.AppReferences(envName, appFile)
+	if err != nil {
+		return AppReferences{}, err
+	}
+	if expectedHash != "" && expectedHash != current.ContentHash {
+		return AppReferences{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	if expectedDefaultsHash != "" && expectedDefaultsHash != current.DefaultsHash {
+		return AppReferences{}, NewConflictError("defaults file changed before save; refresh reference catalogs and apply the edit again")
+	}
+	if err := validateAppReferencesUpdate(current, update); err != nil {
+		return AppReferences{}, err
+	}
+	path, err := r.AppPath(envName, appFile)
+	if err != nil {
+		return AppReferences{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return AppReferences{}, err
+	}
+	if contentHash(contentBytes) != current.ContentHash {
+		return AppReferences{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	updated := replaceTopLevelStringList(string(contentBytes), "runtime_asset_ref_names", update.RuntimeAssetRefNames)
+	updated = replaceTopLevelStringList(updated, "sidecar_ref_names", update.SidecarRefNames)
+	updated, err = replaceCollectionReferenceLists(updated, "containers", update.Containers)
+	if err != nil {
+		return AppReferences{}, err
+	}
+	updated, err = replaceCollectionReferenceLists(updated, "sidecars", update.Sidecars)
+	if err != nil {
+		return AppReferences{}, err
+	}
+	if err := atomicWriteFile(path, []byte(updated)); err != nil {
+		return AppReferences{}, err
+	}
+	return r.AppReferences(envName, filepath.Base(path))
+}
+
+func containerReferences(container ContainerModel) ContainerReferences {
+	name := ""
+	if container.Name != nil {
+		name = *container.Name
+	}
+	return ContainerReferences{
+		Index:                container.Index,
+		Name:                 name,
+		ProfileRefNames:      append([]string(nil), container.ProfileRefNames...),
+		RuntimeAssetRefNames: append([]string(nil), container.RuntimeAssetRefNames...),
+	}
+}
+
+func namedDefinitionNames(value any) []string {
+	names := []string{}
+	for _, raw := range anySlice(value) {
+		item, _ := raw.(map[string]any)
+		if name := strings.TrimSpace(stringValue(item["name"])); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func validateAppReferencesUpdate(current AppReferences, update AppReferencesUpdate) error {
+	if err := validateReferenceNames("sidecar_ref_names", update.SidecarRefNames, current.Catalog.SidecarDefinitions); err != nil {
+		return err
+	}
+	if err := validateReferenceNames("runtime_asset_ref_names", update.RuntimeAssetRefNames, current.Catalog.RuntimeAssetDefinitions); err != nil {
+		return err
+	}
+	if err := validateReferenceScopes("containers", current.Containers, update.Containers, current.Catalog); err != nil {
+		return err
+	}
+	if err := validateReferenceScopes("sidecars", current.Sidecars, update.Sidecars, current.Catalog); err != nil {
+		return err
+	}
+	selectedSidecars := stringSet(update.SidecarRefNames)
+	sharedSidecars := stringSet(current.Catalog.SidecarDefinitions)
+	for _, sidecar := range update.Sidecars {
+		if sharedSidecars[sidecar.Name] && !selectedSidecars[sidecar.Name] {
+			return fmt.Errorf("sidecars %q matches a shared definition but is not selected in sidecar_ref_names", sidecar.Name)
+		}
+	}
+	return nil
+}
+
+func validateReferenceScopes(label string, current []ContainerReferences, updates []ContainerReferences, catalog ReferenceCatalog) error {
+	if len(current) != len(updates) {
+		return fmt.Errorf("%s changed before save; refresh and apply the edit again", label)
+	}
+	for index, update := range updates {
+		if update.Index != current[index].Index || update.Name != current[index].Name {
+			return NewConflictError(fmt.Sprintf("%s scope changed before save; refresh and apply the edit again", label))
+		}
+		if err := validateReferenceNames(fmt.Sprintf("%s[%d].profile_ref_names", label, index), update.ProfileRefNames, catalog.ContainerProfiles); err != nil {
+			return err
+		}
+		if err := validateReferenceNames(fmt.Sprintf("%s[%d].runtime_asset_ref_names", label, index), update.RuntimeAssetRefNames, catalog.RuntimeAssetDefinitions); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateReferenceNames(label string, values []string, catalog []string) error {
+	known := stringSet(catalog)
+	seen := map[string]bool{}
+	for _, value := range values {
+		if !referenceNamePattern.MatchString(value) {
+			return fmt.Errorf("%s contains invalid reference %q", label, value)
+		}
+		if seen[value] {
+			return fmt.Errorf("%s contains duplicate reference %q", label, value)
+		}
+		if !known[value] {
+			return fmt.Errorf("%s references unknown definition %q", label, value)
+		}
+		seen[value] = true
+	}
+	return nil
+}
+
+var referenceNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+func stringSet(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range values {
+		out[value] = true
+	}
+	return out
 }
 
 func (r *Repository) AssetDetail(envName string, relativePath string) (AssetDetail, error) {
@@ -1796,6 +2023,67 @@ func replaceTopLevelBlock(content string, key string, replacement []string) stri
 	return out
 }
 
+func replaceTopLevelStringList(content string, key string, values []string) string {
+	return replaceTopLevelBlock(content, key, renderStringListBlock(key, 0, values))
+}
+
+func renderStringListBlock(key string, indent int, values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	prefix := strings.Repeat(" ", indent)
+	lines := []string{prefix + key + ":"}
+	for _, value := range values {
+		lines = append(lines, prefix+"  - "+value)
+	}
+	return lines
+}
+
+func replaceCollectionReferenceLists(content string, collection string, updates []ContainerReferences) (string, error) {
+	if len(updates) == 0 {
+		return content, nil
+	}
+	updated := content
+	for index := len(updates) - 1; index >= 0; index-- {
+		var err error
+		updated, err = replaceCollectionItemStringList(updated, collection, index, "runtime_asset_ref_names", updates[index].RuntimeAssetRefNames)
+		if err != nil {
+			return "", err
+		}
+		updated, err = replaceCollectionItemStringList(updated, collection, index, "profile_ref_names", updates[index].ProfileRefNames)
+		if err != nil {
+			return "", err
+		}
+	}
+	return updated, nil
+}
+
+func replaceCollectionItemStringList(content string, collection string, itemIndex int, key string, values []string) (string, error) {
+	lines, start, end, err := collectionItemBlockRange(content, collection, itemIndex)
+	if err != nil {
+		return "", err
+	}
+	blockStart, blockEnd := containerChildBlockRange(lines, start, end, key)
+	insertAt := start + 1
+	if blockStart >= 0 {
+		insertAt = blockStart
+		lines = append(lines[:blockStart], lines[blockEnd:]...)
+	}
+	replacement := renderStringListBlock(key, 4, values)
+	if len(replacement) > 0 {
+		result := make([]string, 0, len(lines)+len(replacement))
+		result = append(result, lines[:insertAt]...)
+		result = append(result, replacement...)
+		result = append(result, lines[insertAt:]...)
+		lines = result
+	}
+	out := strings.Join(lines, "\n")
+	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return out, nil
+}
+
 func topLevelBlockRange(lines []string, key string) (int, int) {
 	prefix := key + ":"
 	for idx, line := range lines {
@@ -2043,16 +2331,20 @@ func fixContainerLegacyProbesBlock(content string, containerIndex int) (string, 
 }
 
 func containerBlockRange(content string, containerIndex int) ([]string, int, int, error) {
+	return collectionItemBlockRange(content, "containers", containerIndex)
+}
+
+func collectionItemBlockRange(content string, collection string, itemIndex int) ([]string, int, int, error) {
 	lines := strings.Split(content, "\n")
 	containersLine := -1
 	for idx, line := range lines {
-		if line == "containers:" {
+		if line == collection+":" {
 			containersLine = idx
 			break
 		}
 	}
 	if containersLine < 0 {
-		return nil, 0, 0, errors.New("containers block not found")
+		return nil, 0, 0, fmt.Errorf("%s block not found", collection)
 	}
 	starts := []int{}
 	for idx := containersLine + 1; idx < len(lines); idx++ {
@@ -2064,13 +2356,13 @@ func containerBlockRange(content string, containerIndex int) ([]string, int, int
 			starts = append(starts, idx)
 		}
 	}
-	if containerIndex >= len(starts) {
-		return nil, 0, 0, errors.New("container index not found")
+	if itemIndex >= len(starts) {
+		return nil, 0, 0, fmt.Errorf("%s index not found", collection)
 	}
-	start := starts[containerIndex]
+	start := starts[itemIndex]
 	end := len(lines)
-	if containerIndex+1 < len(starts) {
-		end = starts[containerIndex+1]
+	if itemIndex+1 < len(starts) {
+		end = starts[itemIndex+1]
 	} else {
 		for idx := start + 1; idx < len(lines); idx++ {
 			if isTopLevelLine(lines[idx]) {

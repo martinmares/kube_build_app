@@ -137,6 +137,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/rendered", s.handleAppRendered)
 	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVars)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/vars", s.handleAppVarsUpdate)
+	mux.HandleFunc("GET /api/v1/envs/{env}/apps/{app_file}/references", s.handleAppReferences)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/references", s.handleAppReferencesUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/defaults", s.handleDefaults)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/vars", s.handleDefaultsVarsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/container-envs", s.handleDefaultsContainerEnvsUpdate)
@@ -397,6 +399,45 @@ func (s *Server) handleAppVarsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, vars)
+}
+
+func (s *Server) handleAppReferences(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	references, err := s.repo.AppReferences(r.PathValue("env"), r.PathValue("app_file"))
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, references)
+}
+
+func (s *Server) handleAppReferencesUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	var payload struct {
+		ExpectedHash         string                         `json:"expected_hash"`
+		ExpectedDefaultsHash string                         `json:"expected_defaults_hash"`
+		References           repository.AppReferencesUpdate `json:"references"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	references, err := s.repo.UpdateAppReferences(r.PathValue("env"), r.PathValue("app_file"), payload.References, payload.ExpectedHash, payload.ExpectedDefaultsHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, references)
 }
 
 func (s *Server) handleDefaults(w http.ResponseWriter, r *http.Request) {

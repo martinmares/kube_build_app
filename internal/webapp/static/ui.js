@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -782,6 +782,7 @@ function resetSelectedDetails() {
   state.appFile = null;
   state.model = null;
   state.appVars = [];
+  state.appReferences = null;
   state.inspectedApp = null;
   state.inspection = null;
   state.inspectionEnv = null;
@@ -1042,14 +1043,16 @@ async function selectApp(file, options = {}) {
     pushRoute({page: 'apps', app: file});
   }
   try {
-    const [detail, rendered, vars, model] = await Promise.all([
+    const [detail, rendered, vars, model, references] = await Promise.all([
       api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(file)}`),
       api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(file)}/rendered`),
       api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(file)}/vars`),
       api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(file)}/model`),
+      api(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(file)}/references`),
     ]);
     state.model = model;
     state.appVars = vars.items || [];
+    state.appReferences = references;
     await loadInspection();
     state.inspectedApp = inspectedAppForFile(file);
     setText('#app-detail-title', model.app_name || detail.summary?.app_name || detail.file_name);
@@ -1196,6 +1199,7 @@ function renderAppOverview(model) {
   host.innerHTML = `
     <div class="overview-grid">${appFacts.join('')}</div>
     ${renderAppVarsPreview(state.appVars || [])}
+    ${renderReferencesPreview(state.appReferences)}
     ${autoscalingMetrics}
     ${renderAppQuickEditors(model, autoscaling)}
     <div class="overview-section">
@@ -1383,6 +1387,51 @@ function renderAppVarsPreview(items) {
       </div>
       ${(items || []).length ? `<div class="chip-row">${chips}${more}</div>` : emptyState('ti-variable', 'No local variables', state.readOnly ? '' : 'Use Edit local variables to add top-level vars.')}
     </div>`;
+}
+function renderReferencesPreview(references) {
+  if (!references) return '';
+  const chipsFor = (label, values) => (values || []).map((value) => chip(label, value)).join('');
+  const scopes = [
+    ...(references.containers || []).map((item) => ({label: `container ${item.name}`, values: [...(item.profile_ref_names || []).map((value) => `profile: ${value}`), ...(item.runtime_asset_ref_names || []).map((value) => `asset: ${value}`)]})),
+    ...(references.sidecars || []).map((item) => ({label: `sidecar ${item.name}`, values: [...(item.profile_ref_names || []).map((value) => `profile: ${value}`), ...(item.runtime_asset_ref_names || []).map((value) => `asset: ${value}`)]})),
+  ].filter((item) => item.values.length);
+  return `<div class="overview-section">
+    <div class="d-flex align-items-center justify-content-between gap-2 mb-2"><div class="overview-subtitle mb-0">Explicit references</div>${state.readOnly ? '' : '<button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="references"><i class="ti ti-pencil me-1"></i>Edit references</button>'}</div>
+    <div class="chip-row">${chipsFor('sidecar', references.sidecar_ref_names)}${chipsFor('asset', references.runtime_asset_ref_names)}${!references.sidecar_ref_names?.length && !references.runtime_asset_ref_names?.length ? '<span class="text-muted small">No app-level references.</span>' : ''}</div>
+    ${scopes.map((scope) => `<div class="mt-2"><span class="text-muted small me-2">${esc(scope.label)}</span>${scope.values.map((value) => `<span class="badge bg-secondary-lt me-1">${esc(value)}</span>`).join('')}</div>`).join('')}
+  </div>`;
+}
+
+function renderReferencesEditor(references) {
+  if (!references) return emptyState('ti-alert-triangle', 'References unavailable', 'Refresh the application and try again.');
+  const catalog = references.catalog || {};
+  const section = (title, hint, content) => `<div class="overview-section mb-3"><div class="overview-subtitle mb-1">${esc(title)}</div><div class="text-muted small mb-2">${esc(hint)}</div>${content}</div>`;
+  const scoped = (scope, item) => `<div class="card card-sm mb-2"><div class="card-body"><div class="fw-semibold font-monospace mb-2">${esc(item.name || `${scope}-${item.index + 1}`)}</div>${renderReferenceList('Profiles', item.profile_ref_names, catalog.container_profiles, scope, item.index, 'profile_ref_names')}${renderReferenceList('Runtime assets', item.runtime_asset_ref_names, catalog.runtime_asset_definitions, scope, item.index, 'runtime_asset_ref_names')}</div></div>`;
+  return `<div data-references-editor>
+    ${section('Application references', 'Sidecars and runtime assets selected for the whole application.', `${renderReferenceList('Sidecars', references.sidecar_ref_names, catalog.sidecar_definitions, 'app', -1, 'sidecar_ref_names')}${renderReferenceList('Runtime assets', references.runtime_asset_ref_names, catalog.runtime_asset_definitions, 'app', -1, 'runtime_asset_ref_names')}`)}
+    ${section('Main containers', 'Profile order is significant; later profiles override earlier profiles.', (references.containers || []).map((item) => scoped('containers', item)).join('') || '<div class="text-muted">No main containers.</div>')}
+    ${section('Local sidecars', 'References on app-local sidecars. Shared sidecar definitions are selected above.', (references.sidecars || []).map((item) => scoped('sidecars', item)).join('') || '<div class="text-muted">No local sidecars.</div>')}
+    <div class="alert alert-info py-2"><i class="ti ti-info-circle me-2"></i>Saving changes only reference lists. It does not copy inherited values into this app YAML.</div>
+    <div class="text-end"><button class="btn btn-primary" type="button" data-save-references><i class="ti ti-device-floppy me-1"></i>Save references</button></div>
+  </div>`;
+}
+
+function renderReferenceList(label, values, catalog, scope, index, field) {
+  const options = catalog || [];
+  const rows = (values || []).map((value) => renderReferenceRow(value, options)).join('');
+  return `<div class="mb-3" data-reference-list data-reference-scope="${scope}" data-reference-index="${index}" data-reference-field="${field}">
+    <div class="d-flex align-items-center justify-content-between gap-2 mb-1"><label class="form-label mb-0">${esc(label)}</label><button class="btn btn-sm btn-outline-secondary" type="button" data-add-reference ${(values || []).length < options.length ? '' : 'disabled'}><i class="ti ti-plus me-1"></i>Add</button></div>
+    <div data-reference-rows>${rows || '<div class="text-muted small" data-reference-empty>No references selected.</div>'}</div>
+  </div>`;
+}
+
+function renderReferenceRow(value, catalog) {
+  return `<div class="d-flex align-items-center gap-1 mb-1" data-reference-row>
+    <select class="form-select form-select-sm font-monospace" data-reference-value>${(catalog || []).map((item) => `<option value="${esc(item)}" ${item === value ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select>
+    <button class="btn btn-sm btn-ghost-secondary btn-icon" type="button" data-move-reference="up" title="Move up"><i class="ti ti-arrow-up"></i></button>
+    <button class="btn btn-sm btn-ghost-secondary btn-icon" type="button" data-move-reference="down" title="Move down"><i class="ti ti-arrow-down"></i></button>
+    <button class="btn btn-sm btn-ghost-danger btn-icon" type="button" data-remove-reference title="Remove"><i class="ti ti-trash"></i></button>
+  </div>`;
 }
 function renderAutoscalingEditor(autoscaling) {
   if (state.readOnly) return '';
@@ -1871,6 +1920,10 @@ function openEditPanel(panel, index) {
     title = 'Edit local variables';
     subtitle = 'Top-level vars used by {{var:NAME}} placeholders.';
     body = renderAppVarsEditorModal(state.appVars || []);
+  } else if (panel === 'references') {
+    title = 'Edit references';
+    subtitle = 'Ordered references to definitions stored in apps/_defaults.yml.';
+    body = renderReferencesEditor(state.appReferences);
   }
   if (!body) return;
   state.editModalClose = openContentModal({
@@ -1917,6 +1970,13 @@ function handleEditModalClick(e) {
   }
   const saveAppVar = e.target.closest('[data-save-app-vars-modal]');
   if (saveAppVar && !state.readOnly) return saveAppVars();
+  if (e.target.closest('[data-save-references]') && !state.readOnly) return saveAppReferences();
+  const addReference = e.target.closest('[data-add-reference]');
+  if (addReference && !state.readOnly) return addReferenceRow(addReference.closest('[data-reference-list]'));
+  const removeReference = e.target.closest('[data-remove-reference]');
+  if (removeReference && !state.readOnly) return removeReferenceRow(removeReference.closest('[data-reference-row]'));
+  const moveReference = e.target.closest('[data-move-reference]');
+  if (moveReference && !state.readOnly) return moveReferenceRow(moveReference.closest('[data-reference-row]'), moveReference.dataset.moveReference);
   if (e.target.closest('[data-save-defaults-vars]') && !state.readOnly) return saveDefaultsVars();
   if (e.target.closest('[data-add-defaults-var]') && !state.readOnly) return addDefaultsVarRow();
   const removeDefaultsVar = e.target.closest('[data-remove-defaults-var]');
@@ -1938,6 +1998,86 @@ function handleEditModalClick(e) {
   if (specialValue && !state.readOnly) return openSpecialValueDialog(specialValue.closest('[data-special-entry-row]'));
   const specialAction = e.target.closest('[data-special-entry-action]');
   if (specialAction && !state.readOnly) return handleSpecialEntryAction(specialAction);
+}
+
+function referenceCatalogForList(list) {
+  const catalog = state.appReferences?.catalog || {};
+  if (list?.dataset.referenceField === 'sidecar_ref_names') return catalog.sidecar_definitions || [];
+  if (list?.dataset.referenceField === 'profile_ref_names') return catalog.container_profiles || [];
+  return catalog.runtime_asset_definitions || [];
+}
+
+function syncReferenceList(list) {
+  if (!list) return;
+  const rows = list.querySelector('[data-reference-rows]');
+  if (!rows) return;
+  rows.querySelector('[data-reference-empty]')?.remove();
+  if (!rows.querySelector('[data-reference-row]')) rows.innerHTML = '<div class="text-muted small" data-reference-empty>No references selected.</div>';
+  const add = list.querySelector('[data-add-reference]');
+  if (add) add.disabled = referenceValues(list).length >= referenceCatalogForList(list).length;
+}
+
+function addReferenceRow(list) {
+  if (!list) return;
+  const catalog = referenceCatalogForList(list);
+  const selected = new Set(Array.from(list.querySelectorAll('[data-reference-value]')).map((input) => input.value));
+  const value = catalog.find((item) => !selected.has(item));
+  if (!value) return showError('All available definitions are already selected.');
+  const rows = list.querySelector('[data-reference-rows]');
+  rows?.querySelector('[data-reference-empty]')?.remove();
+  rows?.insertAdjacentHTML('beforeend', renderReferenceRow(value, catalog));
+  syncReferenceList(list);
+}
+
+function removeReferenceRow(row) {
+  const list = row?.closest('[data-reference-list]');
+  row?.remove();
+  syncReferenceList(list);
+}
+
+function moveReferenceRow(row, direction) {
+  if (!row) return;
+  if (direction === 'up' && row.previousElementSibling?.matches('[data-reference-row]')) row.parentElement.insertBefore(row, row.previousElementSibling);
+  if (direction === 'down' && row.nextElementSibling?.matches('[data-reference-row]')) row.parentElement.insertBefore(row.nextElementSibling, row);
+}
+
+function referenceValues(list) {
+  return Array.from(list?.querySelectorAll('[data-reference-value]') || []).map((input) => input.value);
+}
+
+async function saveAppReferences() {
+  if (state.readOnly || !state.appReferences || !state.appFile) return;
+  const lists = qsa('[data-references-editor] [data-reference-list]');
+  const find = (scope, index, field) => lists.find((list) => list.dataset.referenceScope === scope && Number(list.dataset.referenceIndex) === index && list.dataset.referenceField === field);
+  const scoped = (scope, items) => (items || []).map((item) => ({
+    index: item.index,
+    name: item.name,
+    profile_ref_names: referenceValues(find(scope, item.index, 'profile_ref_names')),
+    runtime_asset_ref_names: referenceValues(find(scope, item.index, 'runtime_asset_ref_names')),
+  }));
+  const references = {
+    sidecar_ref_names: referenceValues(find('app', -1, 'sidecar_ref_names')),
+    runtime_asset_ref_names: referenceValues(find('app', -1, 'runtime_asset_ref_names')),
+    containers: scoped('containers', state.appReferences.containers),
+    sidecars: scoped('sidecars', state.appReferences.sidecars),
+  };
+  for (const list of lists) {
+    const values = referenceValues(list);
+    if (new Set(values).size !== values.length) return showError('A reference list contains duplicate definitions.');
+  }
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/references`, {
+      expected_hash: state.appReferences.content_hash,
+      expected_defaults_hash: state.appReferences.defaults_hash,
+      references,
+    });
+    state.editModalClose?.();
+    state.editModalClose = null;
+    await refreshRepositorySnapshot();
+    await loadApps();
+    await selectApp(state.appFile);
+  } catch (e) { showError(e); }
 }
 function handleEditModalInput(e) {
   const filter = e.target.closest('[data-special-entry-filter]');
