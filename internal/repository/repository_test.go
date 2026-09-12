@@ -1657,3 +1657,68 @@ containers:
 		t.Fatalf("atomic reference/patch removal damaged YAML:\n%s", content)
 	}
 }
+
+func TestUpdateDefaultsSidecarDefinitionImagePreservesOtherFields(t *testing.T) {
+	root := t.TempDir()
+	defaultsPath := filepath.Join(root, "dev", "apps", "_defaults.yml")
+	original := `# catalog comment
+sidecar_definitions:
+  - name: exporter
+    image: "{{env:REGISTRY_URL}}/exporter:{{var:VERSION}}"
+    # keep startup
+    startup:
+      command: ["/exporter"]
+    envs:
+      - name: MODE
+        value: java
+  - name: proxy
+    image: proxy:1
+`
+	writeFile(t, defaultsPath, original)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := repo.DefaultsSidecarDefinition("dev", "exporter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Image != "{{env:REGISTRY_URL}}/exporter:{{var:VERSION}}" {
+		t.Fatalf("raw image = %q", current.Image)
+	}
+	if _, err := repo.UpdateDefaultsSidecarDefinition("dev", "exporter", DefaultsSidecarDefinitionUpdate{Image: current.Image}, current.ContentHash); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(defaultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(content); got != original {
+		t.Fatalf("no-op update changed source:\n%s", got)
+	}
+
+	updated, err := repo.UpdateDefaultsSidecarDefinition("dev", "exporter", DefaultsSidecarDefinitionUpdate{Image: "registry.example/exporter:2"}, current.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Image != "registry.example/exporter:2" {
+		t.Fatalf("updated image = %q", updated.Image)
+	}
+	content, err = os.ReadFile(defaultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(content)
+	for _, preserved := range []string{"# catalog comment", "# keep startup", `command: ["/exporter"]`, "value: java", "image: proxy:1"} {
+		if !strings.Contains(got, preserved) {
+			t.Fatalf("updated source lost %q:\n%s", preserved, got)
+		}
+	}
+	if !strings.Contains(got, `image: "registry.example/exporter:2"`) {
+		t.Fatalf("updated source missing image:\n%s", got)
+	}
+	if _, err := repo.UpdateDefaultsSidecarDefinition("dev", "exporter", DefaultsSidecarDefinitionUpdate{Image: "exporter:3"}, current.ContentHash); !IsConflictError(err) {
+		t.Fatalf("stale update error = %v, want conflict", err)
+	}
+}

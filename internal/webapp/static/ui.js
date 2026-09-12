@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, defaultsSidecarDefinition: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -296,6 +296,8 @@ async function init() {
   });
   qs('#asset-structured')?.addEventListener('click', (e) => handleAssetStructuredClick(e));
   qs('#defaults-overview')?.addEventListener('click', async (e) => {
+    const editSidecar = e.target.closest('[data-edit-sidecar-definition]');
+    if (editSidecar && !state.readOnly) return openDefaultsSidecarDefinitionEditor(editSidecar.dataset.editSidecarDefinition);
     const app = e.target.closest('[data-defaults-app]');
     if (app) {
       setActive('apps');
@@ -996,7 +998,8 @@ function renderDefaultsCatalogItem(kind, item) {
   const summary = keys.slice(0, 7).map((key) => `<span class="badge bg-secondary-lt">${esc(key)}</span>`).join('');
   const usedBy = usages.slice(0, 6).map((usage) => `<button class="btn btn-sm btn-ghost-secondary" type="button" data-defaults-app="${esc(usage.app_file)}" title="${esc(usage.yaml_path)}"><i class="ti ti-apps me-1"></i>${esc(usage.app)}${usage.container ? ` / ${esc(usage.container)}` : ''}</button>`).join('');
   const assetLink = kind === 'shared_asset' && item.file ? `<button class="btn btn-sm btn-outline-secondary" type="button" data-defaults-asset="${esc(sharedAssetBrowserPath(item.file))}"><i class="ti ti-file me-1"></i>Open file</button>` : '';
-  return `<div class="col-12 col-lg-6"><div class="card card-sm h-100"><div class="card-body"><div class="d-flex align-items-start justify-content-between gap-2"><div class="fw-semibold font-monospace text-break">${esc(name)}</div><span class="badge ${usages.length ? 'bg-blue-lt' : 'bg-secondary-lt'}">${usages.length} use${usages.length === 1 ? '' : 's'}</span></div><div class="d-flex flex-wrap gap-1 mt-2">${summary || '<span class="text-muted small">No additional fields.</span>'}</div>${usedBy || assetLink ? `<div class="d-flex flex-wrap gap-1 mt-3">${usedBy}${assetLink}</div>` : ''}</div></div></div>`;
+  const editAction = kind === 'sidecar_definition' && !state.readOnly ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition="${esc(name)}"><i class="ti ti-pencil me-1"></i>Edit image</button>` : '';
+  return `<div class="col-12 col-lg-6"><div class="card card-sm h-100"><div class="card-body"><div class="d-flex align-items-start justify-content-between gap-2"><div class="fw-semibold font-monospace text-break">${esc(name)}</div><span class="badge ${usages.length ? 'bg-blue-lt' : 'bg-secondary-lt'}">${usages.length} use${usages.length === 1 ? '' : 's'}</span></div><div class="d-flex flex-wrap gap-1 mt-2">${summary || '<span class="text-muted small">No additional fields.</span>'}</div>${usedBy || assetLink || editAction ? `<div class="d-flex flex-wrap gap-1 mt-3">${usedBy}${assetLink}${editAction}</div>` : ''}</div></div></div>`;
 }
 
 async function openDefaultsSource() {
@@ -2011,6 +2014,7 @@ function handleEditModalClick(e) {
   const saveAppVar = e.target.closest('[data-save-app-vars-modal]');
   if (saveAppVar && !state.readOnly) return saveAppVars();
   if (e.target.closest('[data-save-references]') && !state.readOnly) return saveAppReferences();
+  if (e.target.closest('[data-save-defaults-sidecar-definition]') && !state.readOnly) return saveDefaultsSidecarDefinition();
   const addReference = e.target.closest('[data-add-reference]');
   if (addReference && !state.readOnly) return addReferenceRow(addReference.closest('[data-reference-list]'));
   const removeReference = e.target.closest('[data-remove-reference]');
@@ -2436,6 +2440,57 @@ function openEditorModal(title, subtitle, body, options = {}) {
 function openDefaultsVarsEditor() {
   openEditorModal('Edit defaults vars', 'Top-level vars in apps/_defaults.yml used by {{var:NAME}} placeholders.', renderDefaultsVarsEditor(state.defaults?.vars || []));
 }
+
+async function openDefaultsSidecarDefinitionEditor(name) {
+  if (!state.env || state.readOnly || !name) return;
+  clearError();
+  try {
+    const definition = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults/sidecar-definitions/${encodeURIComponent(name)}`);
+    state.defaultsSidecarDefinition = definition;
+    const usages = (state.inspection?.usage || []).filter((usage) => usage.kind === 'sidecar_definition' && usage.name === name);
+    const usedBy = usages.length
+      ? usages.map((usage) => `<span class="badge bg-blue-lt">${esc(usage.app)}${usage.container ? ` / ${esc(usage.container)}` : ''}</span>`).join('')
+      : '<span class="text-muted small">This definition is currently unused.</span>';
+    openEditorModal(
+      `Edit sidecar image: ${name}`,
+      'Updates only the image scalar in apps/_defaults.yml. All other definition fields stay unchanged.',
+      `<div class="overview-section">
+        <div class="overview-subtitle mb-2">Used by</div>
+        <div class="d-flex flex-wrap gap-1 mb-3">${usedBy}</div>
+        <label class="form-label" for="defaults-sidecar-image">Image</label>
+        <input class="form-control font-monospace" id="defaults-sidecar-image" value="${esc(definition.image || '')}" autocomplete="off" required>
+        <div class="form-hint">Templates such as {{env:REGISTRY_URL}} are preserved as text.</div>
+        <div class="d-flex justify-content-end mt-3"><button class="btn btn-primary" type="button" data-save-defaults-sidecar-definition><i class="ti ti-device-floppy me-1"></i>Save image</button></div>
+      </div>`,
+    );
+    qs('#defaults-sidecar-image')?.focus();
+  } catch (e) { showError(e); }
+}
+
+async function saveDefaultsSidecarDefinition() {
+  const current = state.defaultsSidecarDefinition;
+  if (!state.env || state.readOnly || !current) return;
+  const input = qs('#defaults-sidecar-image');
+  const image = input?.value?.trim() || '';
+  if (!image) {
+    input?.classList.add('is-invalid');
+    return showError('Sidecar definition image is required.');
+  }
+  input?.classList.remove('is-invalid');
+  clearError();
+  try {
+    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults/sidecar-definitions/${encodeURIComponent(current.name)}`, {
+      expected_hash: current.content_hash,
+      definition: {image},
+    });
+    state.editModalClose?.();
+    state.editModalClose = null;
+    state.defaultsSidecarDefinition = null;
+    await refreshRepositorySnapshot();
+    await loadInspection(true);
+  } catch (e) { showError(e); }
+}
+
 function renderDefaultsVarsEditor(items) {
   const rows = (items || []).map((item) => renderDefaultsVarRow(item)).join('');
   return `

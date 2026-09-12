@@ -242,6 +242,7 @@ func TestMutatingEndpointsRequireWriteMode(t *testing.T) {
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/sidecars/exporter/startup/override", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/vars", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/container-envs", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/replicas", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/autoscaling", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/resources", `{}`},
@@ -1285,6 +1286,50 @@ func TestDefaultsUpdateEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(envsRes.Body.String(), `"container_envs"`) || !strings.Contains(envsRes.Body.String(), `"LOG_LEVEL"`) {
 		t.Fatalf("unexpected container envs response:\n%s", envsRes.Body.String())
+	}
+}
+
+func TestDefaultsSidecarDefinitionAPIUpdatesImage(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), `sidecar_definitions:
+  - name: exporter
+    image: exporter:1
+    envs:
+      - name: MODE
+        value: java
+`)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/envs/dev/defaults/sidecar-definitions/exporter", nil)
+	getResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getResponse, get)
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getResponse.Code, getResponse.Body.String())
+	}
+	var current repository.DefaultsSidecarDefinition
+	if err := json.Unmarshal(getResponse.Body.Bytes(), &current); err != nil {
+		t.Fatal(err)
+	}
+	payload := fmt.Sprintf(`{"expected_hash":%q,"definition":{"image":"registry.example/exporter:2"}}`, current.ContentHash)
+	patch := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/dev/defaults/sidecar-definitions/exporter", strings.NewReader(payload))
+	patchResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(patchResponse, patch)
+	if patchResponse.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d: %s", patchResponse.Code, patchResponse.Body.String())
+	}
+	if !strings.Contains(patchResponse.Body.String(), `"image":"registry.example/exporter:2"`) {
+		t.Fatalf("unexpected PATCH body: %s", patchResponse.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(root, "dev", "apps", "_defaults.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "value: java") {
+		t.Fatalf("PATCH discarded unrelated definition fields:\n%s", content)
 	}
 }
 

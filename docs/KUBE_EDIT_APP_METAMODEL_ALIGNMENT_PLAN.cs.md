@@ -417,6 +417,17 @@ Checkpoint P3.3 2026-09-11:
 - [ ] Test block replacement runtime defaults, sdileny volume/dedup mount,
   kolize targetu, neznamy token/CA/ref a poradi generovanych init containeru.
 
+Checkpoint P4.1a 2026-09-12:
+
+- Defaults katalog umoznuje ve write rezimu upravit `image` existujici
+  `sidecar_definitions` podle stabilniho jmena; create/rename/delete nejsou
+  soucasti tohoto inkrementu;
+- GET vraci raw template ze source YAML, nikdy interni preview marker. PATCH
+  vyzaduje content hash a meni pouze image scalar; no-op je byte-for-byte;
+- modal ukazuje used-by aplikace a pouziva pouze Tabler komponenty. Repository,
+  API a browser smoke overily zachovani envs/startup/resources i okolnich
+  komentaru. Dalsi inkrement muze pridat startup nebo resources definice.
+
 ### P5: Doplnit existujici editory na dnesni model
 
 - [ ] Probes: shared http a live/ready/start HTTP/exec/timing hodnoty,
