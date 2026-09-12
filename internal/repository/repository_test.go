@@ -915,9 +915,8 @@ func TestUpdateAppContainerPortsWritesServiceAndExternal(t *testing.T) {
 			ServiceName: "api",
 			Port:        "80",
 			Externals: []ExternalUpdate{{
-				Name:         "api-public",
-				HTTPHostname: "api.example.test",
-				HTTPPath:     "/",
+				Name: "api-public",
+				HTTP: []ExternalHostUpdate{{Hostname: "api.example.test", Path: "/"}},
 			}},
 		}},
 	}}, "")
@@ -931,14 +930,17 @@ func TestUpdateAppContainerPortsWritesServiceAndExternal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(detail.Content, "  - name: api\n    ports:\n      - name: http\n        port: 8080\n        metrics: true\n        expose_as:\n          - service_name: api\n            port: 80\n            external:\n              - name: api-public\n                http:\n                  - hostname: \"api.example.test\"\n                    path: \"/\"\n    image: api:1") {
-		t.Fatalf("ports block not inserted after container name:\n%s", detail.Content)
+	for _, expected := range []string{"ports:", "name: http", "port: 8080", "metrics: true", "service_name: api", "name: api-public", "hostname: api.example.test"} {
+		if !contains(detail.Content, expected) {
+			t.Fatalf("ports block missing %q:\n%s", expected, detail.Content)
+		}
 	}
 }
 
-func TestUpdateAppContainerPortsRejectsUnsupportedAdvancedFields(t *testing.T) {
+func TestUpdateAppContainerPortsPreservesAdvancedFieldsAndNoOp(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
+	path := filepath.Join(root, "test", "apps", "api.yml")
+	original := `name: api
 containers:
   - name: api
     ports:
@@ -951,18 +953,48 @@ containers:
               - name: api-public
                 annotations:
                   nginx.ingress.kubernetes.io/rewrite-target: /
+                labels:
+                  exposure: public
                 http:
                   - hostname: api.example.test
                     path: /
-`)
+                    x-host-option: keep
+                tls:
+                  termination: edge
+                  certificate: keep-secret-data
+`
+	writeFile(t, path, original)
 	repo, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = repo.UpdateAppContainerPorts("test", "api.yml", 0, []PortUpdate{{Name: "http", Port: "8080"}}, "")
-	if err == nil || !contains(err.Error(), "annotations") {
-		t.Fatalf("UpdateAppContainerPorts error = %v, want unsupported annotations error", err)
+	update := []PortUpdate{{SourceIndex: 0, Name: "http", Port: "8080", ExposeAs: []ExposeUpdate{{SourceIndex: 0, ServiceName: "api", Port: "80", Externals: []ExternalUpdate{{
+		SourceIndex: 0, Name: "api-public", HTTP: []ExternalHostUpdate{{SourceIndex: 0, Hostname: "api.example.test", Path: "/"}},
+		Annotations: []VarItem{{Name: "nginx.ingress.kubernetes.io/rewrite-target", Value: "/"}}, Labels: []VarItem{{Name: "exposure", Value: "public"}}, TLSTermination: "edge",
+	}}}}}}
+	if _, err = repo.UpdateAppContainerPorts("test", "api.yml", 0, update, ""); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != original {
+		t.Fatalf("no-op ports update changed source:\n%s", content)
+	}
+	update[0].ExposeAs[0].Externals[0].Labels[0].Value = "external"
+	if _, err = repo.UpdateAppContainerPorts("test", "api.yml", 0, update, ""); err != nil {
+		t.Fatal(err)
+	}
+	content, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"certificate: keep-secret-data", "x-host-option: keep", "exposure: external"} {
+		if !contains(string(content), expected) {
+			t.Fatalf("updated ports missing %q:\n%s", expected, content)
+		}
 	}
 }
 

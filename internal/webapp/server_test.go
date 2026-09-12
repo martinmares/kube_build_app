@@ -712,14 +712,14 @@ func TestAppContainerPortsUpdateEndpoint(t *testing.T) {
 	}
 
 	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
-	body := `{"expected_hash":"` + detail.ContentHash + `","ports":[{"name":"http","port":"8080","expose_as":[{"service_name":"api","port":"80","externals":[{"name":"api-public","http_hostname":"api.example.test","http_path":"/"}]}]}]}`
+	body := `{"expected_hash":"` + detail.ContentHash + `","ports":[{"source_index":-1,"name":"http","port":"8080","expose_as":[{"source_index":-1,"service_name":"api","port":"80","externals":[{"source_index":-1,"name":"api-public","http":[{"source_index":-1,"hostname":"api.example.test","path":"/"}]}]}]}]}`
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/ports", strings.NewReader(body))
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"service_name":"api"`) || !strings.Contains(response.Body.String(), `"http_hostname":"api.example.test"`) {
+	if !strings.Contains(response.Body.String(), `"service_name":"api"`) || !strings.Contains(response.Body.String(), `"hostname":"api.example.test"`) {
 		t.Fatalf("unexpected response:\n%s", response.Body.String())
 	}
 }

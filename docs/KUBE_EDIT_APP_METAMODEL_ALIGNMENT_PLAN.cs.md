@@ -496,7 +496,7 @@ render i proklik profilu do presne vyfiltrovaneho Defaults katalogu.
 - [x] Probes: shared http a live/ready/start HTTP/exec/timing hodnoty,
   preset/path varianty; no-op neztrati zadne detaily. Neni nutny formular
   na kazdy escape hatch, ale nezname casti se musi zachovat.
-- [ ] Ports: Route tls vcetne termination a existujicich tls poli,
+- [x] Ports: Route tls vcetne termination a existujicich tls poli,
   annotations/labels, seznamy HTTP/HTTPS hostu; zachovat service_name alias.
   TLS private-key/certificate data nevypisovat zbytecne do souhrnnych karet.
 - [x] Resources: ephemeral-storage a zachovani dalsich resources,
@@ -542,6 +542,17 @@ Checkpoint P5.3 2026-09-12:
   a kompletni source templates se validuji na klientu i serveru.
 - Repository/API testy, cela seriova Go suite, build, JS syntax a browser no-op
   smoke nad anonymni fixture prosly.
+
+Checkpoint P5.4 2026-09-12:
+
+- Ports editor podporuje vsechny HTTP/HTTPS hosty, ingress class, Route TLS
+  termination/insecure policy a scalarni annotations/labels.
+- Repository aktualizuje polozky podle zdrojovych indexu, zachovava nezname
+  vnorene klice i legacy `hostname` dialekt a shodny save je byte-identicky.
+- Souhrn ukazuje typ external exposure, host/path a Route TLS termination;
+  privatni TLS certificate/key data do karet ani telemetrie nekopiruje.
+- Dependency badge jsou primo klikatelne Tabler badge bez svetleho hover
+  podkladu. Dark-mode browser kontrola vsech typu odkazu a ports no-op prosly.
 
 ### P6: Integrace, browser overeni, dokumentace
 

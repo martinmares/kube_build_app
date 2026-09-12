@@ -1325,9 +1325,8 @@ function renderDependencyNodes(items, stacked = false) {
   };
   return items.map((item) => {
     const [label, icon, color] = kinds[item.kind] || [item.kind, 'ti-link', 'bg-secondary-lt'];
-    const buttonClass = stacked ? 'd-block w-100 text-start mb-1' : '';
     const badgeClass = stacked ? 'd-flex align-items-start text-start text-wrap w-100' : '';
-    return `<button class="btn btn-sm btn-ghost-secondary p-1 mw-100 ${buttonClass}" type="button" data-dependency-kind="${esc(item.kind)}" data-dependency-name="${esc(item.name)}" title="Open ${esc(label)} in Defaults"><span class="badge ${color} mw-100 ${badgeClass}"><i class="ti ${icon} me-1 flex-shrink-0"></i><span>${esc(label)}: <span class="font-monospace text-break">${esc(item.name)}</span></span></span></button>`;
+    return `<button class="badge border-0 dependency-link ${color} mw-100 ${badgeClass} ${stacked ? 'mb-1' : ''}" type="button" data-dependency-kind="${esc(item.kind)}" data-dependency-name="${esc(item.name)}" title="Open ${esc(label)} in Defaults"><i class="ti ${icon} me-1 flex-shrink-0"></i><span>${esc(label)}: <span class="font-monospace text-break">${esc(item.name)}</span></span></button>`;
   }).join('');
 }
 
@@ -2169,9 +2168,9 @@ function renderPortPreviewLine(port) {
   const exposes = (port.expose_as || []).map((expose) => {
     const externals = (expose.externals || []).map((external) => {
       const kind = external.as_route ? 'route' : 'ingress';
-      const http = [external.http_hostname, external.http_path].filter(Boolean).join(' ');
-      const https = [external.https_hostname, external.https_path].filter(Boolean).join(' ');
-      return `<div class="ports-preview-external"><i class="ti ti-world me-1"></i>${esc(kind)} ${esc(external.name || '?')}${http ? ` -> ${esc(http)}` : ''}${https ? ` / tls ${esc(https)}` : ''}</div>`;
+      const hosts = [...(external.http || []), ...(external.https || [])].map((host) => host.hostname).filter(Boolean);
+      const tls = external.tls_termination ? ` / TLS ${external.tls_termination}` : '';
+      return `<div class="ports-preview-external"><i class="ti ti-world me-1"></i>${esc(kind)} ${esc(external.name || '?')}${hosts.length ? ` -> ${esc(hosts.join(', '))}` : ''}${esc(tls)}</div>`;
     }).join('');
     return `<div class="ports-preview-service"><i class="ti ti-plug-connected me-1"></i>svc <span class="font-monospace">${esc(expose.service_name || expose.hostname || '?')}:${esc(expose.port || '?')}</span>${externals}</div>`;
   }).join('');
@@ -3519,7 +3518,7 @@ function renderPortRow(index, port = {}) {
   const rowId = crypto.randomUUID?.() || String(Date.now() + Math.random());
   const exposes = (port.expose_as || []).map((expose) => renderExposeRow(index, expose)).join('');
   return `
-    <div class="detail-panel mb-2" data-port-row="${index}">
+    <div class="detail-panel mb-2" data-port-row="${index}" data-source-index="${Number.isInteger(port.index) ? port.index : -1}">
       <div class="row g-2 align-items-end">
         ${portInput(index, 'name', 'Port name', port.name || '')}
         ${portInput(index, 'port', 'Container port', port.port || '', 'number')}
@@ -3547,7 +3546,7 @@ function renderExposeRow(index, expose = {}) {
   const rowId = crypto.randomUUID?.() || String(Date.now() + Math.random());
   const externals = (expose.externals || []).map((external) => renderExternalRow(index, external)).join('');
   return `
-    <div class="resource-editor mb-2" data-expose-row="${index}">
+    <div class="resource-editor mb-2" data-expose-row="${index}" data-source-index="${Number.isInteger(expose.index) ? expose.index : -1}">
       <div class="row g-2 align-items-end">
         ${exposeInput(index, 'service-name', 'Service DNS name', expose.service_name || expose.hostname || '')}
         ${exposeInput(index, 'port', 'Service port', expose.port || '', 'number')}
@@ -3567,15 +3566,12 @@ function renderExposeRow(index, expose = {}) {
 }
 function renderExternalRow(index, external = {}) {
   return `
-    <div class="metric-card mb-2" data-external-row="${index}">
+    <div class="metric-card mb-2" data-external-row="${index}" data-source-index="${Number.isInteger(external.index) ? external.index : -1}">
       <div class="row g-2 align-items-end">
         ${externalInput(index, 'name', 'Name', external.name || '')}
         ${externalInput(index, 'class-name', 'Ingress class', external.class_name || '')}
-        ${externalInput(index, 'http-hostname', 'HTTP hostname', external.http_hostname || '')}
-        ${externalInput(index, 'http-path', 'HTTP path', external.http_path || '')}
-        ${externalInput(index, 'https-hostname', 'HTTPS hostname', external.https_hostname || '')}
-        ${externalInput(index, 'https-path', 'HTTPS path', external.https_path || '')}
-        ${externalInput(index, 'secret-name', 'TLS secret', external.secret_name || '')}
+        ${externalInput(index, 'tls-termination', 'Route TLS termination', external.tls_termination || '')}
+        ${externalInput(index, 'tls-policy', 'Insecure edge policy', external.tls_insecure_termination_policy || '')}
         <div class="col-6 col-lg-2">
           <label class="form-check mb-2">
             <input class="form-check-input" type="checkbox" data-external-field="${index}:as-route" ${external.as_route ? 'checked' : ''} ${state.readOnly ? 'disabled' : ''}>
@@ -3585,6 +3581,12 @@ function renderExternalRow(index, external = {}) {
         <div class="col-6 col-lg-1 text-end">
           <button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-external-item="${index}" title="Remove external"><i class="ti ti-trash"></i></button>
         </div>
+      </div>
+      <div class="row g-2 mt-1">
+        ${externalTextarea(index, 'http-hosts', 'HTTP hosts', formatExternalHosts(external.http || [], false), 'hostname | path')}
+        ${externalTextarea(index, 'https-hosts', 'HTTPS hosts / TLS', formatExternalHosts(external.https || [], true), 'hostname | path | secret_name')}
+        ${externalTextarea(index, 'annotations', 'Annotations', formatMetadataItems(external.annotations || []), 'key=value')}
+        ${externalTextarea(index, 'labels', 'Labels', formatMetadataItems(external.labels || []), 'key=value')}
       </div>
     </div>`;
 }
@@ -3596,6 +3598,27 @@ function exposeInput(index, field, label, value, type = 'text') {
 }
 function externalInput(index, field, label, value) {
   return `<div class="col-12 col-lg-3"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" data-external-field="${index}:${field}" value="${esc(value)}" ${state.readOnly ? 'disabled' : ''}></div>`;
+}
+function externalTextarea(index, field, label, value, placeholder) {
+  return `<div class="col-12 col-lg-6"><label class="form-label small mb-1">${esc(label)}</label><textarea class="form-control form-control-sm font-monospace" rows="3" data-external-field="${index}:${field}" placeholder="${esc(placeholder)}" ${state.readOnly ? 'disabled' : ''}>${esc(value)}</textarea></div>`;
+}
+function formatExternalHosts(hosts, includeSecret) {
+  return hosts.map((host) => [host.hostname || '', host.path || '', ...(includeSecret ? [host.secret_name || ''] : [])].join(' | ')).join('\n');
+}
+function formatMetadataItems(items) {
+  return items.map((item) => `${item.name || ''}=${item.value ?? ''}`).join('\n');
+}
+function parseExternalHosts(value, includeSecret) {
+  return String(value || '').split(/\r?\n/).map((line, index) => {
+    const parts = line.split('|').map((item) => item.trim());
+    return {source_index: index, hostname: parts[0] || '', path: parts[1] || '', secret_name: includeSecret ? parts[2] || '' : ''};
+  }).filter((item) => item.hostname || item.path || item.secret_name);
+}
+function parseMetadataItems(value) {
+  return String(value || '').split(/\r?\n/).map((line) => {
+    const separator = line.indexOf('=');
+    return separator < 0 ? {name: line.trim(), value: ''} : {name: line.slice(0, separator).trim(), value: line.slice(separator + 1)};
+  }).filter((item) => item.name);
 }
 function renderPortsEmpty(index) {
   return `<div data-port-empty="${index}">${emptyState('ti-route', 'No ports', 'Use Add port to declare a container port.')}</div>`;
@@ -3643,23 +3666,27 @@ function addExternalRow(index, button) {
 async function saveContainerPorts(index) {
   if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
   const ports = qsa(`[data-port-row="${index}"]`).map((portRow) => ({
+    source_index: Number(portRow.dataset.sourceIndex ?? -1),
     name: portRow.querySelector(`[data-port-field="${index}:name"]`)?.value?.trim() || '',
     port: portRow.querySelector(`[data-port-field="${index}:port"]`)?.value?.trim() || '',
     metrics: !!portRow.querySelector(`[data-port-field="${index}:metrics"]`)?.checked,
     metrics_path_for: portRow.querySelector(`[data-port-field="${index}:metrics-path-for"]`)?.value?.trim() || '',
     expose_as: Array.from(portRow.querySelectorAll(`[data-expose-row="${index}"]`)).map((exposeRow) => ({
+      source_index: Number(exposeRow.dataset.sourceIndex ?? -1),
       service_name: exposeRow.querySelector(`[data-expose-field="${index}:service-name"]`)?.value?.trim() || '',
       port: exposeRow.querySelector(`[data-expose-field="${index}:port"]`)?.value?.trim() || '',
       service_type: exposeRow.querySelector(`[data-expose-field="${index}:service-type"]`)?.value?.trim() || '',
       externals: Array.from(exposeRow.querySelectorAll(`[data-external-row="${index}"]`)).map((externalRow) => ({
+        source_index: Number(externalRow.dataset.sourceIndex ?? -1),
         name: externalRow.querySelector(`[data-external-field="${index}:name"]`)?.value?.trim() || '',
         as_route: !!externalRow.querySelector(`[data-external-field="${index}:as-route"]`)?.checked,
         class_name: externalRow.querySelector(`[data-external-field="${index}:class-name"]`)?.value?.trim() || '',
-        http_hostname: externalRow.querySelector(`[data-external-field="${index}:http-hostname"]`)?.value?.trim() || '',
-        http_path: externalRow.querySelector(`[data-external-field="${index}:http-path"]`)?.value?.trim() || '',
-        https_hostname: externalRow.querySelector(`[data-external-field="${index}:https-hostname"]`)?.value?.trim() || '',
-        https_path: externalRow.querySelector(`[data-external-field="${index}:https-path"]`)?.value?.trim() || '',
-        secret_name: externalRow.querySelector(`[data-external-field="${index}:secret-name"]`)?.value?.trim() || '',
+        http: parseExternalHosts(externalRow.querySelector(`[data-external-field="${index}:http-hosts"]`)?.value, false),
+        https: parseExternalHosts(externalRow.querySelector(`[data-external-field="${index}:https-hosts"]`)?.value, true),
+        annotations: parseMetadataItems(externalRow.querySelector(`[data-external-field="${index}:annotations"]`)?.value),
+        labels: parseMetadataItems(externalRow.querySelector(`[data-external-field="${index}:labels"]`)?.value),
+        tls_termination: externalRow.querySelector(`[data-external-field="${index}:tls-termination"]`)?.value?.trim() || '',
+        tls_insecure_termination_policy: externalRow.querySelector(`[data-external-field="${index}:tls-policy"]`)?.value?.trim() || '',
       })),
     })),
   })).filter((port) => port.name || port.port);
@@ -3708,9 +3735,19 @@ function validatePortsForm(index) {
         if (/[\\r\\n:]/.test(externalName)) return invalidInput(externalNameInput, 'External name cannot contain colon or newline.');
         if (seenExternals.has(externalName)) return invalidInput(externalNameInput, `Duplicate external name "${externalName}".`);
         seenExternals.add(externalName);
-        const httpHost = externalRow.querySelector(`[data-external-field="${index}:http-hostname"]`)?.value?.trim() || '';
-        const httpsHost = externalRow.querySelector(`[data-external-field="${index}:https-hostname"]`)?.value?.trim() || '';
-        if (!httpHost && !httpsHost) return invalidInput(externalNameInput, `External "${externalName}" requires HTTP or HTTPS hostname.`);
+        const httpInput = externalRow.querySelector(`[data-external-field="${index}:http-hosts"]`);
+        const httpsInput = externalRow.querySelector(`[data-external-field="${index}:https-hosts"]`);
+        const httpHosts = parseExternalHosts(httpInput?.value, false);
+        const httpsHosts = parseExternalHosts(httpsInput?.value, true);
+        if (!httpHosts.length && !httpsHosts.length) return invalidInput(httpInput, `External "${externalName}" requires an HTTP or HTTPS hostname.`);
+        for (const [input, hosts, label] of [[httpInput, httpHosts, 'HTTP'], [httpsInput, httpsHosts, 'HTTPS']]) {
+          if (hosts.some((host) => !host.hostname)) return invalidInput(input, `${label} host lines require a hostname.`);
+        }
+        for (const field of ['annotations', 'labels']) {
+          const input = externalRow.querySelector(`[data-external-field="${index}:${field}"]`);
+          const lines = String(input?.value || '').split(/\r?\n/).filter((line) => line.trim());
+          if (lines.some((line) => !line.includes('=') || !line.slice(0, line.indexOf('=')).trim())) return invalidInput(input, `${field} must use one key=value entry per line.`);
+        }
       }
     }
   }
