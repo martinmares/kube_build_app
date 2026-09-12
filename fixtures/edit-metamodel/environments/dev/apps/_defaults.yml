@@ -53,6 +53,7 @@ sidecar_definitions:
     resources:
       cpu: {from: 2m, to: 10m}
       memory: {from: 8Mi, to: 32Mi}
+      ephemeral-storage: {from: 16Mi, to: 64Mi}
 
 runtime_asset_defaults:
   source:

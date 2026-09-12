@@ -110,10 +110,12 @@ type AutoscalingUpdate struct {
 }
 
 type ResourceUpdate struct {
-	CPURequest    string `json:"cpu_request"`
-	CPULimit      string `json:"cpu_limit"`
-	MemoryRequest string `json:"memory_request"`
-	MemoryLimit   string `json:"memory_limit"`
+	CPURequest              string `json:"cpu_request"`
+	CPULimit                string `json:"cpu_limit"`
+	MemoryRequest           string `json:"memory_request"`
+	MemoryLimit             string `json:"memory_limit"`
+	EphemeralStorageRequest string `json:"ephemeral_storage_request"`
+	EphemeralStorageLimit   string `json:"ephemeral_storage_limit"`
 }
 
 type ProbeUpdate struct {
@@ -276,14 +278,18 @@ type EnvVarModel struct {
 }
 
 type ResourceModel struct {
-	CPURequest    *string `json:"cpu_request"`
-	CPULimit      *string `json:"cpu_limit"`
-	MemoryRequest *string `json:"memory_request"`
-	MemoryLimit   *string `json:"memory_limit"`
-	CPUFrom       *string `json:"cpu_from"`
-	CPUTo         *string `json:"cpu_to"`
-	MemoryFrom    *string `json:"memory_from"`
-	MemoryTo      *string `json:"memory_to"`
+	CPURequest              *string `json:"cpu_request"`
+	CPULimit                *string `json:"cpu_limit"`
+	MemoryRequest           *string `json:"memory_request"`
+	MemoryLimit             *string `json:"memory_limit"`
+	EphemeralStorageRequest *string `json:"ephemeral_storage_request"`
+	EphemeralStorageLimit   *string `json:"ephemeral_storage_limit"`
+	CPUFrom                 *string `json:"cpu_from"`
+	CPUTo                   *string `json:"cpu_to"`
+	MemoryFrom              *string `json:"memory_from"`
+	MemoryTo                *string `json:"memory_to"`
+	EphemeralStorageFrom    *string `json:"ephemeral_storage_from"`
+	EphemeralStorageTo      *string `json:"ephemeral_storage_to"`
 }
 
 type RuntimeModel struct {
@@ -802,14 +808,18 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 			StartupCommand:       stringSlice(nestedValue(containerMap, "startup", "command")),
 			StartupArguments:     stringSlice(nestedValue(containerMap, "startup", "arguments")),
 			Resources: ResourceModel{
-				CPURequest:    stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "cpu", "requests"), nestedString(containerMap, "resources", "cpu", "from"))),
-				CPULimit:      stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "cpu", "limits"), nestedString(containerMap, "resources", "cpu", "to"))),
-				MemoryRequest: stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "memory", "requests"), nestedString(containerMap, "resources", "memory", "from"))),
-				MemoryLimit:   stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "memory", "limits"), nestedString(containerMap, "resources", "memory", "to"))),
-				CPUFrom:       stringPtr(nestedString(containerMap, "resources", "cpu", "from")),
-				CPUTo:         stringPtr(nestedString(containerMap, "resources", "cpu", "to")),
-				MemoryFrom:    stringPtr(nestedString(containerMap, "resources", "memory", "from")),
-				MemoryTo:      stringPtr(nestedString(containerMap, "resources", "memory", "to")),
+				CPURequest:              stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "cpu", "requests"), nestedString(containerMap, "resources", "cpu", "from"))),
+				CPULimit:                stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "cpu", "limits"), nestedString(containerMap, "resources", "cpu", "to"))),
+				MemoryRequest:           stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "memory", "requests"), nestedString(containerMap, "resources", "memory", "from"))),
+				MemoryLimit:             stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "memory", "limits"), nestedString(containerMap, "resources", "memory", "to"))),
+				CPUFrom:                 stringPtr(nestedString(containerMap, "resources", "cpu", "from")),
+				CPUTo:                   stringPtr(nestedString(containerMap, "resources", "cpu", "to")),
+				MemoryFrom:              stringPtr(nestedString(containerMap, "resources", "memory", "from")),
+				MemoryTo:                stringPtr(nestedString(containerMap, "resources", "memory", "to")),
+				EphemeralStorageRequest: stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "ephemeral-storage", "requests"), nestedString(containerMap, "resources", "ephemeral-storage", "from"))),
+				EphemeralStorageLimit:   stringPtr(firstNonEmpty(nestedString(containerMap, "resources", "ephemeral-storage", "limits"), nestedString(containerMap, "resources", "ephemeral-storage", "to"))),
+				EphemeralStorageFrom:    stringPtr(nestedString(containerMap, "resources", "ephemeral-storage", "from")),
+				EphemeralStorageTo:      stringPtr(nestedString(containerMap, "resources", "ephemeral-storage", "to")),
 			},
 			Runtime:      runtimeModel(nestedMap(containerMap, "runtime")),
 			Probes:       probesModel(containerMap),
@@ -2465,7 +2475,9 @@ func renderResourcesBlock(resources ResourceUpdate) []string {
 	cpuLimit := strings.TrimSpace(resources.CPULimit)
 	memRequest := strings.TrimSpace(resources.MemoryRequest)
 	memLimit := strings.TrimSpace(resources.MemoryLimit)
-	if cpuRequest == "" && cpuLimit == "" && memRequest == "" && memLimit == "" {
+	ephemeralRequest := strings.TrimSpace(resources.EphemeralStorageRequest)
+	ephemeralLimit := strings.TrimSpace(resources.EphemeralStorageLimit)
+	if cpuRequest == "" && cpuLimit == "" && memRequest == "" && memLimit == "" && ephemeralRequest == "" && ephemeralLimit == "" {
 		return nil
 	}
 	lines := []string{"    resources:"}
@@ -2485,6 +2497,15 @@ func renderResourcesBlock(resources ResourceUpdate) []string {
 		}
 		if memLimit != "" {
 			lines = append(lines, "        limits: "+strconv.Quote(memLimit))
+		}
+	}
+	if ephemeralRequest != "" || ephemeralLimit != "" {
+		lines = append(lines, "      ephemeral-storage:")
+		if ephemeralRequest != "" {
+			lines = append(lines, "        requests: "+strconv.Quote(ephemeralRequest))
+		}
+		if ephemeralLimit != "" {
+			lines = append(lines, "        limits: "+strconv.Quote(ephemeralLimit))
 		}
 	}
 	return lines
@@ -2633,22 +2654,29 @@ func legacyHealthToProbesBlock(block []string) []string {
 
 func validateResourceUpdate(resources ResourceUpdate) error {
 	for label, value := range map[string]string{"cpu_request": resources.CPURequest, "cpu_limit": resources.CPULimit} {
-		if strings.ContainsAny(value, "\r\n") {
-			return fmt.Errorf("%s contains unsupported newline", label)
-		}
-		if err := validateCPUQuantity(label, value); err != nil {
+		if err := validateResourceValue(label, value, validateCPUQuantity); err != nil {
 			return err
 		}
 	}
-	for label, value := range map[string]string{"memory_request": resources.MemoryRequest, "memory_limit": resources.MemoryLimit} {
-		if strings.ContainsAny(value, "\r\n") {
-			return fmt.Errorf("%s contains unsupported newline", label)
-		}
-		if err := validateMemoryQuantity(label, value); err != nil {
+	for label, value := range map[string]string{
+		"memory_request": resources.MemoryRequest, "memory_limit": resources.MemoryLimit,
+		"ephemeral_storage_request": resources.EphemeralStorageRequest, "ephemeral_storage_limit": resources.EphemeralStorageLimit,
+	} {
+		if err := validateResourceValue(label, value, validateMemoryQuantity); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func validateResourceValue(label, value string, validate func(string, string) error) error {
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("%s contains unsupported newline", label)
+	}
+	if match := sourceTemplatePattern.FindString(value); match != "" && match == value {
+		return nil
+	}
+	return validate(label, value)
 }
 
 var cpuQuantityPattern = regexp.MustCompile(`^([0-9]+(\.[0-9]+)?|\.[0-9]+)m?$`)
@@ -2918,18 +2946,14 @@ func rejectUnsupportedContainerBlockForUpdate(content string, containerIndex int
 		return errors.New("container index not found")
 	}
 	container, _ := containers[containerIndex].(map[string]any)
-	block, _ := container[blockName].(map[string]any)
+	rawBlock, blockPresent := container[blockName]
+	block, blockIsMap := rawBlock.(map[string]any)
 	switch blockName {
 	case "resources":
-		if err := rejectUnknownKeys(block, "resources", "cpu", "memory"); err != nil {
-			return err
+		if blockPresent && !blockIsMap {
+			return errors.New("resources must be a mapping")
 		}
-		for _, resource := range []string{"cpu", "memory"} {
-			values, _ := block[resource].(map[string]any)
-			if err := rejectUnknownKeys(values, "resources."+resource, "requests", "limits", "from", "to"); err != nil {
-				return err
-			}
-		}
+		return validateEditableResourcesMap(block)
 	case "probes":
 		if err := rejectUnknownKeys(block, "probes", "preset", "port", "path"); err != nil {
 			return fmt.Errorf("%w; edit the YAML source until the advanced probes editor is available", err)
@@ -2945,6 +2969,36 @@ func rejectUnsupportedContainerBlockForUpdate(content string, containerIndex int
 		export, _ := java["export"].(map[string]any)
 		if err := rejectUnknownKeys(export, "runtime.java.export", "env_name"); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateEditableResourcesMap(resources map[string]any) error {
+	if err := rejectUnknownKeys(resources, "resources", "cpu", "memory", "ephemeral-storage"); err != nil {
+		return err
+	}
+	for _, resource := range []string{"cpu", "memory", "ephemeral-storage"} {
+		rawValues, present := resources[resource]
+		if !present {
+			continue
+		}
+		values, ok := rawValues.(map[string]any)
+		if !ok {
+			return fmt.Errorf("resources.%s must be a mapping", resource)
+		}
+		if err := rejectUnknownKeys(values, "resources."+resource, "requests", "limits", "from", "to"); err != nil {
+			return err
+		}
+		if _, canonical := values["requests"]; canonical {
+			if _, alias := values["from"]; alias {
+				return fmt.Errorf("resources.%s defines both requests and from; edit the YAML source to choose one spelling", resource)
+			}
+		}
+		if _, canonical := values["limits"]; canonical {
+			if _, alias := values["to"]; alias {
+				return fmt.Errorf("resources.%s defines both limits and to; edit the YAML source to choose one spelling", resource)
+			}
 		}
 	}
 	return nil

@@ -575,18 +575,27 @@ containers:
       memory:
         from: "128Mi"
         to: "512Mi"
+      ephemeral-storage:
+        from: "64Mi"
+        to: "1Gi"
 `)
 	repo, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{CPURequest: "200m", CPULimit: "600m", MemoryRequest: "256Mi", MemoryLimit: "768Mi"}, "")
+	result, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{
+		CPURequest: "200m", CPULimit: "600m", MemoryRequest: "256Mi", MemoryLimit: "768Mi",
+		EphemeralStorageRequest: "128Mi", EphemeralStorageLimit: "2Gi",
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Resources.CPURequest == nil || *result.Resources.CPURequest != "200m" {
 		t.Fatalf("resources = %#v, want cpu request 200m", result.Resources)
+	}
+	if result.Resources.EphemeralStorageRequest == nil || *result.Resources.EphemeralStorageRequest != "128Mi" {
+		t.Fatalf("resources = %#v, want ephemeral storage request 128Mi", result.Resources)
 	}
 	detail, err := repo.AppDetail("test", "api.yml")
 	if err != nil {
@@ -599,6 +608,9 @@ containers:
 	}
 	if contains(detail.Content, "from:") || contains(detail.Content, "to:") {
 		t.Fatalf("legacy from/to should be replaced:\n%s", detail.Content)
+	}
+	if !contains(detail.Content, "ephemeral-storage:\n        requests: \"128Mi\"\n        limits: \"2Gi\"") {
+		t.Fatalf("ephemeral storage missing:\n%s", detail.Content)
 	}
 }
 
@@ -616,8 +628,17 @@ func TestUpdateAppContainerResourcesRejectsInvalidQuantities(t *testing.T) {
 	if _, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{MemoryRequest: "1000ABC"}, ""); err == nil || !contains(err.Error(), "memory_request") {
 		t.Fatalf("memory quantity error = %v, want memory_request validation", err)
 	}
+	if _, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{EphemeralStorageRequest: "1000ABC"}, ""); err == nil || !contains(err.Error(), "ephemeral_storage_request") {
+		t.Fatalf("ephemeral storage quantity error = %v, want validation", err)
+	}
+	if _, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{EphemeralStorageRequest: "1{{var:SIZE}}"}, ""); err == nil || !contains(err.Error(), "ephemeral_storage_request") {
+		t.Fatalf("partial template error = %v, want validation", err)
+	}
 	if _, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{CPURequest: "500m", MemoryRequest: "1000Mi"}, ""); err != nil {
 		t.Fatalf("valid quantities rejected: %v", err)
+	}
+	if _, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{EphemeralStorageLimit: "{{var:EPHEMERAL_LIMIT}}"}, ""); err != nil {
+		t.Fatalf("complete resource template rejected: %v", err)
 	}
 }
 
@@ -760,13 +781,13 @@ func TestSimpleEditorsRejectAdvancedBlocksWithoutChangingSource(t *testing.T) {
 		field   string
 	}{
 		{
-			name:    "resources ephemeral storage",
-			content: "name: api\ncontainers:\n  - name: api\n    resources:\n      ephemeral-storage:\n        from: 64Mi\n        to: 128Mi\n",
+			name:    "resources unknown gpu",
+			content: "name: api\ncontainers:\n  - name: api\n    resources:\n      gpu:\n        requests: 1\n",
 			update: func(repo *Repository) error {
 				_, err := repo.UpdateAppContainerResources("test", "api.yml", 0, ResourceUpdate{CPURequest: "100m"}, "")
 				return err
 			},
-			field: "ephemeral-storage",
+			field: "gpu",
 		},
 		{
 			name:    "advanced probes",
@@ -1835,6 +1856,9 @@ func TestUpdateDefaultsSidecarDefinitionResourcesPreservesTemplatesDialectAndOth
       memory:
         from: 16Mi
         to: "{{env:EXPORTER_MEMORY_LIMIT}}"
+      ephemeral-storage:
+        from: 32Mi
+        to: "{{var:EXPORTER_EPHEMERAL_LIMIT}}"
     envs:
       - name: MODE
         value: strict
@@ -1852,7 +1876,8 @@ func TestUpdateDefaultsSidecarDefinitionResourcesPreservesTemplatesDialectAndOth
 		t.Fatal(err)
 	}
 	if current.Resources == nil || current.Resources.CPURequest == nil || *current.Resources.CPURequest != "{{var:EXPORTER_CPU_REQUEST}}" ||
-		current.Resources.MemoryLimit == nil || *current.Resources.MemoryLimit != "{{env:EXPORTER_MEMORY_LIMIT}}" {
+		current.Resources.MemoryLimit == nil || *current.Resources.MemoryLimit != "{{env:EXPORTER_MEMORY_LIMIT}}" ||
+		current.Resources.EphemeralStorageLimit == nil || *current.Resources.EphemeralStorageLimit != "{{var:EXPORTER_EPHEMERAL_LIMIT}}" {
 		t.Fatalf("raw resources = %#v", current.Resources)
 	}
 	if _, err := repo.UpdateDefaultsSidecarDefinitionResources("dev", "exporter", DefaultsSidecarDefinitionResourcesUpdate{
@@ -1869,12 +1894,16 @@ func TestUpdateDefaultsSidecarDefinitionResourcesPreservesTemplatesDialectAndOth
 	}
 
 	updated, err := repo.UpdateDefaultsSidecarDefinitionResources("dev", "exporter", DefaultsSidecarDefinitionResourcesUpdate{
-		Action: "set", Resources: ResourceUpdate{CPURequest: "5m", CPULimit: "25m", MemoryRequest: "{{var:MEMORY_REQUEST}}", MemoryLimit: "64Mi"},
+		Action: "set", Resources: ResourceUpdate{
+			CPURequest: "5m", CPULimit: "25m", MemoryRequest: "{{var:MEMORY_REQUEST}}", MemoryLimit: "64Mi",
+			EphemeralStorageRequest: "64Mi", EphemeralStorageLimit: "256Mi",
+		},
 	}, current.ContentHash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Resources == nil || updated.Resources.CPUFrom == nil || *updated.Resources.CPUFrom != "5m" || updated.Resources.MemoryFrom == nil {
+	if updated.Resources == nil || updated.Resources.CPUFrom == nil || *updated.Resources.CPUFrom != "5m" || updated.Resources.MemoryFrom == nil ||
+		updated.Resources.EphemeralStorageFrom == nil || *updated.Resources.EphemeralStorageFrom != "64Mi" {
 		t.Fatalf("updated resources lost source dialect: %#v", updated.Resources)
 	}
 	content, err = os.ReadFile(defaultsPath)
@@ -1904,7 +1933,7 @@ func TestUpdateDefaultsSidecarDefinitionResourcesPreservesTemplatesDialectAndOth
 	}
 }
 
-func TestDefaultsSidecarDefinitionResourcesRejectsUnsupportedAndInvalidValues(t *testing.T) {
+func TestDefaultsSidecarDefinitionResourcesSupportsEphemeralStorageAndRejectsInvalidValues(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "dev", "apps", "_defaults.yml")
 	writeFile(t, path, `sidecar_definitions:
@@ -1919,8 +1948,12 @@ func TestDefaultsSidecarDefinitionResourcesRejectsUnsupportedAndInvalidValues(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.DefaultsSidecarDefinitionResources("dev", "exporter"); err == nil || !strings.Contains(err.Error(), "ephemeral-storage") {
-		t.Fatalf("unsupported resources error = %v", err)
+	resources, err := repo.DefaultsSidecarDefinitionResources("dev", "exporter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resources.Resources == nil || resources.Resources.EphemeralStorageRequest == nil || *resources.Resources.EphemeralStorageRequest != "1Gi" {
+		t.Fatalf("ephemeral storage not parsed: %#v", resources.Resources)
 	}
 
 	writeFile(t, path, `sidecar_definitions:
@@ -1936,6 +1969,11 @@ func TestDefaultsSidecarDefinitionResourcesRejectsUnsupportedAndInvalidValues(t 
 		Action: "set", Resources: ResourceUpdate{CPURequest: "1000ABC"},
 	}, current.ContentHash); err == nil || !strings.Contains(err.Error(), "cpu_request") {
 		t.Fatalf("invalid resource error = %v", err)
+	}
+	if _, err := repo.UpdateDefaultsSidecarDefinitionResources("dev", "exporter", DefaultsSidecarDefinitionResourcesUpdate{
+		Action: "set", Resources: ResourceUpdate{EphemeralStorageLimit: "1000ABC"},
+	}, current.ContentHash); err == nil || !strings.Contains(err.Error(), "ephemeral_storage_limit") {
+		t.Fatalf("invalid ephemeral storage error = %v", err)
 	}
 
 	writeFile(t, path, `sidecar_definitions:

@@ -211,31 +211,8 @@ func (r *Repository) DefaultsSidecarDefinitionResources(envName, name string) (D
 	if !ok {
 		return DefaultsSidecarDefinitionResources{}, fmt.Errorf("sidecar definition %q resources must be a mapping", name)
 	}
-	if err := rejectUnknownKeys(resources, "resources", "cpu", "memory"); err != nil {
-		return DefaultsSidecarDefinitionResources{}, err
-	}
-	for _, resource := range []string{"cpu", "memory"} {
-		rawValues, present := resources[resource]
-		if !present {
-			continue
-		}
-		values, ok := rawValues.(map[string]any)
-		if !ok {
-			return DefaultsSidecarDefinitionResources{}, fmt.Errorf("sidecar definition %q resources.%s must be a mapping", name, resource)
-		}
-		if err := rejectUnknownKeys(values, "resources."+resource, "requests", "limits", "from", "to"); err != nil {
-			return DefaultsSidecarDefinitionResources{}, err
-		}
-		if _, canonical := values["requests"]; canonical {
-			if _, alias := values["from"]; alias {
-				return DefaultsSidecarDefinitionResources{}, fmt.Errorf("resources.%s defines both requests and from; edit the YAML source to choose one spelling", resource)
-			}
-		}
-		if _, canonical := values["limits"]; canonical {
-			if _, alias := values["to"]; alias {
-				return DefaultsSidecarDefinitionResources{}, fmt.Errorf("resources.%s defines both limits and to; edit the YAML source to choose one spelling", resource)
-			}
-		}
+	if err := validateEditableResourcesMap(resources); err != nil {
+		return DefaultsSidecarDefinitionResources{}, fmt.Errorf("sidecar definition %q: %w", name, err)
 	}
 	model := resourceModel(resources)
 	out.Resources = &model
@@ -294,6 +271,7 @@ func cleanResourceUpdate(resources ResourceUpdate) ResourceUpdate {
 	return ResourceUpdate{
 		CPURequest: strings.TrimSpace(resources.CPURequest), CPULimit: strings.TrimSpace(resources.CPULimit),
 		MemoryRequest: strings.TrimSpace(resources.MemoryRequest), MemoryLimit: strings.TrimSpace(resources.MemoryLimit),
+		EphemeralStorageRequest: strings.TrimSpace(resources.EphemeralStorageRequest), EphemeralStorageLimit: strings.TrimSpace(resources.EphemeralStorageLimit),
 	}
 }
 
@@ -307,32 +285,26 @@ func resourceUpdateFromModel(resources ResourceModel) ResourceUpdate {
 	return cleanResourceUpdate(ResourceUpdate{
 		CPURequest: value(resources.CPURequest), CPULimit: value(resources.CPULimit),
 		MemoryRequest: value(resources.MemoryRequest), MemoryLimit: value(resources.MemoryLimit),
+		EphemeralStorageRequest: value(resources.EphemeralStorageRequest), EphemeralStorageLimit: value(resources.EphemeralStorageLimit),
 	})
 }
 
 func validateDefinitionResourceUpdate(resources ResourceUpdate) error {
 	resources = cleanResourceUpdate(resources)
 	for label, value := range map[string]string{"cpu_request": resources.CPURequest, "cpu_limit": resources.CPULimit} {
-		if err := validateDefinitionResourceValue(label, value, validateCPUQuantity); err != nil {
+		if err := validateResourceValue(label, value, validateCPUQuantity); err != nil {
 			return err
 		}
 	}
-	for label, value := range map[string]string{"memory_request": resources.MemoryRequest, "memory_limit": resources.MemoryLimit} {
-		if err := validateDefinitionResourceValue(label, value, validateMemoryQuantity); err != nil {
+	for label, value := range map[string]string{
+		"memory_request": resources.MemoryRequest, "memory_limit": resources.MemoryLimit,
+		"ephemeral_storage_request": resources.EphemeralStorageRequest, "ephemeral_storage_limit": resources.EphemeralStorageLimit,
+	} {
+		if err := validateResourceValue(label, value, validateMemoryQuantity); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func validateDefinitionResourceValue(label, value string, validate func(string, string) error) error {
-	if strings.ContainsAny(value, "\r\n") {
-		return fmt.Errorf("%s contains unsupported newline", label)
-	}
-	if match := sourceTemplatePattern.FindString(value); match != "" && match == value {
-		return nil
-	}
-	return validate(label, value)
 }
 
 func (r *Repository) UpdateDefaultsSidecarDefinitionStartup(envName, name string, update DefaultsSidecarDefinitionStartupUpdate, expectedHash string) (DefaultsSidecarDefinitionStartup, error) {
@@ -560,7 +532,9 @@ func renderDefaultsSidecarResourcesBlock(resources ResourceUpdate, current *Reso
 	}
 	cpuAliases := current != nil && (current.CPUFrom != nil || current.CPUTo != nil)
 	memoryAliases := current != nil && (current.MemoryFrom != nil || current.MemoryTo != nil)
+	ephemeralAliases := current != nil && (current.EphemeralStorageFrom != nil || current.EphemeralStorageTo != nil)
 	appendResource("cpu", resources.CPURequest, resources.CPULimit, cpuAliases)
 	appendResource("memory", resources.MemoryRequest, resources.MemoryLimit, memoryAliases)
+	appendResource("ephemeral-storage", resources.EphemeralStorageRequest, resources.EphemeralStorageLimit, ephemeralAliases)
 	return lines
 }

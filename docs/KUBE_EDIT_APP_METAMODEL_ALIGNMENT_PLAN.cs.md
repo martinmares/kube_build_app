@@ -499,7 +499,7 @@ render i proklik profilu do presne vyfiltrovaneho Defaults katalogu.
 - [ ] Ports: Route tls vcetne termination a existujicich tls poli,
   annotations/labels, seznamy HTTP/HTTPS hostu; zachovat service_name alias.
   TLS private-key/certificate data nevypisovat zbytecne do souhrnnych karet.
-- [ ] Resources: ephemeral-storage a zachovani dalsich resources,
+- [x] Resources: ephemeral-storage a zachovani dalsich resources,
   literal/template vstupy, local/inherited/external-policy indikace.
 - [ ] Env typy: value, secret/resource/field formy builderu, token/shared
   asset refs, remove. Nezamichat raw Kubernetes valueFrom s metamodellem;
@@ -520,6 +520,17 @@ Checkpoint P5.1 2026-09-12:
   skutecne nakonfigurovane oblasti a pouziva pouze Tabler/Bootstrap komponenty.
 - Cileny DTO test, cela seriova Go suite, build, JS syntax a browser smoke na
   desktopu i uzkem viewportu prosly. Fixture ani builder kontrakt se nezmenily.
+
+Checkpoint P5.2 2026-09-12:
+
+- Main container, app-local sidecar override i shared sidecar definition
+  resource editory podporuji `ephemeral-storage` request/limit.
+- Repository zachovava `from/to` nebo `requests/limits` dialekt shared
+  definice. Quantity i cele source templates se validuji na klientu i serveru.
+- Nezname resource keys, nejednoznacny dialekt a nemapove bloky se odmitnou
+  pred zapisem, takze je editor nemuze tise odstranit.
+- Pozitivni repository/API testy, cela seriova Go suite, build a browser
+  render nad anonymni fixture prosly.
 
 ### P6: Integrace, browser overeni, dokumentace
 

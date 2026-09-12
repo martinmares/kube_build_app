@@ -180,7 +180,14 @@ func (r *Repository) AppSidecarResourcesOverride(envName, appFile, sidecarName s
 		ContentHash: detail.ContentHash, DefaultsHash: references.DefaultsHash,
 		SharedDefinition: shared, LocalPatch: localIndex >= 0,
 	}
-	if resources, ok := localSidecar["resources"].(map[string]any); ok {
+	if rawResources, present := localSidecar["resources"]; present {
+		resources, ok := rawResources.(map[string]any)
+		if !ok {
+			return SidecarResourcesOverride{}, fmt.Errorf("sidecar %q resources must be a mapping", sidecarName)
+		}
+		if err := validateEditableResourcesMap(resources); err != nil {
+			return SidecarResourcesOverride{}, fmt.Errorf("sidecar %q: %w", sidecarName, err)
+		}
 		model := resourceModel(resources)
 		out.Local = &model
 	}
@@ -235,7 +242,8 @@ func (r *Repository) UpdateAppSidecarResourcesOverride(envName, appFile, sidecar
 
 func resourceUpdateEmpty(resources ResourceUpdate) bool {
 	return strings.TrimSpace(resources.CPURequest) == "" && strings.TrimSpace(resources.CPULimit) == "" &&
-		strings.TrimSpace(resources.MemoryRequest) == "" && strings.TrimSpace(resources.MemoryLimit) == ""
+		strings.TrimSpace(resources.MemoryRequest) == "" && strings.TrimSpace(resources.MemoryLimit) == "" &&
+		strings.TrimSpace(resources.EphemeralStorageRequest) == "" && strings.TrimSpace(resources.EphemeralStorageLimit) == ""
 }
 
 func (r *Repository) AppSidecarEnvOverride(envName, appFile, sidecarName, variableName string) (SidecarEnvOverride, error) {
@@ -506,6 +514,10 @@ func resourceModel(resources map[string]any) ResourceModel {
 		MemoryLimit:   stringPtr(firstNonEmpty(nestedString(resources, "memory", "limits"), nestedString(resources, "memory", "to"))),
 		CPUFrom:       stringPtr(nestedString(resources, "cpu", "from")), CPUTo: stringPtr(nestedString(resources, "cpu", "to")),
 		MemoryFrom: stringPtr(nestedString(resources, "memory", "from")), MemoryTo: stringPtr(nestedString(resources, "memory", "to")),
+		EphemeralStorageRequest: stringPtr(firstNonEmpty(nestedString(resources, "ephemeral-storage", "requests"), nestedString(resources, "ephemeral-storage", "from"))),
+		EphemeralStorageLimit:   stringPtr(firstNonEmpty(nestedString(resources, "ephemeral-storage", "limits"), nestedString(resources, "ephemeral-storage", "to"))),
+		EphemeralStorageFrom:    stringPtr(nestedString(resources, "ephemeral-storage", "from")),
+		EphemeralStorageTo:      stringPtr(nestedString(resources, "ephemeral-storage", "to")),
 	}
 }
 

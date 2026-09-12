@@ -203,7 +203,10 @@ func TestSharedSidecarResourcesOverrideAndResetAreMinimal(t *testing.T) {
 		t.Fatal(err)
 	}
 	updated, err := repo.UpdateAppSidecarResourcesOverride("dev", "api.yml", "exporter", SidecarResourcesOverrideUpdate{
-		Action: "set", Resources: ResourceUpdate{CPURequest: "5m", CPULimit: "20m", MemoryRequest: "16Mi", MemoryLimit: "64Mi"},
+		Action: "set", Resources: ResourceUpdate{
+			CPURequest: "5m", CPULimit: "20m", MemoryRequest: "16Mi", MemoryLimit: "64Mi",
+			EphemeralStorageRequest: "32Mi", EphemeralStorageLimit: "128Mi",
+		},
 	}, current.ContentHash, current.DefaultsHash)
 	if err != nil {
 		t.Fatal(err)
@@ -211,12 +214,18 @@ func TestSharedSidecarResourcesOverrideAndResetAreMinimal(t *testing.T) {
 	if updated.Local == nil || updated.Local.CPURequest == nil || *updated.Local.CPURequest != "5m" {
 		t.Fatalf("unexpected resources override: %#v", updated)
 	}
+	if updated.Local.EphemeralStorageLimit == nil || *updated.Local.EphemeralStorageLimit != "128Mi" {
+		t.Fatalf("ephemeral storage override missing: %#v", updated)
+	}
 	content, err := os.ReadFile(appPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(content), "  - name: exporter\n    resources:\n") || strings.Contains(string(content), "image:") || strings.Contains(string(content), "startup:") {
 		t.Fatalf("resources override materialized inherited fields:\n%s", content)
+	}
+	if !strings.Contains(string(content), "ephemeral-storage:\n        requests: \"32Mi\"\n        limits: \"128Mi\"") {
+		t.Fatalf("ephemeral storage override missing from source:\n%s", content)
 	}
 	reset, err := repo.UpdateAppSidecarResourcesOverride("dev", "api.yml", "exporter", SidecarResourcesOverrideUpdate{Action: "reset"}, updated.ContentHash, updated.DefaultsHash)
 	if err != nil {
@@ -231,6 +240,37 @@ func TestSharedSidecarResourcesOverrideAndResetAreMinimal(t *testing.T) {
 	}
 	if string(content) != original {
 		t.Fatalf("resources reset did not restore original source:\n%s", content)
+	}
+}
+
+func TestAppSidecarResourcesOverrideRejectsUnknownResourceWithoutChangingSource(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), "vars: []\n")
+	appPath := filepath.Join(root, "dev", "apps", "api.yml")
+	original := `name: api
+sidecars:
+  - name: exporter
+    resources:
+      gpu:
+        requests: "1"
+containers:
+  - name: api
+`
+	writeFile(t, appPath, original)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.AppSidecarResourcesOverride("dev", "api.yml", "exporter"); err == nil || !strings.Contains(err.Error(), "gpu") {
+		t.Fatalf("unknown resource error = %v", err)
+	}
+	content, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != original {
+		t.Fatalf("failed read changed source:\n%s", content)
 	}
 }
 

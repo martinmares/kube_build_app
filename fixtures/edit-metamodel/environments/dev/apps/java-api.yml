@@ -22,6 +22,7 @@ containers:
     resources:
       cpu: {from: 100m, to: 500m}
       memory: {from: 256Mi, to: 768Mi}
+      ephemeral-storage: {requests: 128Mi, limits: 512Mi}
     envs:
       - name: JAVA_ARGS
         value: -Xms256m -Xmx512m

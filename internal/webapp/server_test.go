@@ -535,18 +535,18 @@ func TestAppSidecarResourcesOverrideEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
-	body := fmt.Sprintf(`{"expected_hash":%q,"expected_defaults_hash":%q,"override":{"action":"set","resources":{"cpu_request":"5m","cpu_limit":"20m"}}}`, current.ContentHash, current.DefaultsHash)
+	body := fmt.Sprintf(`{"expected_hash":%q,"expected_defaults_hash":%q,"override":{"action":"set","resources":{"cpu_request":"5m","cpu_limit":"20m","ephemeral_storage_request":"32Mi","ephemeral_storage_limit":"128Mi"}}}`, current.ContentHash, current.DefaultsHash)
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/sidecars/exporter/resources/override", strings.NewReader(body))
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"cpu_request":"5m"`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"cpu_request":"5m"`) || !strings.Contains(response.Body.String(), `"ephemeral_storage_limit":"128Mi"`) {
 		t.Fatalf("override response = %d: %s", response.Code, response.Body.String())
 	}
 	content, err := os.ReadFile(appPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(content), "image: exporter:1") || !strings.Contains(string(content), `requests: "5m"`) {
+	if strings.Contains(string(content), "image: exporter:1") || !strings.Contains(string(content), `requests: "5m"`) || !strings.Contains(string(content), "ephemeral-storage:") {
 		t.Fatalf("resources override materialized inherited fields:\n%s", content)
 	}
 }
@@ -608,14 +608,14 @@ func TestAppContainerResourcesUpdateEndpoint(t *testing.T) {
 	}
 
 	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
-	body := `{"expected_hash":"` + detail.ContentHash + `","resources":{"cpu_request":"100m","memory_limit":"512Mi"}}`
+	body := `{"expected_hash":"` + detail.ContentHash + `","resources":{"cpu_request":"100m","memory_limit":"512Mi","ephemeral_storage_request":"64Mi","ephemeral_storage_limit":"1Gi"}}`
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/resources", strings.NewReader(body))
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"cpu_request":"100m"`) || !strings.Contains(response.Body.String(), `"memory_limit":"512Mi"`) {
+	if !strings.Contains(response.Body.String(), `"cpu_request":"100m"`) || !strings.Contains(response.Body.String(), `"memory_limit":"512Mi"`) || !strings.Contains(response.Body.String(), `"ephemeral_storage_limit":"1Gi"`) {
 		t.Fatalf("unexpected response:\n%s", response.Body.String())
 	}
 }
@@ -1412,21 +1412,21 @@ func TestDefaultsSidecarDefinitionResourcesAPI(t *testing.T) {
 	if current.Resources == nil || current.Resources.CPURequest == nil || *current.Resources.CPURequest != "{{var:CPU_REQUEST}}" {
 		t.Fatalf("GET lost raw resource template: %#v", current.Resources)
 	}
-	payload := fmt.Sprintf(`{"expected_hash":%q,"resources":{"action":"set","resources":{"cpu_request":"10m","cpu_limit":"30m","memory_request":"16Mi","memory_limit":"64Mi"}}}`, current.ContentHash)
+	payload := fmt.Sprintf(`{"expected_hash":%q,"resources":{"action":"set","resources":{"cpu_request":"10m","cpu_limit":"30m","memory_request":"16Mi","memory_limit":"64Mi","ephemeral_storage_request":"32Mi","ephemeral_storage_limit":"128Mi"}}}`, current.ContentHash)
 	patch := httptest.NewRequest(http.MethodPatch, path, strings.NewReader(payload))
 	patchResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(patchResponse, patch)
 	if patchResponse.Code != http.StatusOK {
 		t.Fatalf("PATCH status = %d: %s", patchResponse.Code, patchResponse.Body.String())
 	}
-	if !strings.Contains(patchResponse.Body.String(), `"cpu_from":"10m"`) {
+	if !strings.Contains(patchResponse.Body.String(), `"cpu_from":"10m"`) || !strings.Contains(patchResponse.Body.String(), `"ephemeral_storage_limit":"128Mi"`) {
 		t.Fatalf("unexpected PATCH body: %s", patchResponse.Body.String())
 	}
 	content, err := os.ReadFile(filepath.Join(root, "dev", "apps", "_defaults.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), `from: "10m"`) || !strings.Contains(string(content), "image: exporter:1") {
+	if !strings.Contains(string(content), `from: "10m"`) || !strings.Contains(string(content), "ephemeral-storage:") || !strings.Contains(string(content), "image: exporter:1") {
 		t.Fatalf("PATCH produced unexpected source:\n%s", content)
 	}
 }

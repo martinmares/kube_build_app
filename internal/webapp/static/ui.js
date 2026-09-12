@@ -1507,7 +1507,11 @@ function renderOriginBadge(origin) {
 
 function effectiveResourceChips(resources) {
   const value = (name, side) => resources?.[name]?.[side] ?? resources?.[name]?.[side === 'requests' ? 'from' : 'to'] ?? '-';
-  return [chip('CPU req', value('cpu', 'requests')), chip('CPU lim', value('cpu', 'limits')), chip('Mem req', value('memory', 'requests')), chip('Mem lim', value('memory', 'limits'))].join('');
+  const items = [chip('CPU req', value('cpu', 'requests')), chip('CPU lim', value('cpu', 'limits')), chip('Mem req', value('memory', 'requests')), chip('Mem lim', value('memory', 'limits'))];
+  if (resources?.['ephemeral-storage']) {
+    items.push(chip('Ephemeral req', value('ephemeral-storage', 'requests')), chip('Ephemeral lim', value('ephemeral-storage', 'limits')));
+  }
+  return items.join('');
 }
 
 function effectiveEnvValue(env) {
@@ -1576,6 +1580,7 @@ function renderContainerOverview(container) {
           ${chip('CPU lim', resources.cpu_limit || '-')}
           ${chip('Mem req', resources.memory_request || '-')}
           ${chip('Mem lim', resources.memory_limit || '-')}
+          ${resources.ephemeral_storage_request || resources.ephemeral_storage_limit ? `${chip('Ephemeral req', resources.ephemeral_storage_request || '-')}${chip('Ephemeral lim', resources.ephemeral_storage_limit || '-')}` : ''}
         </div>${editButton('resources', 'Edit resources')}</div>
         <div class="col-12 col-xl-4"><div class="overview-subtitle">Java runtime</div>${javaBlock}${editButton('runtime', 'Edit runtime')}</div>
         <div class="col-12 col-xl-4"><div class="overview-subtitle">Probes</div>${renderProbePreview(container.index, probes)}${editButton('probes', 'Edit probes')}</div>
@@ -1841,9 +1846,11 @@ function renderResourcesEditor(index, resources) {
         ${resourceInput(index, 'cpu-limit', 'CPU lim', resources.cpu_limit || '')}
         ${resourceInput(index, 'memory-request', 'Mem req', resources.memory_request || '')}
         ${resourceInput(index, 'memory-limit', 'Mem lim', resources.memory_limit || '')}
+        ${resourceInput(index, 'ephemeral-storage-request', 'Ephemeral req', resources.ephemeral_storage_request || '')}
+        ${resourceInput(index, 'ephemeral-storage-limit', 'Ephemeral lim', resources.ephemeral_storage_limit || '')}
       </div>
       <div class="d-flex align-items-center justify-content-between gap-2 mt-2">
-        <div class="text-muted small">Saves as resources.cpu/memory requests/limits.</div>
+        <div class="text-muted small">Saves CPU, memory and ephemeral-storage requests/limits.</div>
         <button class="btn btn-sm btn-primary" type="button" data-save-resources="${index}" ${disabled}><i class="ti ti-device-floppy me-1"></i>Save resources</button>
       </div>
     </div>`;
@@ -1860,6 +1867,8 @@ async function saveContainerResources(index) {
     cpu_limit: value('cpu-limit'),
     memory_request: value('memory-request'),
     memory_limit: value('memory-limit'),
+    ephemeral_storage_request: value('ephemeral-storage-request'),
+    ephemeral_storage_limit: value('ephemeral-storage-limit'),
   };
   clearError();
   const validation = validateResourcesForm(index);
@@ -1884,11 +1893,13 @@ function validateResourcesForm(index) {
     ['cpu-limit', 'CPU limit', cpuQuantityRe, 'Use values like 100m, 0.5 or 1.'],
     ['memory-request', 'Memory request', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
     ['memory-limit', 'Memory limit', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+    ['ephemeral-storage-request', 'Ephemeral storage request', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+    ['ephemeral-storage-limit', 'Ephemeral storage limit', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
   ];
   for (const [field, label, pattern, hint] of checks) {
     const input = qs(`[data-resource-field="${index}:${field}"]`);
     const value = input?.value?.trim() || '';
-    if (value && !pattern.test(value)) return invalidInput(input, `${label} is invalid. ${hint}`);
+    if (value && !pattern.test(value) && !completeSourceTemplateRe.test(value)) return invalidInput(input, `${label} is invalid. ${hint} A complete {{env:NAME}} or {{var:NAME}} template is also allowed.`);
   }
   return {ok: true};
 }
@@ -2304,7 +2315,11 @@ function sidecarResourcesOverrideURL(sidecarName) {
 
 function effectiveResourceForm(resources) {
   const value = (name, side) => resources?.[name]?.[side] ?? resources?.[name]?.[side === 'requests' ? 'from' : 'to'] ?? '';
-  return {cpu_request: value('cpu', 'requests'), cpu_limit: value('cpu', 'limits'), memory_request: value('memory', 'requests'), memory_limit: value('memory', 'limits')};
+  return {
+    cpu_request: value('cpu', 'requests'), cpu_limit: value('cpu', 'limits'),
+    memory_request: value('memory', 'requests'), memory_limit: value('memory', 'limits'),
+    ephemeral_storage_request: value('ephemeral-storage', 'requests'), ephemeral_storage_limit: value('ephemeral-storage', 'limits'),
+  };
 }
 
 function renderSidecarResourcesOverrideEditor(current, local, effective) {
@@ -2315,6 +2330,7 @@ function renderSidecarResourcesOverrideEditor(current, local, effective) {
     <div class="row g-2">
       ${input('cpu_request', 'CPU request')}${input('cpu_limit', 'CPU limit')}
       ${input('memory_request', 'Memory request')}${input('memory_limit', 'Memory limit')}
+      ${input('ephemeral_storage_request', 'Ephemeral storage request')}${input('ephemeral_storage_limit', 'Ephemeral storage limit')}
     </div>
     <div class="d-flex align-items-center justify-content-between gap-2 mt-3">${reset}<button class="btn btn-primary ms-auto" type="button" data-save-sidecar-resources-override><i class="ti ti-device-floppy me-1"></i>Save override</button></div>
   </div>`;
@@ -2339,7 +2355,11 @@ async function openSidecarResourcesOverride(sidecarName) {
 
 function sidecarResourceValues() {
   const value = (field) => qs(`[data-sidecar-resource-field="${field}"]`)?.value?.trim() || '';
-  return {cpu_request: value('cpu_request'), cpu_limit: value('cpu_limit'), memory_request: value('memory_request'), memory_limit: value('memory_limit')};
+  return {
+    cpu_request: value('cpu_request'), cpu_limit: value('cpu_limit'),
+    memory_request: value('memory_request'), memory_limit: value('memory_limit'),
+    ephemeral_storage_request: value('ephemeral_storage_request'), ephemeral_storage_limit: value('ephemeral_storage_limit'),
+  };
 }
 
 function validateSidecarResourcesForm() {
@@ -2349,13 +2369,15 @@ function validateSidecarResourcesForm() {
     ['cpu_limit', 'CPU limit', cpuQuantityRe, 'Use values like 100m, 0.5 or 1.'],
     ['memory_request', 'Memory request', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
     ['memory_limit', 'Memory limit', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+    ['ephemeral_storage_request', 'Ephemeral storage request', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+    ['ephemeral_storage_limit', 'Ephemeral storage limit', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
   ];
   let populated = false;
   for (const [field, label, pattern, hint] of checks) {
     const input = qs(`[data-sidecar-resource-field="${field}"]`);
     const value = input?.value?.trim() || '';
     populated ||= value !== '';
-    if (value && !pattern.test(value)) return invalidInput(input, `${label} is invalid. ${hint}`);
+    if (value && !pattern.test(value) && !completeSourceTemplateRe.test(value)) return invalidInput(input, `${label} is invalid. ${hint} A complete {{env:NAME}} or {{var:NAME}} template is also allowed.`);
   }
   if (!populated) return {ok: false, message: 'Enter at least one resource value, or use Reset to inherited.'};
   return {ok: true};
@@ -2780,6 +2802,7 @@ function renderDefaultsSidecarResourcesEditor(current) {
     <div class="row g-2">
       ${input('cpu_request', 'CPU request')}${input('cpu_limit', 'CPU limit')}
       ${input('memory_request', 'Memory request')}${input('memory_limit', 'Memory limit')}
+      ${input('ephemeral_storage_request', 'Ephemeral storage request')}${input('ephemeral_storage_limit', 'Ephemeral storage limit')}
     </div>
     <div class="form-hint mt-2">Use a Kubernetes quantity or a complete template such as {{var:CPU_REQUEST}}. Existing from/to or requests/limits spelling is preserved.</div>
     <div class="d-flex align-items-center justify-content-between gap-2 mt-3">${remove}<button class="btn btn-primary ms-auto" type="button" data-save-defaults-sidecar-resources><i class="ti ti-device-floppy me-1"></i>Save resources</button></div>
@@ -2794,7 +2817,7 @@ async function openDefaultsSidecarResourcesEditor(name) {
     state.defaultsSidecarResources = current;
     openEditorModal(
       `Edit sidecar resources: ${name}`,
-      'Updates only CPU and memory resources in apps/_defaults.yml.',
+      'Updates CPU, memory and ephemeral-storage resources in apps/_defaults.yml.',
       renderDefaultsSidecarResourcesEditor(current),
     );
     qs('[data-defaults-sidecar-resource-field]')?.focus();
@@ -2803,7 +2826,11 @@ async function openDefaultsSidecarResourcesEditor(name) {
 
 function defaultsSidecarResourceValues() {
   const value = (field) => qs(`[data-defaults-sidecar-resource-field="${field}"]`)?.value?.trim() || '';
-  return {cpu_request: value('cpu_request'), cpu_limit: value('cpu_limit'), memory_request: value('memory_request'), memory_limit: value('memory_limit')};
+  return {
+    cpu_request: value('cpu_request'), cpu_limit: value('cpu_limit'),
+    memory_request: value('memory_request'), memory_limit: value('memory_limit'),
+    ephemeral_storage_request: value('ephemeral_storage_request'), ephemeral_storage_limit: value('ephemeral_storage_limit'),
+  };
 }
 
 const completeSourceTemplateRe = /^\{\{[^{}\r\n]+\}\}$/;
@@ -2814,6 +2841,8 @@ function validateDefaultsSidecarResourcesForm() {
     ['cpu_limit', 'CPU limit', cpuQuantityRe, 'Use values like 100m, 0.5 or 1.'],
     ['memory_request', 'Memory request', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
     ['memory_limit', 'Memory limit', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+    ['ephemeral_storage_request', 'Ephemeral storage request', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+    ['ephemeral_storage_limit', 'Ephemeral storage limit', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
   ];
   let populated = false;
   for (const [field, label, pattern, hint] of checks) {
