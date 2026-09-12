@@ -244,6 +244,7 @@ func TestMutatingEndpointsRequireWriteMode(t *testing.T) {
 		{http.MethodPatch, "/api/v1/envs/test/defaults/container-envs", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter/startup", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter/resources", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/replicas", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/autoscaling", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/resources", `{}`},
@@ -1377,6 +1378,53 @@ func TestDefaultsSidecarDefinitionStartupAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(content), "arguments: []") || !strings.Contains(string(content), "image: proxy:1") {
+		t.Fatalf("PATCH produced unexpected source:\n%s", content)
+	}
+}
+
+func TestDefaultsSidecarDefinitionResourcesAPI(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), `sidecar_definitions:
+  - name: exporter
+    image: exporter:1
+    resources:
+      cpu: {from: "{{var:CPU_REQUEST}}", to: 20m}
+`)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	path := "/api/v1/envs/dev/defaults/sidecar-definitions/exporter/resources"
+
+	get := httptest.NewRequest(http.MethodGet, path, nil)
+	getResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getResponse, get)
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getResponse.Code, getResponse.Body.String())
+	}
+	var current repository.DefaultsSidecarDefinitionResources
+	if err := json.Unmarshal(getResponse.Body.Bytes(), &current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Resources == nil || current.Resources.CPURequest == nil || *current.Resources.CPURequest != "{{var:CPU_REQUEST}}" {
+		t.Fatalf("GET lost raw resource template: %#v", current.Resources)
+	}
+	payload := fmt.Sprintf(`{"expected_hash":%q,"resources":{"action":"set","resources":{"cpu_request":"10m","cpu_limit":"30m","memory_request":"16Mi","memory_limit":"64Mi"}}}`, current.ContentHash)
+	patch := httptest.NewRequest(http.MethodPatch, path, strings.NewReader(payload))
+	patchResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(patchResponse, patch)
+	if patchResponse.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d: %s", patchResponse.Code, patchResponse.Body.String())
+	}
+	if !strings.Contains(patchResponse.Body.String(), `"cpu_from":"10m"`) {
+		t.Fatalf("unexpected PATCH body: %s", patchResponse.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(root, "dev", "apps", "_defaults.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `from: "10m"`) || !strings.Contains(string(content), "image: exporter:1") {
 		t.Fatalf("PATCH produced unexpected source:\n%s", content)
 	}
 }

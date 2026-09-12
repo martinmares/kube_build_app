@@ -2955,7 +2955,12 @@ func rejectUnknownKeys(values map[string]any, path string, allowed ...string) er
 	for _, key := range allowed {
 		allowedSet[key] = true
 	}
+	keys := make([]string, 0, len(values))
 	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
 		if !allowedSet[key] {
 			return fmt.Errorf("%s editor does not support existing field %q", path, key)
 		}

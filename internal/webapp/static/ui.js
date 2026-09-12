@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, defaultsSidecarDefinition: null, defaultsSidecarStartup: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, defaultsSidecarDefinition: null, defaultsSidecarStartup: null, defaultsSidecarResources: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -296,6 +296,8 @@ async function init() {
   });
   qs('#asset-structured')?.addEventListener('click', (e) => handleAssetStructuredClick(e));
   qs('#defaults-overview')?.addEventListener('click', async (e) => {
+    const editResources = e.target.closest('[data-edit-sidecar-definition-resources]');
+    if (editResources && !state.readOnly) return openDefaultsSidecarResourcesEditor(editResources.dataset.editSidecarDefinitionResources);
     const editStartup = e.target.closest('[data-edit-sidecar-definition-startup]');
     if (editStartup && !state.readOnly) return openDefaultsSidecarStartupEditor(editStartup.dataset.editSidecarDefinitionStartup);
     const editSidecar = e.target.closest('[data-edit-sidecar-definition]');
@@ -1000,7 +1002,7 @@ function renderDefaultsCatalogItem(kind, item) {
   const summary = keys.slice(0, 7).map((key) => `<span class="badge bg-secondary-lt">${esc(key)}</span>`).join('');
   const usedBy = usages.slice(0, 6).map((usage) => `<button class="btn btn-sm btn-ghost-secondary" type="button" data-defaults-app="${esc(usage.app_file)}" title="${esc(usage.yaml_path)}"><i class="ti ti-apps me-1"></i>${esc(usage.app)}${usage.container ? ` / ${esc(usage.container)}` : ''}</button>`).join('');
   const assetLink = kind === 'shared_asset' && item.file ? `<button class="btn btn-sm btn-outline-secondary" type="button" data-defaults-asset="${esc(sharedAssetBrowserPath(item.file))}"><i class="ti ti-file me-1"></i>Open file</button>` : '';
-  const editAction = kind === 'sidecar_definition' && !state.readOnly ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition="${esc(name)}"><i class="ti ti-photo me-1"></i>Edit image</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-startup="${esc(name)}"><i class="ti ti-terminal-2 me-1"></i>Edit startup</button>` : '';
+  const editAction = kind === 'sidecar_definition' && !state.readOnly ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition="${esc(name)}"><i class="ti ti-photo me-1"></i>Edit image</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-startup="${esc(name)}"><i class="ti ti-terminal-2 me-1"></i>Edit startup</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-resources="${esc(name)}"><i class="ti ti-cpu me-1"></i>Edit resources</button>` : '';
   return `<div class="col-12 col-lg-6"><div class="card card-sm h-100"><div class="card-body"><div class="d-flex align-items-start justify-content-between gap-2"><div class="fw-semibold font-monospace text-break">${esc(name)}</div><span class="badge ${usages.length ? 'bg-blue-lt' : 'bg-secondary-lt'}">${usages.length} use${usages.length === 1 ? '' : 's'}</span></div><div class="d-flex flex-wrap gap-1 mt-2">${summary || '<span class="text-muted small">No additional fields.</span>'}</div>${usedBy || assetLink || editAction ? `<div class="d-flex flex-wrap gap-1 mt-3">${usedBy}${assetLink}${editAction}</div>` : ''}</div></div></div>`;
 }
 
@@ -2019,6 +2021,8 @@ function handleEditModalClick(e) {
   if (e.target.closest('[data-save-defaults-sidecar-definition]') && !state.readOnly) return saveDefaultsSidecarDefinition();
   if (e.target.closest('[data-save-defaults-sidecar-startup]') && !state.readOnly) return saveDefaultsSidecarStartup('set');
   if (e.target.closest('[data-remove-defaults-sidecar-startup]') && !state.readOnly) return confirmRemoveDefaultsSidecarStartup();
+  if (e.target.closest('[data-save-defaults-sidecar-resources]') && !state.readOnly) return saveDefaultsSidecarResources('set');
+  if (e.target.closest('[data-remove-defaults-sidecar-resources]') && !state.readOnly) return confirmRemoveDefaultsSidecarResources();
   const addReference = e.target.closest('[data-add-reference]');
   if (addReference && !state.readOnly) return addReferenceRow(addReference.closest('[data-reference-list]'));
   const removeReference = e.target.closest('[data-remove-reference]');
@@ -2568,6 +2572,98 @@ async function saveDefaultsSidecarStartup(action) {
     state.editModalClose?.();
     state.editModalClose = null;
     state.defaultsSidecarStartup = null;
+    await refreshRepositorySnapshot();
+    await loadInspection(true);
+  } catch (e) { showError(e); }
+}
+
+function defaultsSidecarResourcesURL(name) {
+  return `/api/v1/envs/${encodeURIComponent(state.env)}/defaults/sidecar-definitions/${encodeURIComponent(name)}/resources`;
+}
+
+function renderDefaultsSidecarResourcesEditor(current) {
+  const resources = current.resources || {};
+  const input = (field, label) => `<div class="col-12 col-md-6"><label class="form-label small mb-1" for="defaults-sidecar-resource-${field}">${esc(label)}</label><input class="form-control font-monospace" id="defaults-sidecar-resource-${field}" data-defaults-sidecar-resource-field="${field}" value="${esc(resources[field] || '')}" autocomplete="off"></div>`;
+  const remove = current.resources ? '<button class="btn btn-outline-danger" type="button" data-remove-defaults-sidecar-resources><i class="ti ti-trash me-1"></i>Remove resources</button>' : '';
+  return `<div data-defaults-sidecar-resources-editor>
+    <div class="alert alert-warning py-2"><i class="ti ti-alert-triangle me-2"></i>This shared definition may affect every application that references it.</div>
+    <div class="row g-2">
+      ${input('cpu_request', 'CPU request')}${input('cpu_limit', 'CPU limit')}
+      ${input('memory_request', 'Memory request')}${input('memory_limit', 'Memory limit')}
+    </div>
+    <div class="form-hint mt-2">Use a Kubernetes quantity or a complete template such as {{var:CPU_REQUEST}}. Existing from/to or requests/limits spelling is preserved.</div>
+    <div class="d-flex align-items-center justify-content-between gap-2 mt-3">${remove}<button class="btn btn-primary ms-auto" type="button" data-save-defaults-sidecar-resources><i class="ti ti-device-floppy me-1"></i>Save resources</button></div>
+  </div>`;
+}
+
+async function openDefaultsSidecarResourcesEditor(name) {
+  if (!state.env || state.readOnly || !name) return;
+  clearError();
+  try {
+    const current = await api(defaultsSidecarResourcesURL(name));
+    state.defaultsSidecarResources = current;
+    openEditorModal(
+      `Edit sidecar resources: ${name}`,
+      'Updates only CPU and memory resources in apps/_defaults.yml.',
+      renderDefaultsSidecarResourcesEditor(current),
+    );
+    qs('[data-defaults-sidecar-resource-field]')?.focus();
+  } catch (e) { showError(e); }
+}
+
+function defaultsSidecarResourceValues() {
+  const value = (field) => qs(`[data-defaults-sidecar-resource-field="${field}"]`)?.value?.trim() || '';
+  return {cpu_request: value('cpu_request'), cpu_limit: value('cpu_limit'), memory_request: value('memory_request'), memory_limit: value('memory_limit')};
+}
+
+const completeSourceTemplateRe = /^\{\{[^{}\r\n]+\}\}$/;
+function validateDefaultsSidecarResourcesForm() {
+  clearInvalidInputs('[data-defaults-sidecar-resources-editor]');
+  const checks = [
+    ['cpu_request', 'CPU request', cpuQuantityRe, 'Use values like 100m, 0.5 or 1.'],
+    ['cpu_limit', 'CPU limit', cpuQuantityRe, 'Use values like 100m, 0.5 or 1.'],
+    ['memory_request', 'Memory request', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+    ['memory_limit', 'Memory limit', memoryQuantityRe, 'Use values like 256Mi, 1Gi or 512M.'],
+  ];
+  let populated = false;
+  for (const [field, label, pattern, hint] of checks) {
+    const input = qs(`[data-defaults-sidecar-resource-field="${field}"]`);
+    const value = input?.value?.trim() || '';
+    populated ||= value !== '';
+    if (value && !pattern.test(value) && !completeSourceTemplateRe.test(value)) return invalidInput(input, `${label} is invalid. ${hint} A complete {{env:NAME}} or {{var:NAME}} template is also allowed.`);
+  }
+  if (!populated) return {ok: false, message: 'Enter at least one resource value, or remove the resources block.'};
+  return {ok: true};
+}
+
+async function confirmRemoveDefaultsSidecarResources() {
+  const current = state.defaultsSidecarResources;
+  if (!current?.resources) return;
+  const confirmed = await confirmAction({
+    title: 'Remove shared sidecar resources?',
+    body: 'The complete resources block will be removed from this shared definition. Applications using it may change behavior.',
+    subject: current.name, confirmLabel: 'Remove resources', confirmClass: 'btn-danger', statusClass: 'bg-danger',
+  });
+  if (confirmed) await saveDefaultsSidecarResources('remove');
+}
+
+async function saveDefaultsSidecarResources(action) {
+  const current = state.defaultsSidecarResources;
+  if (!state.env || state.readOnly || !current) return;
+  const resources = defaultsSidecarResourceValues();
+  if (action === 'set') {
+    const validation = validateDefaultsSidecarResourcesForm();
+    if (!validation.ok) return showError(validation.message);
+  }
+  clearError();
+  try {
+    await apiPatch(defaultsSidecarResourcesURL(current.name), {
+      expected_hash: current.content_hash,
+      resources: {action, resources},
+    });
+    state.editModalClose?.();
+    state.editModalClose = null;
+    state.defaultsSidecarResources = null;
     await refreshRepositorySnapshot();
     await loadInspection(true);
   } catch (e) { showError(e); }

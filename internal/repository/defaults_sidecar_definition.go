@@ -36,6 +36,19 @@ type DefaultsSidecarDefinitionStartupUpdate struct {
 	Startup SidecarStartupModel `json:"startup"`
 }
 
+type DefaultsSidecarDefinitionResources struct {
+	Env         string         `json:"env"`
+	FileName    string         `json:"file_name"`
+	Name        string         `json:"name"`
+	ContentHash string         `json:"content_hash"`
+	Resources   *ResourceModel `json:"resources,omitempty"`
+}
+
+type DefaultsSidecarDefinitionResourcesUpdate struct {
+	Action    string         `json:"action"`
+	Resources ResourceUpdate `json:"resources"`
+}
+
 func (r *Repository) DefaultsSidecarDefinition(envName, name string) (DefaultsSidecarDefinition, error) {
 	if !referenceNamePattern.MatchString(name) {
 		return DefaultsSidecarDefinition{}, errors.New("invalid sidecar definition name")
@@ -167,6 +180,159 @@ func strictStringList(values map[string]any, key string) ([]string, bool, error)
 		out = append(out, value)
 	}
 	return out, true, nil
+}
+
+func (r *Repository) DefaultsSidecarDefinitionResources(envName, name string) (DefaultsSidecarDefinitionResources, error) {
+	if !referenceNamePattern.MatchString(name) {
+		return DefaultsSidecarDefinitionResources{}, errors.New("invalid sidecar definition name")
+	}
+	defaultsFile, err := r.defaultsFile(envName)
+	if err != nil {
+		return DefaultsSidecarDefinitionResources{}, err
+	}
+	detail, err := r.AssetDetail(envName, defaultsFile)
+	if err != nil {
+		return DefaultsSidecarDefinitionResources{}, err
+	}
+	root, err := rawSourceModelRoot(detail.Content)
+	if err != nil {
+		return DefaultsSidecarDefinitionResources{}, err
+	}
+	definition, err := uniqueNamedSourceItem(root["sidecar_definitions"], name)
+	if err != nil {
+		return DefaultsSidecarDefinitionResources{}, err
+	}
+	out := DefaultsSidecarDefinitionResources{Env: envName, FileName: defaultsFile, Name: name, ContentHash: detail.ContentHash}
+	rawResources, present := definition["resources"]
+	if !present {
+		return out, nil
+	}
+	resources, ok := rawResources.(map[string]any)
+	if !ok {
+		return DefaultsSidecarDefinitionResources{}, fmt.Errorf("sidecar definition %q resources must be a mapping", name)
+	}
+	if err := rejectUnknownKeys(resources, "resources", "cpu", "memory"); err != nil {
+		return DefaultsSidecarDefinitionResources{}, err
+	}
+	for _, resource := range []string{"cpu", "memory"} {
+		rawValues, present := resources[resource]
+		if !present {
+			continue
+		}
+		values, ok := rawValues.(map[string]any)
+		if !ok {
+			return DefaultsSidecarDefinitionResources{}, fmt.Errorf("sidecar definition %q resources.%s must be a mapping", name, resource)
+		}
+		if err := rejectUnknownKeys(values, "resources."+resource, "requests", "limits", "from", "to"); err != nil {
+			return DefaultsSidecarDefinitionResources{}, err
+		}
+		if _, canonical := values["requests"]; canonical {
+			if _, alias := values["from"]; alias {
+				return DefaultsSidecarDefinitionResources{}, fmt.Errorf("resources.%s defines both requests and from; edit the YAML source to choose one spelling", resource)
+			}
+		}
+		if _, canonical := values["limits"]; canonical {
+			if _, alias := values["to"]; alias {
+				return DefaultsSidecarDefinitionResources{}, fmt.Errorf("resources.%s defines both limits and to; edit the YAML source to choose one spelling", resource)
+			}
+		}
+	}
+	model := resourceModel(resources)
+	out.Resources = &model
+	return out, nil
+}
+
+func (r *Repository) UpdateDefaultsSidecarDefinitionResources(envName, name string, update DefaultsSidecarDefinitionResourcesUpdate, expectedHash string) (DefaultsSidecarDefinitionResources, error) {
+	current, err := r.DefaultsSidecarDefinitionResources(envName, name)
+	if err != nil {
+		return DefaultsSidecarDefinitionResources{}, err
+	}
+	if expectedHash == "" || expectedHash != current.ContentHash {
+		return DefaultsSidecarDefinitionResources{}, NewConflictError("defaults file changed before save; refresh and apply the edit again")
+	}
+	action := strings.TrimSpace(update.Action)
+	if action != "set" && action != "remove" {
+		return DefaultsSidecarDefinitionResources{}, errors.New("action must be set or remove")
+	}
+	if action == "set" {
+		if err := validateDefinitionResourceUpdate(update.Resources); err != nil {
+			return DefaultsSidecarDefinitionResources{}, err
+		}
+		if resourceUpdateEmpty(update.Resources) {
+			return DefaultsSidecarDefinitionResources{}, errors.New("at least one resource value is required; use remove to delete the resources block")
+		}
+		if current.Resources != nil && reflect.DeepEqual(resourceUpdateFromModel(*current.Resources), cleanResourceUpdate(update.Resources)) {
+			return current, nil
+		}
+	} else if current.Resources == nil {
+		return current, nil
+	}
+	path, _, err := r.AssetPath(envName, current.FileName)
+	if err != nil {
+		return DefaultsSidecarDefinitionResources{}, err
+	}
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return DefaultsSidecarDefinitionResources{}, err
+	}
+	if contentHash(contentBytes) != current.ContentHash {
+		return DefaultsSidecarDefinitionResources{}, NewConflictError("defaults file changed before save; refresh and apply the edit again")
+	}
+	updated, err := replaceDefaultsSidecarDefinitionResources(string(contentBytes), name, action, update.Resources, current.Resources)
+	if err != nil {
+		return DefaultsSidecarDefinitionResources{}, err
+	}
+	if updated != string(contentBytes) {
+		if err := atomicWriteFile(path, []byte(updated)); err != nil {
+			return DefaultsSidecarDefinitionResources{}, err
+		}
+	}
+	return r.DefaultsSidecarDefinitionResources(envName, name)
+}
+
+func cleanResourceUpdate(resources ResourceUpdate) ResourceUpdate {
+	return ResourceUpdate{
+		CPURequest: strings.TrimSpace(resources.CPURequest), CPULimit: strings.TrimSpace(resources.CPULimit),
+		MemoryRequest: strings.TrimSpace(resources.MemoryRequest), MemoryLimit: strings.TrimSpace(resources.MemoryLimit),
+	}
+}
+
+func resourceUpdateFromModel(resources ResourceModel) ResourceUpdate {
+	value := func(item *string) string {
+		if item == nil {
+			return ""
+		}
+		return *item
+	}
+	return cleanResourceUpdate(ResourceUpdate{
+		CPURequest: value(resources.CPURequest), CPULimit: value(resources.CPULimit),
+		MemoryRequest: value(resources.MemoryRequest), MemoryLimit: value(resources.MemoryLimit),
+	})
+}
+
+func validateDefinitionResourceUpdate(resources ResourceUpdate) error {
+	resources = cleanResourceUpdate(resources)
+	for label, value := range map[string]string{"cpu_request": resources.CPURequest, "cpu_limit": resources.CPULimit} {
+		if err := validateDefinitionResourceValue(label, value, validateCPUQuantity); err != nil {
+			return err
+		}
+	}
+	for label, value := range map[string]string{"memory_request": resources.MemoryRequest, "memory_limit": resources.MemoryLimit} {
+		if err := validateDefinitionResourceValue(label, value, validateMemoryQuantity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDefinitionResourceValue(label, value string, validate func(string, string) error) error {
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("%s contains unsupported newline", label)
+	}
+	if match := sourceTemplatePattern.FindString(value); match != "" && match == value {
+		return nil
+	}
+	return validate(label, value)
 }
 
 func (r *Repository) UpdateDefaultsSidecarDefinitionStartup(envName, name string, update DefaultsSidecarDefinitionStartupUpdate, expectedHash string) (DefaultsSidecarDefinitionStartup, error) {
@@ -335,4 +501,66 @@ func replaceDefaultsSidecarDefinitionStartup(content, name, action string, start
 		lines = insertLines(lines, insertAt, renderSidecarStartupBlock(startup))
 	}
 	return joinLikeSource(lines, content), nil
+}
+
+func replaceDefaultsSidecarDefinitionResources(content, name, action string, resources ResourceUpdate, current *ResourceModel) (string, error) {
+	root, err := sourceModelRoot(content)
+	if err != nil {
+		return "", err
+	}
+	index := -1
+	for itemIndex, raw := range anySlice(root["sidecar_definitions"]) {
+		item, _ := raw.(map[string]any)
+		if strings.TrimSpace(stringValue(item["name"])) == name {
+			if index >= 0 {
+				return "", fmt.Errorf("duplicate sidecar definition %q", name)
+			}
+			index = itemIndex
+		}
+	}
+	if index < 0 {
+		return "", fmt.Errorf("sidecar definition %q not found", name)
+	}
+	lines, start, end, err := collectionItemBlockRange(content, "sidecar_definitions", index)
+	if err != nil {
+		return "", err
+	}
+	resourcesStart, resourcesEnd := containerChildBlockRange(lines, start, end, "resources")
+	if resourcesStart >= 0 {
+		lines = append(lines[:resourcesStart], lines[resourcesEnd:]...)
+	}
+	if action == "set" {
+		insertAt := start + 1
+		if resourcesStart >= 0 {
+			insertAt = resourcesStart
+		}
+		lines = insertLines(lines, insertAt, renderDefaultsSidecarResourcesBlock(resources, current))
+	}
+	return joinLikeSource(lines, content), nil
+}
+
+func renderDefaultsSidecarResourcesBlock(resources ResourceUpdate, current *ResourceModel) []string {
+	resources = cleanResourceUpdate(resources)
+	lines := []string{"    resources:"}
+	appendResource := func(name, request, limit string, aliases bool) {
+		if request == "" && limit == "" {
+			return
+		}
+		lines = append(lines, "      "+name+":")
+		requestKey, limitKey := "requests", "limits"
+		if aliases {
+			requestKey, limitKey = "from", "to"
+		}
+		if request != "" {
+			lines = append(lines, "        "+requestKey+": "+strconv.Quote(request))
+		}
+		if limit != "" {
+			lines = append(lines, "        "+limitKey+": "+strconv.Quote(limit))
+		}
+	}
+	cpuAliases := current != nil && (current.CPUFrom != nil || current.CPUTo != nil)
+	memoryAliases := current != nil && (current.MemoryFrom != nil || current.MemoryTo != nil)
+	appendResource("cpu", resources.CPURequest, resources.CPULimit, cpuAliases)
+	appendResource("memory", resources.MemoryRequest, resources.MemoryLimit, memoryAliases)
+	return lines
 }

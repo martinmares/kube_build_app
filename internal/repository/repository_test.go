@@ -1822,3 +1822,128 @@ func TestDefaultsSidecarDefinitionStartupRejectsUnknownFields(t *testing.T) {
 		t.Fatalf("unknown startup field error = %v", err)
 	}
 }
+
+func TestUpdateDefaultsSidecarDefinitionResourcesPreservesTemplatesDialectAndOtherFields(t *testing.T) {
+	root := t.TempDir()
+	defaultsPath := filepath.Join(root, "dev", "apps", "_defaults.yml")
+	original := `sidecar_definitions:
+  - name: exporter
+    image: exporter:1
+    # resources comment
+    resources:
+      cpu: {from: "{{var:EXPORTER_CPU_REQUEST}}", to: 20m}
+      memory:
+        from: 16Mi
+        to: "{{env:EXPORTER_MEMORY_LIMIT}}"
+    envs:
+      - name: MODE
+        value: strict
+  - name: proxy
+    image: proxy:1
+`
+	writeFile(t, defaultsPath, original)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := repo.DefaultsSidecarDefinitionResources("dev", "exporter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Resources == nil || current.Resources.CPURequest == nil || *current.Resources.CPURequest != "{{var:EXPORTER_CPU_REQUEST}}" ||
+		current.Resources.MemoryLimit == nil || *current.Resources.MemoryLimit != "{{env:EXPORTER_MEMORY_LIMIT}}" {
+		t.Fatalf("raw resources = %#v", current.Resources)
+	}
+	if _, err := repo.UpdateDefaultsSidecarDefinitionResources("dev", "exporter", DefaultsSidecarDefinitionResourcesUpdate{
+		Action: "set", Resources: resourceUpdateFromModel(*current.Resources),
+	}, current.ContentHash); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(defaultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != original {
+		t.Fatalf("no-op resources update changed source:\n%s", content)
+	}
+
+	updated, err := repo.UpdateDefaultsSidecarDefinitionResources("dev", "exporter", DefaultsSidecarDefinitionResourcesUpdate{
+		Action: "set", Resources: ResourceUpdate{CPURequest: "5m", CPULimit: "25m", MemoryRequest: "{{var:MEMORY_REQUEST}}", MemoryLimit: "64Mi"},
+	}, current.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Resources == nil || updated.Resources.CPUFrom == nil || *updated.Resources.CPUFrom != "5m" || updated.Resources.MemoryFrom == nil {
+		t.Fatalf("updated resources lost source dialect: %#v", updated.Resources)
+	}
+	content, err = os.ReadFile(defaultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(content)
+	for _, expected := range []string{`from: "5m"`, `to: "25m"`, `from: "{{var:MEMORY_REQUEST}}"`, "value: strict", "image: proxy:1"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("updated source missing %q:\n%s", expected, got)
+		}
+	}
+
+	removed, err := repo.UpdateDefaultsSidecarDefinitionResources("dev", "exporter", DefaultsSidecarDefinitionResourcesUpdate{Action: "remove"}, updated.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.Resources != nil {
+		t.Fatalf("resources after remove = %#v", removed.Resources)
+	}
+	content, err = os.ReadFile(defaultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "resources:") || !strings.Contains(string(content), "value: strict") {
+		t.Fatalf("remove damaged source:\n%s", content)
+	}
+}
+
+func TestDefaultsSidecarDefinitionResourcesRejectsUnsupportedAndInvalidValues(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "dev", "apps", "_defaults.yml")
+	writeFile(t, path, `sidecar_definitions:
+  - name: exporter
+    resources:
+      cpu:
+        requests: 5m
+      ephemeral-storage:
+        requests: 1Gi
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DefaultsSidecarDefinitionResources("dev", "exporter"); err == nil || !strings.Contains(err.Error(), "ephemeral-storage") {
+		t.Fatalf("unsupported resources error = %v", err)
+	}
+
+	writeFile(t, path, `sidecar_definitions:
+  - name: exporter
+    resources:
+      cpu: {requests: 5m}
+`)
+	current, err := repo.DefaultsSidecarDefinitionResources("dev", "exporter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateDefaultsSidecarDefinitionResources("dev", "exporter", DefaultsSidecarDefinitionResourcesUpdate{
+		Action: "set", Resources: ResourceUpdate{CPURequest: "1000ABC"},
+	}, current.ContentHash); err == nil || !strings.Contains(err.Error(), "cpu_request") {
+		t.Fatalf("invalid resource error = %v", err)
+	}
+
+	writeFile(t, path, `sidecar_definitions:
+  - name: exporter
+    resources:
+      cpu: {requests: 5m, from: 2m}
+`)
+	if _, err := repo.DefaultsSidecarDefinitionResources("dev", "exporter"); err == nil || !strings.Contains(err.Error(), "both requests and from") {
+		t.Fatalf("ambiguous resource dialect error = %v", err)
+	}
+}

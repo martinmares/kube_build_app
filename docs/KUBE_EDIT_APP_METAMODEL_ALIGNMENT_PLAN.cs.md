@@ -439,6 +439,17 @@ Checkpoint P4.1b 2026-09-12:
   startup klice editaci blokuji. Repository/API testy a browser create/diff
   smoke prosly.
 
+Checkpoint P4.1c 2026-09-12:
+
+- existujici `sidecar_definitions[].resources` ma samostatny name-based
+  GET/PATCH kontrakt a Tabler modal pro CPU/memory request/limit;
+- reader zachova raw `{{env:...}}` a `{{var:...}}` hodnoty. Writer pri
+  skutecne zmene zachova zdrojovy dialekt `from/to` nebo `requests/limits`,
+  no-op je byte-for-byte a odstraneni celeho bloku vyzaduje potvrzeni;
+- neplatne quantity, smiseny resource dialekt a nepodporovana pole vcetne
+  `ephemeral-storage` editaci blokuji misto tiche ztraty dat. Repository/API
+  testy, plny Go test/build a browser render smoke prosly.
+
 ### P5: Doplnit existujici editory na dnesni model
 
 - [ ] Probes: shared http a live/ready/start HTTP/exec/timing hodnoty,
