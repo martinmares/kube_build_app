@@ -1947,3 +1947,172 @@ func TestDefaultsSidecarDefinitionResourcesRejectsUnsupportedAndInvalidValues(t 
 		t.Fatalf("ambiguous resource dialect error = %v", err)
 	}
 }
+
+func TestUpdateDefaultsSidecarDefinitionEnvsPreservesTypesOrderAndRawTemplates(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "dev", "apps", "_defaults.yml")
+	original := `workload_identity:
+  tokens:
+    - name: runtime-config
+      audience: config
+sidecar_definitions:
+  - name: proxy
+    image: proxy:1
+    # env comment
+    envs:
+      - name: MODE
+        value: "{{var:PROXY_MODE}}"
+      - name: PASSWORD
+        secret_name: proxy-secret
+        key: password
+      - name: CPU_LIMIT
+        resource_name: limits.cpu
+        divisor: 1m
+      - name: POD_NAME
+        field_path: metadata.name
+      - name: TOKEN_FILE
+        workload_identity_token_ref_name: runtime-config
+      - name: CA_FILE
+        shared_asset_ref_name: internal-ca
+      - name: REMOVE_DEFAULT
+        remove: true
+    resources:
+      cpu: {from: 2m, to: 10m}
+  - name: exporter
+    image: exporter:1
+`
+	writeFile(t, path, original)
+	writeFile(t, filepath.Join(root, "dev", "shared.assets.yml"), "assets:\n  - name: internal-ca\n    file: ca.pem\n    to: /ca.pem\n")
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := repo.DefaultsSidecarDefinitionEnvs("dev", "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKinds := []string{"value", "secret", "resource", "field", "workload_identity_token", "shared_asset", "remove"}
+	if len(current.Envs) != len(wantKinds) {
+		t.Fatalf("env count = %d", len(current.Envs))
+	}
+	for index, kind := range wantKinds {
+		if current.Envs[index].Kind != kind {
+			t.Fatalf("envs[%d].kind = %q, want %q", index, current.Envs[index].Kind, kind)
+		}
+	}
+	if current.Envs[0].Value != "{{var:PROXY_MODE}}" {
+		t.Fatalf("raw value = %q", current.Envs[0].Value)
+	}
+	if strings.Join(current.WorkloadIdentityTokenRefNames, ",") != "runtime-config" || strings.Join(current.SharedAssetRefNames, ",") != "internal-ca" {
+		t.Fatalf("reference catalogs = tokens %#v, assets %#v", current.WorkloadIdentityTokenRefNames, current.SharedAssetRefNames)
+	}
+	if _, err := repo.UpdateDefaultsSidecarDefinitionEnvs("dev", "proxy", DefaultsSidecarDefinitionEnvsUpdate{Action: "set", Envs: current.Envs}, current.ContentHash); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != original {
+		t.Fatalf("no-op env update changed source:\n%s", content)
+	}
+
+	updatedItems := append([]DefaultsSidecarEnvItem(nil), current.Envs...)
+	updatedItems[0].Value = "strict"
+	updatedItems[1], updatedItems[2] = updatedItems[2], updatedItems[1]
+	updatedItems = append(updatedItems, DefaultsSidecarEnvItem{Name: "EMPTY_VALUE", Kind: "value"})
+	updated, err := repo.UpdateDefaultsSidecarDefinitionEnvs("dev", "proxy", DefaultsSidecarDefinitionEnvsUpdate{Action: "set", Envs: updatedItems}, current.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Envs) != 8 || updated.Envs[1].Name != "CPU_LIMIT" || updated.Envs[7].Value != "" {
+		t.Fatalf("updated envs = %#v", updated.Envs)
+	}
+	content, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(content)
+	for _, expected := range []string{`value: "strict"`, `resource_name: "limits.cpu"`, `secret_name: "proxy-secret"`, `value: ""`, "cpu: {from: 2m, to: 10m}", "image: exporter:1"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("updated source missing %q:\n%s", expected, got)
+		}
+	}
+	if strings.Index(got, "name: CPU_LIMIT") > strings.Index(got, "name: PASSWORD") {
+		t.Fatalf("updated source lost env order:\n%s", got)
+	}
+
+	removed, err := repo.UpdateDefaultsSidecarDefinitionEnvs("dev", "proxy", DefaultsSidecarDefinitionEnvsUpdate{Action: "remove"}, updated.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.EnvsPresent || len(removed.Envs) != 0 {
+		t.Fatalf("envs after remove = %#v", removed)
+	}
+	content, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "envs:") || !strings.Contains(string(content), "cpu: {from: 2m, to: 10m}") {
+		t.Fatalf("remove damaged source:\n%s", content)
+	}
+}
+
+func TestDefaultsSidecarDefinitionEnvsRejectsUnsupportedOrAmbiguousEntries(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "dev", "apps", "_defaults.yml")
+	writeFile(t, path, `sidecar_definitions:
+  - name: proxy
+    envs:
+      - name: MODE
+        value: strict
+        secret_name: proxy-secret
+        key: mode
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DefaultsSidecarDefinitionEnvs("dev", "proxy"); err == nil || !strings.Contains(err.Error(), "multiple value sources") {
+		t.Fatalf("ambiguous source error = %v", err)
+	}
+
+	writeFile(t, path, `sidecar_definitions:
+  - name: proxy
+    envs:
+      - name: MODE
+        value_from: external
+`)
+	if _, err := repo.DefaultsSidecarDefinitionEnvs("dev", "proxy"); err == nil || !strings.Contains(err.Error(), "value_from") {
+		t.Fatalf("unsupported field error = %v", err)
+	}
+
+	writeFile(t, path, `sidecar_definitions:
+  - name: proxy
+    envs: []
+`)
+	current, err := repo.DefaultsSidecarDefinitionEnvs("dev", "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.UpdateDefaultsSidecarDefinitionEnvs("dev", "proxy", DefaultsSidecarDefinitionEnvsUpdate{
+		Action: "set", Envs: []DefaultsSidecarEnvItem{{Name: "SECRET", Kind: "secret", SecretName: "missing-key"}},
+	}, current.ContentHash)
+	if err == nil || !strings.Contains(err.Error(), "secret_name and key") {
+		t.Fatalf("invalid secret error = %v", err)
+	}
+
+	_, err = repo.UpdateDefaultsSidecarDefinitionEnvs("dev", "proxy", DefaultsSidecarDefinitionEnvsUpdate{
+		Action: "set", Envs: []DefaultsSidecarEnvItem{{Name: "TOKEN", Kind: "workload_identity_token", WorkloadIdentityTokenRefName: "missing-token"}},
+	}, current.ContentHash)
+	if err == nil || !strings.Contains(err.Error(), `unknown workload identity token "missing-token"`) {
+		t.Fatalf("unknown token error = %v", err)
+	}
+	_, err = repo.UpdateDefaultsSidecarDefinitionEnvs("dev", "proxy", DefaultsSidecarDefinitionEnvsUpdate{
+		Action: "set", Envs: []DefaultsSidecarEnvItem{{Name: "CA_FILE", Kind: "shared_asset", SharedAssetRefName: "missing-ca"}},
+	}, current.ContentHash)
+	if err == nil || !strings.Contains(err.Error(), `unknown shared asset "missing-ca"`) {
+		t.Fatalf("unknown shared asset error = %v", err)
+	}
+}

@@ -450,6 +450,21 @@ Checkpoint P4.1c 2026-09-12:
   `ephemeral-storage` editaci blokuji misto tiche ztraty dat. Repository/API
   testy, plny Go test/build a browser render smoke prosly.
 
+Checkpoint P4.1d 2026-09-12:
+
+- existujici `sidecar_definitions[].envs` ma name-based GET/PATCH kontrakt a
+  siroky Tabler tabulkovy modal se zachovanim poradi;
+- editor podporuje builder varianty `value`, secret key, container resource,
+  pod field, workload identity token ref, shared asset ref a `remove`.
+  Zmena typu neposila skryta pole puvodni varianty;
+- raw template value a explicitni prazdna value se zachovaji, no-op je
+  byte-for-byte a odstraneni celeho bloku vyzaduje potvrzeni. Nezname nebo
+  kombinovane source fields se odmitnou;
+- token a shared-asset reference se naseptavaji a pri PATCH validuji proti
+  lokalnim katalogum. Repository/API testy, plny Go test/build a JS syntax
+  check prosly. Browser smoke zustava k rucnimu overeni kvuli selhani
+  lokalniho Playwright CLI lifecycle pred otevrenim stranky.
+
 ### P5: Doplnit existujici editory na dnesni model
 
 - [ ] Probes: shared http a live/ready/start HTTP/exec/timing hodnoty,

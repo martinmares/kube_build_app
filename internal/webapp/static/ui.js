@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, defaultsSidecarDefinition: null, defaultsSidecarStartup: null, defaultsSidecarResources: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, defaultsSidecarDefinition: null, defaultsSidecarStartup: null, defaultsSidecarResources: null, defaultsSidecarEnvs: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -296,6 +296,8 @@ async function init() {
   });
   qs('#asset-structured')?.addEventListener('click', (e) => handleAssetStructuredClick(e));
   qs('#defaults-overview')?.addEventListener('click', async (e) => {
+    const editEnvs = e.target.closest('[data-edit-sidecar-definition-envs]');
+    if (editEnvs && !state.readOnly) return openDefaultsSidecarEnvsEditor(editEnvs.dataset.editSidecarDefinitionEnvs);
     const editResources = e.target.closest('[data-edit-sidecar-definition-resources]');
     if (editResources && !state.readOnly) return openDefaultsSidecarResourcesEditor(editResources.dataset.editSidecarDefinitionResources);
     const editStartup = e.target.closest('[data-edit-sidecar-definition-startup]');
@@ -317,6 +319,7 @@ async function init() {
   qs('#ports-edit-modal')?.addEventListener('click', (e) => handlePortsModalClick(e));
   qs('#edit-modal')?.addEventListener('click', (e) => handleEditModalClick(e));
   qs('#edit-modal')?.addEventListener('input', (e) => handleEditModalInput(e));
+  qs('#edit-modal')?.addEventListener('change', (e) => handleEditModalInput(e));
   qs('#value-edit-apply')?.addEventListener('click', () => applySpecialValueDialog());
   window.setInterval(() => {
     if (state.clusterStatusEnabled && state.env && state.active === 'build') loadClusterStatus();
@@ -1002,7 +1005,7 @@ function renderDefaultsCatalogItem(kind, item) {
   const summary = keys.slice(0, 7).map((key) => `<span class="badge bg-secondary-lt">${esc(key)}</span>`).join('');
   const usedBy = usages.slice(0, 6).map((usage) => `<button class="btn btn-sm btn-ghost-secondary" type="button" data-defaults-app="${esc(usage.app_file)}" title="${esc(usage.yaml_path)}"><i class="ti ti-apps me-1"></i>${esc(usage.app)}${usage.container ? ` / ${esc(usage.container)}` : ''}</button>`).join('');
   const assetLink = kind === 'shared_asset' && item.file ? `<button class="btn btn-sm btn-outline-secondary" type="button" data-defaults-asset="${esc(sharedAssetBrowserPath(item.file))}"><i class="ti ti-file me-1"></i>Open file</button>` : '';
-  const editAction = kind === 'sidecar_definition' && !state.readOnly ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition="${esc(name)}"><i class="ti ti-photo me-1"></i>Edit image</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-startup="${esc(name)}"><i class="ti ti-terminal-2 me-1"></i>Edit startup</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-resources="${esc(name)}"><i class="ti ti-cpu me-1"></i>Edit resources</button>` : '';
+  const editAction = kind === 'sidecar_definition' && !state.readOnly ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition="${esc(name)}"><i class="ti ti-photo me-1"></i>Edit image</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-startup="${esc(name)}"><i class="ti ti-terminal-2 me-1"></i>Edit startup</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-resources="${esc(name)}"><i class="ti ti-cpu me-1"></i>Edit resources</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-envs="${esc(name)}"><i class="ti ti-braces me-1"></i>Edit envs</button>` : '';
   return `<div class="col-12 col-lg-6"><div class="card card-sm h-100"><div class="card-body"><div class="d-flex align-items-start justify-content-between gap-2"><div class="fw-semibold font-monospace text-break">${esc(name)}</div><span class="badge ${usages.length ? 'bg-blue-lt' : 'bg-secondary-lt'}">${usages.length} use${usages.length === 1 ? '' : 's'}</span></div><div class="d-flex flex-wrap gap-1 mt-2">${summary || '<span class="text-muted small">No additional fields.</span>'}</div>${usedBy || assetLink || editAction ? `<div class="d-flex flex-wrap gap-1 mt-3">${usedBy}${assetLink}${editAction}</div>` : ''}</div></div></div>`;
 }
 
@@ -2023,6 +2026,13 @@ function handleEditModalClick(e) {
   if (e.target.closest('[data-remove-defaults-sidecar-startup]') && !state.readOnly) return confirmRemoveDefaultsSidecarStartup();
   if (e.target.closest('[data-save-defaults-sidecar-resources]') && !state.readOnly) return saveDefaultsSidecarResources('set');
   if (e.target.closest('[data-remove-defaults-sidecar-resources]') && !state.readOnly) return confirmRemoveDefaultsSidecarResources();
+  if (e.target.closest('[data-save-defaults-sidecar-envs]') && !state.readOnly) return saveDefaultsSidecarEnvs('set');
+  if (e.target.closest('[data-remove-defaults-sidecar-envs]') && !state.readOnly) return confirmRemoveDefaultsSidecarEnvs();
+  if (e.target.closest('[data-add-defaults-sidecar-env]') && !state.readOnly) return addDefaultsSidecarEnvRow();
+  const removeSidecarEnv = e.target.closest('[data-remove-defaults-sidecar-env]');
+  if (removeSidecarEnv && !state.readOnly) return removeSidecarEnv.closest('[data-defaults-sidecar-env-row]')?.remove();
+  const moveSidecarEnv = e.target.closest('[data-move-defaults-sidecar-env]');
+  if (moveSidecarEnv && !state.readOnly) return moveDefaultsSidecarEnvRow(moveSidecarEnv.closest('[data-defaults-sidecar-env-row]'), moveSidecarEnv.dataset.moveDefaultsSidecarEnv);
   const addReference = e.target.closest('[data-add-reference]');
   if (addReference && !state.readOnly) return addReferenceRow(addReference.closest('[data-reference-list]'));
   const removeReference = e.target.closest('[data-remove-reference]');
@@ -2389,6 +2399,8 @@ async function saveAppReferences() {
   } catch (e) { showError(e); }
 }
 function handleEditModalInput(e) {
+  const sidecarEnvKind = e.target.closest('[data-defaults-sidecar-env-kind]');
+  if (sidecarEnvKind) syncDefaultsSidecarEnvRow(sidecarEnvKind.closest('[data-defaults-sidecar-env-row]'));
   const filter = e.target.closest('[data-special-entry-filter]');
   if (filter) filterSpecialEntryRows(filter.value || '');
   const compactValue = e.target.closest('.special-entry-value-input');
@@ -2664,6 +2676,170 @@ async function saveDefaultsSidecarResources(action) {
     state.editModalClose?.();
     state.editModalClose = null;
     state.defaultsSidecarResources = null;
+    await refreshRepositorySnapshot();
+    await loadInspection(true);
+  } catch (e) { showError(e); }
+}
+
+function defaultsSidecarEnvsURL(name) {
+  return `/api/v1/envs/${encodeURIComponent(state.env)}/defaults/sidecar-definitions/${encodeURIComponent(name)}/envs`;
+}
+
+const defaultsSidecarEnvKinds = [
+  ['value', 'Value'], ['secret', 'Secret key'], ['resource', 'Container resource'], ['field', 'Pod field'],
+  ['workload_identity_token', 'Workload identity token'], ['shared_asset', 'Shared asset'], ['remove', 'Remove inherited'],
+];
+
+function renderDefaultsSidecarEnvConfig(item = {}) {
+  const field = (kind, name, placeholder, value) => {
+    const list = kind === 'workload_identity_token' ? ' list="defaults-sidecar-token-names"' : kind === 'shared_asset' ? ' list="defaults-sidecar-asset-names"' : '';
+    return `<div data-defaults-sidecar-env-config="${kind}" class="${item.kind === kind ? '' : 'd-none'}"><input class="form-control form-control-sm font-monospace" data-defaults-sidecar-env-field="${name}" value="${esc(value || '')}" placeholder="${esc(placeholder)}" autocomplete="off"${list}></div>`;
+  };
+  const pair = (kind, fields) => `<div data-defaults-sidecar-env-config="${kind}" class="${item.kind === kind ? '' : 'd-none'}"><div class="row g-1">${fields.map(([name, placeholder, value]) => `<div class="col"><input class="form-control form-control-sm font-monospace" data-defaults-sidecar-env-field="${name}" value="${esc(value || '')}" placeholder="${esc(placeholder)}" autocomplete="off"></div>`).join('')}</div></div>`;
+  return `${field('value', 'value', 'Value', item.value)}
+    ${pair('secret', [['secret_name', 'Secret name', item.secret_name], ['key', 'Key', item.key]])}
+    ${pair('resource', [['resource_name', 'requests.cpu', item.resource_name], ['divisor', 'Divisor (optional)', item.divisor]])}
+    ${field('field', 'field_path', 'metadata.name', item.field_path)}
+    ${field('workload_identity_token', 'workload_identity_token_ref_name', 'Token definition name', item.workload_identity_token_ref_name)}
+    ${field('shared_asset', 'shared_asset_ref_name', 'Shared asset name', item.shared_asset_ref_name)}
+    <div data-defaults-sidecar-env-config="remove" class="${item.kind === 'remove' ? '' : 'd-none'}"><span class="text-muted small">Removes an inherited variable with this name.</span></div>`;
+}
+
+function renderDefaultsSidecarEnvRow(item = {kind: 'value'}) {
+  const kind = item.kind || 'value';
+  const options = defaultsSidecarEnvKinds.map(([value, label]) => `<option value="${value}" ${value === kind ? 'selected' : ''}>${esc(label)}</option>`).join('');
+  return `<tr data-defaults-sidecar-env-row>
+    <td><input class="form-control form-control-sm font-monospace" data-defaults-sidecar-env-name value="${esc(item.name || '')}" placeholder="VARIABLE_NAME" autocomplete="off"></td>
+    <td><select class="form-select form-select-sm" data-defaults-sidecar-env-kind>${options}</select></td>
+    <td>${renderDefaultsSidecarEnvConfig({...item, kind})}</td>
+    <td class="text-nowrap text-end">
+      <button class="btn btn-sm btn-ghost-secondary btn-icon" type="button" data-move-defaults-sidecar-env="up" title="Move up"><i class="ti ti-arrow-up"></i></button>
+      <button class="btn btn-sm btn-ghost-secondary btn-icon" type="button" data-move-defaults-sidecar-env="down" title="Move down"><i class="ti ti-arrow-down"></i></button>
+      <button class="btn btn-sm btn-ghost-danger btn-icon" type="button" data-remove-defaults-sidecar-env title="Remove variable"><i class="ti ti-trash"></i></button>
+    </td>
+  </tr>`;
+}
+
+function renderDefaultsSidecarEnvsEditor(current) {
+  const rows = (current.envs || []).map((item) => renderDefaultsSidecarEnvRow(item)).join('');
+  const remove = current.envs_present ? '<button class="btn btn-outline-danger" type="button" data-remove-defaults-sidecar-envs><i class="ti ti-trash me-1"></i>Remove envs block</button>' : '';
+  return `<div data-defaults-sidecar-envs-editor>
+    <div class="alert alert-warning py-2"><i class="ti ti-alert-triangle me-2"></i>This shared definition may affect every application that references it. Environment variable order is preserved.</div>
+    <div class="d-flex justify-content-end mb-2"><button class="btn btn-sm btn-outline-primary" type="button" data-add-defaults-sidecar-env><i class="ti ti-plus me-1"></i>Add variable</button></div>
+    <div class="table-responsive"><table class="table table-sm table-vcenter"><thead><tr><th style="width: 24%">Name</th><th style="width: 22%">Type</th><th>Configuration</th><th class="text-end">Actions</th></tr></thead><tbody data-defaults-sidecar-env-rows>${rows}</tbody></table></div>
+    <datalist id="defaults-sidecar-token-names">${(current.workload_identity_token_ref_names || []).map((name) => `<option value="${esc(name)}"></option>`).join('')}</datalist>
+    <datalist id="defaults-sidecar-asset-names">${(current.shared_asset_ref_names || []).map((name) => `<option value="${esc(name)}"></option>`).join('')}</datalist>
+    <div class="form-hint">References are stored by name and validated against the local defaults/shared-assets catalogs.</div>
+    <div class="d-flex align-items-center justify-content-between gap-2 mt-3">${remove}<button class="btn btn-primary ms-auto" type="button" data-save-defaults-sidecar-envs><i class="ti ti-device-floppy me-1"></i>Save envs</button></div>
+  </div>`;
+}
+
+function syncDefaultsSidecarEnvRow(row) {
+  if (!row) return;
+  const kind = row.querySelector('[data-defaults-sidecar-env-kind]')?.value || 'value';
+  row.querySelectorAll('[data-defaults-sidecar-env-config]').forEach((config) => config.classList.toggle('d-none', config.dataset.defaultsSidecarEnvConfig !== kind));
+}
+
+function addDefaultsSidecarEnvRow() {
+  const rows = qs('[data-defaults-sidecar-env-rows]');
+  if (!rows) return;
+  rows.insertAdjacentHTML('beforeend', renderDefaultsSidecarEnvRow());
+  rows.lastElementChild?.querySelector('[data-defaults-sidecar-env-name]')?.focus();
+}
+
+function moveDefaultsSidecarEnvRow(row, direction) {
+  if (!row) return;
+  if (direction === 'up' && row.previousElementSibling) row.parentElement.insertBefore(row, row.previousElementSibling);
+  if (direction === 'down' && row.nextElementSibling) row.parentElement.insertBefore(row.nextElementSibling, row);
+}
+
+async function openDefaultsSidecarEnvsEditor(name) {
+  if (!state.env || state.readOnly || !name) return;
+  clearError();
+  try {
+    const current = await api(defaultsSidecarEnvsURL(name));
+    state.defaultsSidecarEnvs = current;
+    openEditorModal(
+      `Edit sidecar envs: ${name}`,
+      'Updates the ordered envs list in apps/_defaults.yml.',
+      renderDefaultsSidecarEnvsEditor(current),
+      {wide: true},
+    );
+    qsa('[data-defaults-sidecar-env-row]').forEach(syncDefaultsSidecarEnvRow);
+  } catch (e) { showError(e); }
+}
+
+function defaultsSidecarEnvValues() {
+  const field = (row, name) => row.querySelector(`[data-defaults-sidecar-env-field="${name}"]`)?.value || '';
+  return qsa('[data-defaults-sidecar-env-row]').map((row) => {
+    const item = {name: row.querySelector('[data-defaults-sidecar-env-name]')?.value?.trim() || '', kind: row.querySelector('[data-defaults-sidecar-env-kind]')?.value || 'value'};
+    if (item.kind === 'value') item.value = field(row, 'value');
+    if (item.kind === 'secret') Object.assign(item, {secret_name: field(row, 'secret_name').trim(), key: field(row, 'key').trim()});
+    if (item.kind === 'resource') Object.assign(item, {resource_name: field(row, 'resource_name').trim(), divisor: field(row, 'divisor').trim()});
+    if (item.kind === 'field') item.field_path = field(row, 'field_path').trim();
+    if (item.kind === 'workload_identity_token') item.workload_identity_token_ref_name = field(row, 'workload_identity_token_ref_name').trim();
+    if (item.kind === 'shared_asset') item.shared_asset_ref_name = field(row, 'shared_asset_ref_name').trim();
+    return item;
+  });
+}
+
+function validateDefaultsSidecarEnvsForm(items) {
+  clearInvalidInputs('[data-defaults-sidecar-envs-editor]');
+  const rows = qsa('[data-defaults-sidecar-env-row]');
+  const seen = new Set();
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    const row = rows[index];
+    const nameInput = row?.querySelector('[data-defaults-sidecar-env-name]');
+    if (!variableNameRe.test(item.name)) return invalidInput(nameInput, `Variable ${index + 1} needs a valid name.`);
+    if (seen.has(item.name)) return invalidInput(nameInput, `Variable name ${item.name} is duplicated.`);
+    seen.add(item.name);
+    const required = (field, message) => {
+      const input = row?.querySelector(`[data-defaults-sidecar-env-field="${field}"]`);
+      return input?.value?.trim() ? null : invalidInput(input, message);
+    };
+    let invalid = null;
+    if (item.kind === 'secret') invalid = required('secret_name', 'Secret name is required.') || required('key', 'Secret key is required.');
+    if (item.kind === 'resource') invalid = required('resource_name', 'Resource name is required.');
+    if (item.kind === 'field') invalid = required('field_path', 'Field path is required.');
+    if (item.kind === 'workload_identity_token') invalid = required('workload_identity_token_ref_name', 'Token definition name is required.');
+    if (item.kind === 'shared_asset') invalid = required('shared_asset_ref_name', 'Shared asset name is required.');
+    if (invalid) return invalid;
+    if (item.kind === 'workload_identity_token' && !(state.defaultsSidecarEnvs?.workload_identity_token_ref_names || []).includes(item.workload_identity_token_ref_name)) {
+      return invalidInput(row?.querySelector('[data-defaults-sidecar-env-field="workload_identity_token_ref_name"]'), `Unknown token definition ${item.workload_identity_token_ref_name}.`);
+    }
+    if (item.kind === 'shared_asset' && !(state.defaultsSidecarEnvs?.shared_asset_ref_names || []).includes(item.shared_asset_ref_name)) {
+      return invalidInput(row?.querySelector('[data-defaults-sidecar-env-field="shared_asset_ref_name"]'), `Unknown shared asset ${item.shared_asset_ref_name}.`);
+    }
+  }
+  return {ok: true};
+}
+
+async function confirmRemoveDefaultsSidecarEnvs() {
+  const current = state.defaultsSidecarEnvs;
+  if (!current?.envs_present) return;
+  const confirmed = await confirmAction({
+    title: 'Remove shared sidecar envs?',
+    body: 'The complete envs block will be removed from this shared definition. Applications using it may change behavior.',
+    subject: current.name, confirmLabel: 'Remove envs', confirmClass: 'btn-danger', statusClass: 'bg-danger',
+  });
+  if (confirmed) await saveDefaultsSidecarEnvs('remove');
+}
+
+async function saveDefaultsSidecarEnvs(action) {
+  const current = state.defaultsSidecarEnvs;
+  if (!state.env || state.readOnly || !current) return;
+  const envs = defaultsSidecarEnvValues();
+  if (action === 'set') {
+    const validation = validateDefaultsSidecarEnvsForm(envs);
+    if (!validation.ok) return showError(validation.message);
+  }
+  clearError();
+  try {
+    await apiPatch(defaultsSidecarEnvsURL(current.name), {expected_hash: current.content_hash, envs: {action, envs}});
+    state.editModalClose?.();
+    state.editModalClose = null;
+    state.defaultsSidecarEnvs = null;
     await refreshRepositorySnapshot();
     await loadInspection(true);
   } catch (e) { showError(e); }
