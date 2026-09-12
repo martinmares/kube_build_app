@@ -19,6 +19,9 @@ containers:
   - name: "{{var:APP_NAME}}"
     profile_ref_names:
       - java-service
+    probes:
+      ready:
+        period: 3
     resources:
       cpu: {from: 100m, to: 500m}
       memory: {from: 256Mi, to: 768Mi}

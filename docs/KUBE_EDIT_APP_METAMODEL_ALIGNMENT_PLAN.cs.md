@@ -493,7 +493,7 @@ render i proklik profilu do presne vyfiltrovaneho Defaults katalogu.
 
 ### P5: Doplnit existujici editory na dnesni model
 
-- [ ] Probes: shared http a live/ready/start HTTP/exec/timing hodnoty,
+- [x] Probes: shared http a live/ready/start HTTP/exec/timing hodnoty,
   preset/path varianty; no-op neztrati zadne detaily. Neni nutny formular
   na kazdy escape hatch, ale nezname casti se musi zachovat.
 - [ ] Ports: Route tls vcetne termination a existujicich tls poli,
@@ -531,6 +531,17 @@ Checkpoint P5.2 2026-09-12:
   pred zapisem, takze je editor nemuze tise odstranit.
 - Pozitivni repository/API testy, cela seriova Go suite, build a browser
   render nad anonymni fixture prosly.
+
+Checkpoint P5.3 2026-09-12:
+
+- Probes editor podporuje preset, scalarni i live/ready/start varianty cesty,
+  shared HTTP a per-probe HTTP/exec handler i delay/period/timeout/success/failure.
+- Repository meni pouze zname probe hodnoty. Nezname top-level i vnorene YAML
+  klice zachovava a shodny payload vraci byte-identicky zdroj bez diffu.
+- Nejednoznacne zname YAML tvary se pred zapisem odmitnou; porty, timing hodnoty
+  a kompletni source templates se validuji na klientu i serveru.
+- Repository/API testy, cela seriova Go suite, build, JS syntax a browser no-op
+  smoke nad anonymni fixture prosly.
 
 ### P6: Integrace, browser overeni, dokumentace
 

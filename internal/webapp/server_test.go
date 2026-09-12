@@ -738,14 +738,16 @@ func TestAppContainerProbesUpdateEndpoint(t *testing.T) {
 	}
 
 	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
-	body := `{"expected_hash":"` + detail.ContentHash + `","probes":{"preset":"spring-actuator","port":"8080","path":"/healthz"}}`
+	body := `{"expected_hash":"` + detail.ContentHash + `","probes":{"preset":"spring-actuator","port":"8080","path":"/healthz","http":{"port":"8081","path":"/health"},"live":{"http":{"port":"8082","path":"/live"},"period":"10","failure":"5"},"ready":{"command":["/bin/check","ready"],"timeout":"2"},"start":{"http":{"port":"8083","path":"/start"},"failure":"30"}}}`
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/probes", strings.NewReader(body))
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"preset":"spring-actuator"`) || !strings.Contains(response.Body.String(), `"port":"8080"`) {
+	if !strings.Contains(response.Body.String(), `"preset":"spring-actuator"`) ||
+		!strings.Contains(response.Body.String(), `"command":["/bin/check","ready"]`) ||
+		!strings.Contains(response.Body.String(), `"failure":"30"`) {
 		t.Fatalf("unexpected response:\n%s", response.Body.String())
 	}
 }

@@ -1780,6 +1780,11 @@ function renderProbePreview(index, probes) {
     probes.preset && chip('preset', probes.preset),
     probes.port && chip('port', probes.port),
     probes.path && chip('path', probes.path),
+    Object.keys(probes.path_by_type || {}).length && chip('path variants', Object.keys(probes.path_by_type).join('/')),
+    (probes.http?.port || probes.http?.path) && chip('shared HTTP', [probes.http?.port, probes.http?.path].filter(Boolean).join(' ')),
+    probeHealthConfigured(probes.live) && chip('live', probeHealthSummary(probes.live)),
+    probeHealthConfigured(probes.ready) && chip('ready', probeHealthSummary(probes.ready)),
+    probeHealthConfigured(probes.start) && chip('start', probeHealthSummary(probes.start)),
   ].filter(Boolean).join('');
   const legacy = probes.legacy ? `<div class="alert alert-warning py-2 px-2 mb-2 small"><i class="ti ti-alert-triangle me-1"></i>Legacy ${esc(legacyProbeKinds(probes))} detected.</div>` : '';
   const custom = probes.legacy ? 'Legacy-only configuration.' : 'Custom probes configured.';
@@ -1799,8 +1804,23 @@ function renderProbesEditor(index, probes) {
         ${probeInput(index, 'port', 'Port', probes?.port || '')}
         ${probeInput(index, 'path', 'Path', probes?.path || '')}
       </div>
+      <div class="row g-2 mt-1">
+        ${probeInput(index, 'http-port', 'Shared HTTP port', probes?.http?.port || '')}
+        ${probeInput(index, 'http-path', 'Shared HTTP path', probes?.http?.path || '', 'col-12 col-md-8')}
+      </div>
+      <div class="row g-2 mt-1">
+        ${probeInput(index, 'path-live', 'Live path variant', probes?.path_by_type?.live || '')}
+        ${probeInput(index, 'path-ready', 'Ready path variant', probes?.path_by_type?.ready || '')}
+        ${probeInput(index, 'path-start', 'Start path variant', probes?.path_by_type?.start || '')}
+      </div>
+      <div class="text-muted small mt-2">Path variants replace the scalar Path. Per-probe HTTP or exec settings override shared values.</div>
+      <div class="row g-2 mt-1">
+        ${renderProbeHealthEditor(index, 'live', 'Liveness', probes?.live || {})}
+        ${renderProbeHealthEditor(index, 'ready', 'Readiness', probes?.ready || {})}
+        ${renderProbeHealthEditor(index, 'start', 'Startup', probes?.start || {})}
+      </div>
       <div class="d-flex align-items-center justify-content-between gap-2 mt-2">
-        <div class="text-muted small">Saves as modern probes preset/port/path.</div>
+        <div class="text-muted small">Known fields are updated; unknown YAML probe fields are preserved.</div>
         <div class="d-flex gap-2 flex-wrap justify-content-end">
           ${fixButton}
           <button class="btn btn-sm btn-primary" type="button" data-save-probes="${index}" ${disabled}><i class="ti ti-device-floppy me-1"></i>Save probes</button>
@@ -1808,9 +1828,38 @@ function renderProbesEditor(index, probes) {
       </div>
     </div>`;
 }
-function probeInput(index, field, label, value) {
+function probeInput(index, field, label, value, columns = 'col-12 col-md-4') {
   const disabled = state.readOnly ? 'disabled' : '';
-  return `<div class="col-12 col-md-4"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" data-probe-field="${index}:${field}" value="${esc(value)}" ${disabled}></div>`;
+  return `<div class="${columns}"><label class="form-label small mb-1">${esc(label)}</label><input class="form-control form-control-sm font-monospace" data-probe-field="${index}:${field}" value="${esc(value)}" ${disabled}></div>`;
+}
+function probeHealthConfigured(health) {
+  return !!(health?.http?.port || health?.http?.path || health?.command?.length || health?.delay || health?.period || health?.timeout || health?.success || health?.failure);
+}
+function probeHealthMode(health) {
+  if (health?.command?.length) return 'exec';
+  if (health?.http?.port || health?.http?.path) return 'http';
+  return 'inherit';
+}
+function probeHealthSummary(health) {
+  const mode = probeHealthMode(health);
+  return mode === 'exec' ? 'exec' : mode === 'http' ? `HTTP ${health?.http?.port || ''}${health?.http?.path || ''}`.trim() : 'timing override';
+}
+function renderProbeHealthEditor(index, kind, label, health) {
+  const disabled = state.readOnly ? 'disabled' : '';
+  const mode = probeHealthMode(health);
+  return `<div class="col-12"><div class="card card-sm"><div class="card-body py-2">
+    <div class="row g-2 align-items-end">
+      <div class="col-12 col-md-2"><label class="form-label small mb-1">${esc(label)} handler</label><select class="form-select form-select-sm" data-probe-mode="${index}:${kind}" ${disabled}>
+        <option value="inherit" ${mode === 'inherit' ? 'selected' : ''}>Shared / preset</option><option value="http" ${mode === 'http' ? 'selected' : ''}>HTTP</option><option value="exec" ${mode === 'exec' ? 'selected' : ''}>Exec</option>
+      </select></div>
+      <div class="col-12 col-md-5 ${mode === 'http' ? '' : 'd-none'}" data-probe-http-fields="${index}:${kind}"><div class="row g-2">
+        ${probeInput(index, `${kind}-http-port`, 'HTTP port', health?.http?.port || '', 'col-4')}
+        ${probeInput(index, `${kind}-http-path`, 'HTTP path', health?.http?.path || '', 'col-8')}
+      </div></div>
+      <div class="col-12 col-md-5 ${mode === 'exec' ? '' : 'd-none'}" data-probe-exec-fields="${index}:${kind}"><label class="form-label small mb-1">Exec command, one argument per line</label><textarea class="form-control form-control-sm font-monospace" rows="2" data-probe-field="${index}:${kind}-command" ${disabled}>${esc((health?.command || []).join('\n'))}</textarea></div>
+      ${['delay', 'period', 'timeout', 'success', 'failure'].map((field) => probeInput(index, `${kind}-${field}`, field[0].toUpperCase() + field.slice(1), health?.[field] || '', 'col-6 col-md-2')).join('')}
+    </div>
+  </div></div></div>`;
 }
 function renderJavaRuntimeEditor(index, java) {
   if (state.readOnly) return '';
@@ -1987,10 +2036,22 @@ function validateRuntimeForm(index) {
 async function saveContainerProbes(index) {
   if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
   const value = (field) => qs(`[data-probe-field="${index}:${field}"]`)?.value?.trim() || '';
+  const health = (kind) => {
+    const mode = qs(`[data-probe-mode="${index}:${kind}"]`)?.value || 'inherit';
+    return {
+      http: {port: mode === 'http' ? value(`${kind}-http-port`) : '', path: mode === 'http' ? value(`${kind}-http-path`) : ''},
+      command: mode === 'exec' ? value(`${kind}-command`).split(/\r?\n/).map((item) => item.trim()).filter(Boolean) : [],
+      delay: value(`${kind}-delay`), period: value(`${kind}-period`), timeout: value(`${kind}-timeout`),
+      success: value(`${kind}-success`), failure: value(`${kind}-failure`),
+    };
+  };
   const probes = {
     preset: value('preset'),
     port: value('port'),
     path: value('path'),
+    path_by_type: {live: value('path-live'), ready: value('path-ready'), start: value('path-start')},
+    http: {port: value('http-port'), path: value('http-path')},
+    live: health('live'), ready: health('ready'), start: health('start'),
   };
   clearError();
   const validation = validateProbeForm(index);
@@ -2006,9 +2067,34 @@ async function saveContainerProbes(index) {
 }
 function validateProbeForm(index) {
   clearInvalidInputs(`[data-probe-editor="${index}"]`);
-  const portInput = qs(`[data-probe-field="${index}:port"]`);
-  const port = portInput?.value?.trim() || '';
-  if (port) return validatePortValue(portInput, 'Probe port');
+  for (const [field, label] of [
+    ['port', 'Probe port'], ['http-port', 'Shared HTTP port'],
+    ['live-http-port', 'Liveness HTTP port'], ['ready-http-port', 'Readiness HTTP port'], ['start-http-port', 'Startup HTTP port'],
+  ]) {
+    const input = qs(`[data-probe-field="${index}:${field}"]`);
+    const value = input?.value?.trim() || '';
+    if (value && !completeSourceTemplateRe.test(value)) {
+      const validation = validatePortValue(input, label);
+      if (!validation.ok) return validation;
+    }
+  }
+  for (const kind of ['live', 'ready', 'start']) {
+    for (const field of ['delay', 'period', 'timeout', 'success', 'failure']) {
+      const input = qs(`[data-probe-field="${index}:${kind}-${field}"]`);
+      const value = input?.value?.trim() || '';
+      if (!value || completeSourceTemplateRe.test(value)) continue;
+      const number = Number(value);
+      const minimum = field === 'delay' ? 0 : 1;
+      if (!/^[0-9]+$/.test(value) || !Number.isInteger(number) || number < minimum) return invalidInput(input, `${kind} ${field} must be an integer greater than or equal to ${minimum}.`);
+    }
+    const mode = qs(`[data-probe-mode="${index}:${kind}"]`)?.value || 'inherit';
+    if (mode === 'http' && !qs(`[data-probe-field="${index}:${kind}-http-port"]`)?.value?.trim() && !qs(`[data-probe-field="${index}:${kind}-http-path"]`)?.value?.trim()) {
+      return invalidInput(qs(`[data-probe-mode="${index}:${kind}"]`), `${kind} HTTP requires a port or path.`);
+    }
+    if (mode === 'exec' && !qs(`[data-probe-field="${index}:${kind}-command"]`)?.value?.trim()) {
+      return invalidInput(qs(`[data-probe-field="${index}:${kind}-command"]`), `${kind} exec requires at least one command argument.`);
+    }
+  }
   return {ok: true};
 }
 async function fixContainerLegacyProbes(index) {
@@ -2130,7 +2216,7 @@ function openEditPanel(panel, index) {
     body = renderJavaRuntimeEditor(index, container.runtime?.java || {});
   } else if (panel === 'probes' && container) {
     title = `Edit probes: ${titleName}`;
-    subtitle = 'Modern probes preset/port/path and legacy conversion.';
+    subtitle = 'Shared and per-probe HTTP, exec and timing configuration.';
     body = renderProbesEditor(index, container.probes || {});
   } else if (panel === 'container-envs' && container) {
     title = `Edit envs: ${titleName}`;
@@ -2599,6 +2685,12 @@ async function saveAppReferences() {
   } catch (e) { showError(e); }
 }
 function handleEditModalInput(e) {
+  const probeMode = e.target.closest('[data-probe-mode]');
+  if (probeMode) {
+    const key = probeMode.dataset.probeMode;
+    qs(`[data-probe-http-fields="${key}"]`)?.classList.toggle('d-none', probeMode.value !== 'http');
+    qs(`[data-probe-exec-fields="${key}"]`)?.classList.toggle('d-none', probeMode.value !== 'exec');
+  }
   const sidecarEnvKind = e.target.closest('[data-defaults-sidecar-env-kind]');
   if (sidecarEnvKind) syncDefaultsSidecarEnvRow(sidecarEnvKind.closest('[data-defaults-sidecar-env-row]'));
   const filter = e.target.closest('[data-special-entry-filter]');

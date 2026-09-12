@@ -790,15 +790,6 @@ func TestSimpleEditorsRejectAdvancedBlocksWithoutChangingSource(t *testing.T) {
 			field: "gpu",
 		},
 		{
-			name:    "advanced probes",
-			content: "name: api\ncontainers:\n  - name: api\n    probes:\n      http:\n        port: 8080\n        path: /health\n      live:\n        failure: 5\n",
-			update: func(repo *Repository) error {
-				_, err := repo.UpdateAppContainerProbes("test", "api.yml", 0, ProbeUpdate{Port: "8080", Path: "/health"}, "")
-				return err
-			},
-			field: "http",
-		},
-		{
 			name:    "autoscaling raw",
 			content: "name: api\nautoscaling:\n  enabled: true\n  min_replicas: 1\n  max_replicas: 2\n  raw:\n    behavior: {}\ncontainers:\n  - name: api\n",
 			update: func(repo *Repository) error {
@@ -994,8 +985,84 @@ func TestUpdateAppContainerProbesWritesModernBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(detail.Content, "  - name: api\n    probes:\n      preset: \"spring-actuator\"\n      port: \"8080\"\n      path: \"/actuator/health\"\n    image: api:1") {
+	if !contains(detail.Content, "  - name: api\n    probes:\n      path: /actuator/health\n      port: 8080\n      preset: spring-actuator\n    image: api:1") {
 		t.Fatalf("probes not inserted after container name:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateAppContainerProbesPreservesAdvancedAndUnknownFields(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "test", "apps", "api.yml")
+	original := `name: api
+containers:
+  - name: api
+    probes:
+      preset: spring-actuator
+      path:
+        live: /live
+        ready: /ready
+        extension: /keep
+      http:
+        port: 8080
+        x-http-option: keep
+      live:
+        http: {path: /live-explicit, port: 8081, x-handler: keep}
+        delay: 0
+        period: 10
+        timeout: 2
+        success: 1
+        failure: 5
+        x-live-option: keep
+      ready:
+        command: ["/bin/check", "ready"]
+        period: 3
+      start:
+        http: {path: /start, port: 8082}
+        failure: 30
+      x-probe-option: keep
+    image: api:1
+`
+	writeFile(t, path, original)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	update := ProbeUpdate{
+		Preset:     "spring-actuator",
+		PathByType: map[string]string{"live": "/live", "ready": "/ready"},
+		HTTP:       ProbeHTTPUpdate{Port: "8080"},
+		Live:       ProbeHealthUpdate{HTTP: ProbeHTTPUpdate{Port: "8081", Path: "/live-explicit"}, Delay: "0", Period: "10", Timeout: "2", Success: "1", Failure: "5"},
+		Ready:      ProbeHealthUpdate{Command: []string{"/bin/check", "ready"}, Period: "3"},
+		Start:      ProbeHealthUpdate{HTTP: ProbeHTTPUpdate{Port: "8082", Path: "/start"}, Failure: "30"},
+	}
+	result, err := repo.UpdateAppContainerProbes("test", "api.yml", 0, update, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Probes.Live.HTTP.Port == nil || *result.Probes.Live.HTTP.Port != "8081" || len(result.Probes.Ready.Command) != 2 {
+		t.Fatalf("advanced probes model = %#v", result.Probes)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != original {
+		t.Fatalf("no-op probe update changed source:\n%s", content)
+	}
+
+	update.Ready.Period = "4"
+	if _, err := repo.UpdateAppContainerProbes("test", "api.yml", 0, update, ""); err != nil {
+		t.Fatal(err)
+	}
+	content, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"x-probe-option: keep", "x-http-option: keep", "x-handler: keep", "x-live-option: keep", "extension: /keep", "period: 4"} {
+		if !contains(string(content), expected) {
+			t.Fatalf("updated probes missing %q:\n%s", expected, content)
+		}
 	}
 }
 
@@ -1015,6 +1082,34 @@ func TestUpdateAppContainerProbesRejectsInvalidPortRange(t *testing.T) {
 	}
 	if _, err := repo.UpdateAppContainerProbes("test", "api.yml", 0, ProbeUpdate{Preset: "spring-actuator", Port: "8080"}, ""); err != nil {
 		t.Fatalf("valid probe port rejected: %v", err)
+	}
+	if _, err := repo.UpdateAppContainerProbes("test", "api.yml", 0, ProbeUpdate{Live: ProbeHealthUpdate{Period: "0"}}, ""); err == nil || !contains(err.Error(), "live.period") {
+		t.Fatalf("invalid live period error = %v", err)
+	}
+	if _, err := repo.UpdateAppContainerProbes("test", "api.yml", 0, ProbeUpdate{Start: ProbeHealthUpdate{Failure: "{{var:START_FAILURE}}"}}, ""); err != nil {
+		t.Fatalf("probe timing template rejected: %v", err)
+	}
+}
+
+func TestUpdateAppContainerProbesRejectsUnsafeKnownShapeWithoutChangingSource(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "test", "apps", "api.yml")
+	original := "name: api\ncontainers:\n  - name: api\n    probes:\n      http:\n        path:\n          live: /live\n          ready: /ready\n"
+	writeFile(t, path, original)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.UpdateAppContainerProbes("test", "api.yml", 0, ProbeUpdate{HTTP: ProbeHTTPUpdate{Path: "/health"}}, "")
+	if err == nil || !contains(err.Error(), "path mapping") {
+		t.Fatalf("error = %v, want unsafe path mapping", err)
+	}
+	content, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(content) != original {
+		t.Fatalf("source changed after rejected update:\n%s", content)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -119,9 +120,29 @@ type ResourceUpdate struct {
 }
 
 type ProbeUpdate struct {
-	Preset string `json:"preset"`
-	Port   string `json:"port"`
-	Path   string `json:"path"`
+	Preset     string            `json:"preset"`
+	Port       string            `json:"port"`
+	Path       string            `json:"path"`
+	PathByType map[string]string `json:"path_by_type"`
+	HTTP       ProbeHTTPUpdate   `json:"http"`
+	Live       ProbeHealthUpdate `json:"live"`
+	Ready      ProbeHealthUpdate `json:"ready"`
+	Start      ProbeHealthUpdate `json:"start"`
+}
+
+type ProbeHTTPUpdate struct {
+	Port string `json:"port"`
+	Path string `json:"path"`
+}
+
+type ProbeHealthUpdate struct {
+	HTTP    ProbeHTTPUpdate `json:"http"`
+	Command []string        `json:"command"`
+	Delay   string          `json:"delay"`
+	Period  string          `json:"period"`
+	Timeout string          `json:"timeout"`
+	Success string          `json:"success"`
+	Failure string          `json:"failure"`
 }
 
 type JavaRuntimeUpdate struct {
@@ -305,12 +326,32 @@ type JavaRuntimeModel struct {
 }
 
 type ProbesModel struct {
-	Preset      *string  `json:"preset"`
-	Port        *string  `json:"port"`
-	Path        *string  `json:"path"`
-	Legacy      bool     `json:"legacy"`
-	LegacyKinds []string `json:"legacy_kinds"`
-	Enabled     bool     `json:"enabled"`
+	Preset      *string           `json:"preset"`
+	Port        *string           `json:"port"`
+	Path        *string           `json:"path"`
+	PathByType  map[string]string `json:"path_by_type,omitempty"`
+	HTTP        ProbeHTTPModel    `json:"http"`
+	Live        ProbeHealthModel  `json:"live"`
+	Ready       ProbeHealthModel  `json:"ready"`
+	Start       ProbeHealthModel  `json:"start"`
+	Legacy      bool              `json:"legacy"`
+	LegacyKinds []string          `json:"legacy_kinds"`
+	Enabled     bool              `json:"enabled"`
+}
+
+type ProbeHTTPModel struct {
+	Port *string `json:"port"`
+	Path *string `json:"path"`
+}
+
+type ProbeHealthModel struct {
+	HTTP    ProbeHTTPModel `json:"http"`
+	Command []string       `json:"command"`
+	Delay   *string        `json:"delay"`
+	Period  *string        `json:"period"`
+	Timeout *string        `json:"timeout"`
+	Success *string        `json:"success"`
+	Failure *string        `json:"failure"`
 }
 
 type AutoscalingModel struct {
@@ -2327,9 +2368,26 @@ func replaceContainerProbesBlock(content string, containerIndex int, probes Prob
 	if err != nil {
 		return "", err
 	}
+	root, err := sourceModelRoot(content)
+	if err != nil {
+		return "", err
+	}
+	containers := anySlice(root["containers"])
+	if containerIndex >= len(containers) {
+		return "", errors.New("container index not found")
+	}
+	container, _ := containers[containerIndex].(map[string]any)
+	existing, _ := container["probes"].(map[string]any)
+	merged := mergeProbesMap(existing, probes)
+	if reflect.DeepEqual(existing, merged) {
+		return content, nil
+	}
 
 	probesStart, probesEnd := containerChildBlockRange(lines, start, end, "probes")
-	replacement := renderProbesBlock(probes)
+	replacement, err := renderProbesBlock(merged)
+	if err != nil {
+		return "", err
+	}
 	insertAt := start + 1
 	if probesStart >= 0 {
 		insertAt = probesStart
@@ -2608,24 +2666,145 @@ func renderPortsBlock(ports []PortUpdate) []string {
 	return lines
 }
 
-func renderProbesBlock(probes ProbeUpdate) []string {
-	preset := strings.TrimSpace(probes.Preset)
-	port := strings.TrimSpace(probes.Port)
-	path := strings.TrimSpace(probes.Path)
-	if preset == "" && port == "" && path == "" {
-		return nil
+func mergeProbesMap(existing map[string]any, probes ProbeUpdate) map[string]any {
+	merged := cloneAnyMap(existing)
+	setOptionalString(merged, "preset", probes.Preset)
+	setOptionalScalar(merged, "port", probes.Port)
+	if paths := nonEmptyStringMap(probes.PathByType); len(paths) > 0 {
+		existingPaths, _ := merged["path"].(map[string]any)
+		existingPaths = cloneAnyMap(existingPaths)
+		for _, key := range []string{"live", "ready", "start"} {
+			delete(existingPaths, key)
+		}
+		for key, value := range paths {
+			existingPaths[key] = value
+		}
+		merged["path"] = existingPaths
+	} else if value := strings.TrimSpace(probes.Path); value != "" {
+		merged["path"] = value
+	} else if existingPaths, ok := merged["path"].(map[string]any); ok {
+		existingPaths = cloneAnyMap(existingPaths)
+		for _, key := range []string{"live", "ready", "start"} {
+			delete(existingPaths, key)
+		}
+		if len(existingPaths) == 0 {
+			delete(merged, "path")
+		} else {
+			merged["path"] = existingPaths
+		}
+	} else {
+		delete(merged, "path")
 	}
-	lines := []string{"    probes:"}
-	if preset != "" {
-		lines = append(lines, "      preset: "+strconv.Quote(preset))
+	mergeProbeHTTP(merged, "http", probes.HTTP)
+	mergeProbeHealth(merged, "live", probes.Live)
+	mergeProbeHealth(merged, "ready", probes.Ready)
+	mergeProbeHealth(merged, "start", probes.Start)
+	return merged
+}
+
+func renderProbesBlock(merged map[string]any) ([]string, error) {
+	if len(merged) == 0 {
+		return nil, nil
 	}
-	if port != "" {
-		lines = append(lines, "      port: "+strconv.Quote(port))
+	var buffer bytes.Buffer
+	encoder := yaml.NewEncoder(&buffer)
+	encoder.SetIndent(2)
+	err := encoder.Encode(map[string]any{"probes": merged})
+	_ = encoder.Close()
+	if err != nil {
+		return nil, fmt.Errorf("render probes: %w", err)
 	}
-	if path != "" {
-		lines = append(lines, "      path: "+strconv.Quote(path))
+	rawLines := strings.Split(strings.TrimSuffix(buffer.String(), "\n"), "\n")
+	lines := make([]string, 0, len(rawLines))
+	for _, line := range rawLines {
+		lines = append(lines, "    "+line)
 	}
-	return lines
+	return lines, nil
+}
+
+func setOptionalString(target map[string]any, key, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		delete(target, key)
+		return
+	}
+	target[key] = value
+}
+
+func setOptionalScalar(target map[string]any, key, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		delete(target, key)
+		return
+	}
+	if parsed, err := strconv.Atoi(value); err == nil {
+		target[key] = parsed
+	} else {
+		target[key] = value
+	}
+}
+
+func nonEmptyStringMap(values map[string]string) map[string]any {
+	out := map[string]any{}
+	for _, key := range []string{"live", "ready", "start"} {
+		if value := strings.TrimSpace(values[key]); value != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func mergeProbeHTTP(parent map[string]any, key string, update ProbeHTTPUpdate) {
+	http, _ := parent[key].(map[string]any)
+	http = cloneAnyMap(http)
+	setOptionalScalar(http, "port", update.Port)
+	setOptionalString(http, "path", update.Path)
+	if len(http) == 0 {
+		delete(parent, key)
+	} else {
+		parent[key] = http
+	}
+}
+
+func mergeProbeHealth(parent map[string]any, key string, update ProbeHealthUpdate) {
+	health, _ := parent[key].(map[string]any)
+	health = cloneAnyMap(health)
+	mergeProbeHTTP(health, "http", update.HTTP)
+	if len(update.Command) == 0 {
+		delete(health, "command")
+	} else {
+		command := make([]any, 0, len(update.Command))
+		for _, item := range update.Command {
+			command = append(command, item)
+		}
+		health["command"] = command
+	}
+	for field, value := range map[string]string{
+		"delay": update.Delay, "period": update.Period, "timeout": update.Timeout,
+		"success": update.Success, "failure": update.Failure,
+	} {
+		setOptionalScalar(health, field, value)
+	}
+	if len(health) == 0 {
+		delete(parent, key)
+	} else {
+		parent[key] = health
+	}
+}
+
+func cloneAnyMap(source map[string]any) map[string]any {
+	out := make(map[string]any, len(source))
+	for key, value := range source {
+		switch typed := value.(type) {
+		case map[string]any:
+			out[key] = cloneAnyMap(typed)
+		case []any:
+			out[key] = append([]any(nil), typed...)
+		default:
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func legacyProbeToProbesBlock(block []string) []string {
@@ -2719,20 +2898,78 @@ func validateJavaMemoryQuantity(label string, value string) error {
 
 func validateProbeUpdate(probes ProbeUpdate) error {
 	for label, value := range map[string]string{
-		"preset": probes.Preset,
-		"port":   probes.Port,
-		"path":   probes.Path,
+		"preset":    probes.Preset,
+		"port":      probes.Port,
+		"path":      probes.Path,
+		"http.port": probes.HTTP.Port,
+		"http.path": probes.HTTP.Path,
 	} {
 		if strings.ContainsAny(value, "\r\n") {
 			return fmt.Errorf("%s contains unsupported newline", label)
 		}
 	}
-	if port := strings.TrimSpace(probes.Port); port != "" {
-		if err := validatePositivePort("port", port); err != nil {
+	for key, value := range probes.PathByType {
+		if key != "live" && key != "ready" && key != "start" {
+			return fmt.Errorf("path_by_type contains unsupported key %q", key)
+		}
+		if strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("path_by_type.%s contains unsupported newline", key)
+		}
+	}
+	for label, port := range map[string]string{"port": probes.Port, "http.port": probes.HTTP.Port} {
+		if err := validateProbePort(label, port); err != nil {
+			return err
+		}
+	}
+	for name, health := range map[string]ProbeHealthUpdate{"live": probes.Live, "ready": probes.Ready, "start": probes.Start} {
+		if err := validateProbeHealthUpdate(name, health); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func validateProbeHealthUpdate(name string, health ProbeHealthUpdate) error {
+	if err := validateProbePort(name+".http.port", health.HTTP.Port); err != nil {
+		return err
+	}
+	if strings.ContainsAny(health.HTTP.Path, "\r\n") {
+		return fmt.Errorf("%s.http.path contains unsupported newline", name)
+	}
+	for index, command := range health.Command {
+		if strings.ContainsAny(command, "\r\n") {
+			return fmt.Errorf("%s.command[%d] contains unsupported newline", name, index)
+		}
+	}
+	if len(health.Command) > 0 && (strings.TrimSpace(health.HTTP.Port) != "" || strings.TrimSpace(health.HTTP.Path) != "") {
+		return fmt.Errorf("%s cannot define both command and http", name)
+	}
+	for field, value := range map[string]string{
+		"delay": health.Delay, "period": health.Period, "timeout": health.Timeout,
+		"success": health.Success, "failure": health.Failure,
+	} {
+		value = strings.TrimSpace(value)
+		if value == "" || sourceTemplatePattern.FindString(value) == value {
+			continue
+		}
+		parsed, err := strconv.Atoi(value)
+		minimum := 1
+		if field == "delay" {
+			minimum = 0
+		}
+		if err != nil || parsed < minimum {
+			return fmt.Errorf("%s.%s must be an integer greater than or equal to %d", name, field, minimum)
+		}
+	}
+	return nil
+}
+
+func validateProbePort(label, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" || sourceTemplatePattern.FindString(value) == value {
+		return nil
+	}
+	return validatePositivePort(label, value)
 }
 
 func validateAutoscalingUpdate(autoscaling AutoscalingUpdate) error {
@@ -2955,9 +3192,10 @@ func rejectUnsupportedContainerBlockForUpdate(content string, containerIndex int
 		}
 		return validateEditableResourcesMap(block)
 	case "probes":
-		if err := rejectUnknownKeys(block, "probes", "preset", "port", "path"); err != nil {
-			return fmt.Errorf("%w; edit the YAML source until the advanced probes editor is available", err)
+		if blockPresent && !blockIsMap {
+			return errors.New("probes must be a mapping")
 		}
+		return validateEditableProbesMap(block)
 	case "runtime":
 		if err := rejectUnknownKeys(block, "runtime", "java"); err != nil {
 			return err
@@ -2969,6 +3207,56 @@ func rejectUnsupportedContainerBlockForUpdate(content string, containerIndex int
 		export, _ := java["export"].(map[string]any)
 		if err := rejectUnknownKeys(export, "runtime.java.export", "env_name"); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateEditableProbesMap(probes map[string]any) error {
+	if path, present := probes["path"]; present {
+		if _, scalar := path.(string); !scalar {
+			if _, mapping := path.(map[string]any); !mapping {
+				return errors.New("probes.path must be a scalar or mapping")
+			}
+		}
+	}
+	for _, key := range []string{"http", "live", "ready", "start"} {
+		value, present := probes[key]
+		if !present {
+			continue
+		}
+		block, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("probes.%s must be a mapping", key)
+		}
+		if key == "http" {
+			if err := validateEditableProbeHTTPMap("probes.http", block); err != nil {
+				return err
+			}
+			continue
+		}
+		if rawHTTP, present := block["http"]; present {
+			http, ok := rawHTTP.(map[string]any)
+			if !ok {
+				return fmt.Errorf("probes.%s.http must be a mapping", key)
+			}
+			if err := validateEditableProbeHTTPMap("probes."+key+".http", http); err != nil {
+				return err
+			}
+		}
+		if command, present := block["command"]; present {
+			if _, ok := command.([]any); !ok {
+				return fmt.Errorf("probes.%s.command must be a sequence", key)
+			}
+		}
+	}
+	return nil
+}
+
+func validateEditableProbeHTTPMap(label string, http map[string]any) error {
+	if path, present := http["path"]; present {
+		if _, ok := path.(map[string]any); ok {
+			return fmt.Errorf("%s.path mapping is not editable safely; use the YAML source", label)
 		}
 	}
 	return nil
@@ -3355,10 +3643,16 @@ func runtimeModel(data map[string]any) RuntimeModel {
 
 func probesModel(containerMap map[string]any) ProbesModel {
 	probes := nestedMap(containerMap, "probes")
+	path, pathByType := probePathModel(probes["path"])
 	out := ProbesModel{
-		Preset: stringPtr(stringValue(probes["preset"])),
-		Port:   stringPtr(stringValue(probes["port"])),
-		Path:   stringPtr(stringValue(probes["path"])),
+		Preset:     stringPtr(stringValue(probes["preset"])),
+		Port:       stringPtr(stringValue(probes["port"])),
+		Path:       path,
+		PathByType: pathByType,
+		HTTP:       probeHTTPModel(probes["http"]),
+		Live:       probeHealthModel(probes["live"]),
+		Ready:      probeHealthModel(probes["ready"]),
+		Start:      probeHealthModel(probes["start"]),
 	}
 	if nestedValue(containerMap, "health") != nil {
 		out.LegacyKinds = append(out.LegacyKinds, "health")
@@ -3371,6 +3665,40 @@ func probesModel(containerMap map[string]any) ProbesModel {
 		nestedValue(probes, "http") != nil || nestedValue(probes, "live") != nil ||
 		nestedValue(probes, "ready") != nil || nestedValue(probes, "start") != nil
 	return out
+}
+
+func probePathModel(value any) (*string, map[string]string) {
+	if paths, ok := value.(map[string]any); ok {
+		out := map[string]string{}
+		for _, key := range []string{"live", "ready", "start"} {
+			if path := stringValue(paths[key]); path != "" {
+				out[key] = path
+			}
+		}
+		return nil, out
+	}
+	return stringPtr(stringValue(value)), nil
+}
+
+func probeHTTPModel(value any) ProbeHTTPModel {
+	http, _ := value.(map[string]any)
+	return ProbeHTTPModel{
+		Port: stringPtr(stringValue(http["port"])),
+		Path: stringPtr(stringValue(http["path"])),
+	}
+}
+
+func probeHealthModel(value any) ProbeHealthModel {
+	health, _ := value.(map[string]any)
+	return ProbeHealthModel{
+		HTTP:    probeHTTPModel(health["http"]),
+		Command: stringSlice(health["command"]),
+		Delay:   stringPtr(stringValue(health["delay"])),
+		Period:  stringPtr(stringValue(health["period"])),
+		Timeout: stringPtr(stringValue(health["timeout"])),
+		Success: stringPtr(stringValue(health["success"])),
+		Failure: stringPtr(stringValue(health["failure"])),
+	}
 }
 
 func nestedValue(data map[string]any, keys ...string) any {
