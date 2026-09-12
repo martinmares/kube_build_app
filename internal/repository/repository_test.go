@@ -2116,3 +2116,110 @@ func TestDefaultsSidecarDefinitionEnvsRejectsUnsupportedOrAmbiguousEntries(t *te
 		t.Fatalf("unknown shared asset error = %v", err)
 	}
 }
+
+func TestUpdateDefaultsSidecarDefinitionReferencesPreservesOrderAndOtherFields(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "dev", "apps", "_defaults.yml")
+	original := `container_profiles:
+  - name: base
+    defaults: {image_pull_policy: always}
+  - name: hardened
+    defaults: {security_context: {run_as_non_root: true}}
+runtime_asset_definitions:
+  - name: config
+    files: []
+  - name: trust
+    files: []
+sidecar_definitions:
+  - name: proxy
+    image: proxy:1
+    profile_ref_names:
+      - base
+    runtime_asset_ref_names:
+      - config
+    envs:
+      - name: MODE
+        value: strict
+  - name: exporter
+    image: exporter:1
+`
+	writeFile(t, path, original)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.DefaultsSidecarDefinitionReferences("dev", "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(current.ContainerProfiles, ",") != "base,hardened" || strings.Join(current.RuntimeAssetDefinitions, ",") != "config,trust" {
+		t.Fatalf("catalogs = %#v / %#v", current.ContainerProfiles, current.RuntimeAssetDefinitions)
+	}
+	if _, err := repo.UpdateDefaultsSidecarDefinitionReferences("dev", "proxy", DefaultsSidecarDefinitionReferencesUpdate{ProfileRefNames: current.ProfileRefNames, RuntimeAssetRefNames: current.RuntimeAssetRefNames}, current.ContentHash); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != original {
+		t.Fatalf("no-op references update changed source:\n%s", content)
+	}
+
+	updated, err := repo.UpdateDefaultsSidecarDefinitionReferences("dev", "proxy", DefaultsSidecarDefinitionReferencesUpdate{
+		ProfileRefNames: []string{"hardened", "base"}, RuntimeAssetRefNames: []string{"trust"},
+	}, current.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(updated.ProfileRefNames, ",") != "hardened,base" || strings.Join(updated.RuntimeAssetRefNames, ",") != "trust" {
+		t.Fatalf("updated references = %#v", updated)
+	}
+	content, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(content)
+	if strings.Index(got, "      - hardened") > strings.Index(got, "      - base") || !strings.Contains(got, "      - trust") || !strings.Contains(got, "value: strict") || !strings.Contains(got, "image: exporter:1") {
+		t.Fatalf("updated references damaged source:\n%s", got)
+	}
+
+	cleared, err := repo.UpdateDefaultsSidecarDefinitionReferences("dev", "proxy", DefaultsSidecarDefinitionReferencesUpdate{}, updated.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleared.ProfileRefNames) != 0 || len(cleared.RuntimeAssetRefNames) != 0 {
+		t.Fatalf("references after clear = %#v", cleared)
+	}
+	content, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "profile_ref_names:") || strings.Contains(string(content), "runtime_asset_ref_names:") || !strings.Contains(string(content), "value: strict") {
+		t.Fatalf("clear damaged source:\n%s", content)
+	}
+}
+
+func TestDefaultsSidecarDefinitionReferencesRejectUnknownAndDuplicateNames(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), `container_profiles:
+  - name: base
+    defaults: {}
+sidecar_definitions:
+  - name: proxy
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.DefaultsSidecarDefinitionReferences("dev", "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateDefaultsSidecarDefinitionReferences("dev", "proxy", DefaultsSidecarDefinitionReferencesUpdate{ProfileRefNames: []string{"missing"}}, current.ContentHash); err == nil || !strings.Contains(err.Error(), "unknown definition") {
+		t.Fatalf("unknown reference error = %v", err)
+	}
+	if _, err := repo.UpdateDefaultsSidecarDefinitionReferences("dev", "proxy", DefaultsSidecarDefinitionReferencesUpdate{ProfileRefNames: []string{"base", "base"}}, current.ContentHash); err == nil || !strings.Contains(err.Error(), "duplicate reference") {
+		t.Fatalf("duplicate reference error = %v", err)
+	}
+}

@@ -246,6 +246,7 @@ func TestMutatingEndpointsRequireWriteMode(t *testing.T) {
 		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter/startup", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter/resources", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter/envs", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter/references", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/replicas", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/autoscaling", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/resources", `{}`},
@@ -1477,6 +1478,44 @@ func TestDefaultsSidecarDefinitionEnvsAPI(t *testing.T) {
 	}
 	if !strings.Contains(string(content), `secret_name: "proxy-secret"`) || !strings.Contains(string(content), "image: proxy:1") {
 		t.Fatalf("PATCH produced unexpected source:\n%s", content)
+	}
+}
+
+func TestDefaultsSidecarDefinitionReferencesAPI(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), `container_profiles:
+  - name: base
+    defaults: {}
+runtime_asset_definitions:
+  - name: config
+    files: []
+sidecar_definitions:
+  - name: proxy
+    profile_ref_names: [base]
+`)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	path := "/api/v1/envs/dev/defaults/sidecar-definitions/proxy/references"
+	getResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, path, nil))
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getResponse.Code, getResponse.Body.String())
+	}
+	var current repository.DefaultsSidecarDefinitionReferences
+	if err := json.Unmarshal(getResponse.Body.Bytes(), &current); err != nil {
+		t.Fatal(err)
+	}
+	payload := fmt.Sprintf(`{"expected_hash":%q,"references":{"profile_ref_names":[],"runtime_asset_ref_names":["config"]}}`, current.ContentHash)
+	patchResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(patchResponse, httptest.NewRequest(http.MethodPatch, path, strings.NewReader(payload)))
+	if patchResponse.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d: %s", patchResponse.Code, patchResponse.Body.String())
+	}
+	if !strings.Contains(patchResponse.Body.String(), `"runtime_asset_ref_names":["config"]`) {
+		t.Fatalf("unexpected PATCH body: %s", patchResponse.Body.String())
 	}
 }
 

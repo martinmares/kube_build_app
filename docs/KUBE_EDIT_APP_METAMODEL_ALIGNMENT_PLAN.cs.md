@@ -465,6 +465,16 @@ Checkpoint P4.1d 2026-09-12:
   check prosly. Browser smoke zustava k rucnimu overeni kvuli selhani
   lokalniho Playwright CLI lifecycle pred otevrenim stranky.
 
+Checkpoint P4.1e 2026-09-12:
+
+- existujici sdilena sidecar definice ma samostatny name-based editor pro
+  ordered `profile_ref_names` a `runtime_asset_ref_names`;
+- modal znovupouziva stejny Tabler ordered-reference pattern jako app editor.
+  Vybirat lze pouze z lokalnich katalogu a poradi profilu se zachovava;
+- PATCH kontroluje content hash, duplicity i nezname definice, prazdny seznam
+  odstrani odpovidajici blok a no-op je byte-for-byte. Repository/API testy,
+  plny Go test/build a JS syntax check prosly.
+
 ### P5: Doplnit existujici editory na dnesni model
 
 - [ ] Probes: shared http a live/ready/start HTTP/exec/timing hodnoty,

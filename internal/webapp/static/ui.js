@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, defaultsSidecarDefinition: null, defaultsSidecarStartup: null, defaultsSidecarResources: null, defaultsSidecarEnvs: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, defaultsSidecarDefinition: null, defaultsSidecarStartup: null, defaultsSidecarResources: null, defaultsSidecarEnvs: null, defaultsSidecarReferences: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -296,6 +296,8 @@ async function init() {
   });
   qs('#asset-structured')?.addEventListener('click', (e) => handleAssetStructuredClick(e));
   qs('#defaults-overview')?.addEventListener('click', async (e) => {
+    const editReferences = e.target.closest('[data-edit-sidecar-definition-references]');
+    if (editReferences && !state.readOnly) return openDefaultsSidecarReferencesEditor(editReferences.dataset.editSidecarDefinitionReferences);
     const editEnvs = e.target.closest('[data-edit-sidecar-definition-envs]');
     if (editEnvs && !state.readOnly) return openDefaultsSidecarEnvsEditor(editEnvs.dataset.editSidecarDefinitionEnvs);
     const editResources = e.target.closest('[data-edit-sidecar-definition-resources]');
@@ -1005,7 +1007,7 @@ function renderDefaultsCatalogItem(kind, item) {
   const summary = keys.slice(0, 7).map((key) => `<span class="badge bg-secondary-lt">${esc(key)}</span>`).join('');
   const usedBy = usages.slice(0, 6).map((usage) => `<button class="btn btn-sm btn-ghost-secondary" type="button" data-defaults-app="${esc(usage.app_file)}" title="${esc(usage.yaml_path)}"><i class="ti ti-apps me-1"></i>${esc(usage.app)}${usage.container ? ` / ${esc(usage.container)}` : ''}</button>`).join('');
   const assetLink = kind === 'shared_asset' && item.file ? `<button class="btn btn-sm btn-outline-secondary" type="button" data-defaults-asset="${esc(sharedAssetBrowserPath(item.file))}"><i class="ti ti-file me-1"></i>Open file</button>` : '';
-  const editAction = kind === 'sidecar_definition' && !state.readOnly ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition="${esc(name)}"><i class="ti ti-photo me-1"></i>Edit image</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-startup="${esc(name)}"><i class="ti ti-terminal-2 me-1"></i>Edit startup</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-resources="${esc(name)}"><i class="ti ti-cpu me-1"></i>Edit resources</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-envs="${esc(name)}"><i class="ti ti-braces me-1"></i>Edit envs</button>` : '';
+  const editAction = kind === 'sidecar_definition' && !state.readOnly ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition="${esc(name)}"><i class="ti ti-photo me-1"></i>Edit image</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-startup="${esc(name)}"><i class="ti ti-terminal-2 me-1"></i>Edit startup</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-resources="${esc(name)}"><i class="ti ti-cpu me-1"></i>Edit resources</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-envs="${esc(name)}"><i class="ti ti-braces me-1"></i>Edit envs</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-references="${esc(name)}"><i class="ti ti-link me-1"></i>Edit references</button>` : '';
   return `<div class="col-12 col-lg-6"><div class="card card-sm h-100"><div class="card-body"><div class="d-flex align-items-start justify-content-between gap-2"><div class="fw-semibold font-monospace text-break">${esc(name)}</div><span class="badge ${usages.length ? 'bg-blue-lt' : 'bg-secondary-lt'}">${usages.length} use${usages.length === 1 ? '' : 's'}</span></div><div class="d-flex flex-wrap gap-1 mt-2">${summary || '<span class="text-muted small">No additional fields.</span>'}</div>${usedBy || assetLink || editAction ? `<div class="d-flex flex-wrap gap-1 mt-3">${usedBy}${assetLink}${editAction}</div>` : ''}</div></div></div>`;
 }
 
@@ -1460,10 +1462,10 @@ function renderReferencesEditor(references) {
   </div>`;
 }
 
-function renderReferenceList(label, values, catalog, scope, index, field) {
+function renderReferenceList(label, values, catalog, scope, index, field, owner = 'app') {
   const options = catalog || [];
   const rows = (values || []).map((value) => renderReferenceRow(value, options)).join('');
-  return `<div class="mb-3" data-reference-list data-reference-scope="${scope}" data-reference-index="${index}" data-reference-field="${field}">
+  return `<div class="mb-3" data-reference-list data-reference-owner="${owner}" data-reference-scope="${scope}" data-reference-index="${index}" data-reference-field="${field}">
     <div class="d-flex align-items-center justify-content-between gap-2 mb-1"><label class="form-label mb-0">${esc(label)}</label><button class="btn btn-sm btn-outline-secondary" type="button" data-add-reference ${(values || []).length < options.length ? '' : 'disabled'}><i class="ti ti-plus me-1"></i>Add</button></div>
     <div data-reference-rows>${rows || '<div class="text-muted small" data-reference-empty>No references selected.</div>'}</div>
   </div>`;
@@ -2033,6 +2035,7 @@ function handleEditModalClick(e) {
   if (removeSidecarEnv && !state.readOnly) return removeSidecarEnv.closest('[data-defaults-sidecar-env-row]')?.remove();
   const moveSidecarEnv = e.target.closest('[data-move-defaults-sidecar-env]');
   if (moveSidecarEnv && !state.readOnly) return moveDefaultsSidecarEnvRow(moveSidecarEnv.closest('[data-defaults-sidecar-env-row]'), moveSidecarEnv.dataset.moveDefaultsSidecarEnv);
+  if (e.target.closest('[data-save-defaults-sidecar-references]') && !state.readOnly) return saveDefaultsSidecarReferences();
   const addReference = e.target.closest('[data-add-reference]');
   if (addReference && !state.readOnly) return addReferenceRow(addReference.closest('[data-reference-list]'));
   const removeReference = e.target.closest('[data-remove-reference]');
@@ -2308,6 +2311,10 @@ async function saveSidecarStartupOverride(action) {
 }
 
 function referenceCatalogForList(list) {
+  if (list?.dataset.referenceOwner === 'defaults-sidecar') {
+    if (list.dataset.referenceField === 'profile_ref_names') return state.defaultsSidecarReferences?.container_profiles || [];
+    return state.defaultsSidecarReferences?.runtime_asset_definitions || [];
+  }
   const catalog = state.appReferences?.catalog || {};
   if (list?.dataset.referenceField === 'sidecar_ref_names') return catalog.sidecar_definitions || [];
   if (list?.dataset.referenceField === 'profile_ref_names') return catalog.container_profiles || [];
@@ -2840,6 +2847,52 @@ async function saveDefaultsSidecarEnvs(action) {
     state.editModalClose?.();
     state.editModalClose = null;
     state.defaultsSidecarEnvs = null;
+    await refreshRepositorySnapshot();
+    await loadInspection(true);
+  } catch (e) { showError(e); }
+}
+
+function defaultsSidecarReferencesURL(name) {
+  return `/api/v1/envs/${encodeURIComponent(state.env)}/defaults/sidecar-definitions/${encodeURIComponent(name)}/references`;
+}
+
+function renderDefaultsSidecarReferencesEditor(current) {
+  return `<div data-defaults-sidecar-references-editor>
+    <div class="alert alert-warning py-2"><i class="ti ti-alert-triangle me-2"></i>Profile order is significant. Later profiles override earlier profiles for this shared sidecar.</div>
+    ${renderReferenceList('Container profiles', current.profile_ref_names, current.container_profiles, 'defaults-sidecar', -1, 'profile_ref_names', 'defaults-sidecar')}
+    ${renderReferenceList('Runtime assets', current.runtime_asset_ref_names, current.runtime_asset_definitions, 'defaults-sidecar', -1, 'runtime_asset_ref_names', 'defaults-sidecar')}
+    <div class="text-end"><button class="btn btn-primary" type="button" data-save-defaults-sidecar-references><i class="ti ti-device-floppy me-1"></i>Save references</button></div>
+  </div>`;
+}
+
+async function openDefaultsSidecarReferencesEditor(name) {
+  if (!state.env || state.readOnly || !name) return;
+  clearError();
+  try {
+    const current = await api(defaultsSidecarReferencesURL(name));
+    state.defaultsSidecarReferences = current;
+    openEditorModal(
+      `Edit sidecar references: ${name}`,
+      'Updates profile_ref_names and runtime_asset_ref_names in apps/_defaults.yml.',
+      renderDefaultsSidecarReferencesEditor(current),
+    );
+  } catch (e) { showError(e); }
+}
+
+async function saveDefaultsSidecarReferences() {
+  const current = state.defaultsSidecarReferences;
+  if (!state.env || state.readOnly || !current) return;
+  const find = (field) => qs(`[data-defaults-sidecar-references-editor] [data-reference-field="${field}"]`);
+  const references = {
+    profile_ref_names: referenceValues(find('profile_ref_names')),
+    runtime_asset_ref_names: referenceValues(find('runtime_asset_ref_names')),
+  };
+  clearError();
+  try {
+    await apiPatch(defaultsSidecarReferencesURL(current.name), {expected_hash: current.content_hash, references});
+    state.editModalClose?.();
+    state.editModalClose = null;
+    state.defaultsSidecarReferences = null;
     await refreshRepositorySnapshot();
     await loadInspection(true);
   } catch (e) { showError(e); }
