@@ -263,6 +263,8 @@ async function init() {
     syncAppVarsEmptyState();
   });
   qs('#app-overview')?.addEventListener('click', (e) => {
+    const dependency = e.target.closest('[data-dependency-kind]');
+    if (dependency) return openDependencyDefinition(dependency.dataset.dependencyKind, dependency.dataset.dependencyName);
     const sidecarEnv = e.target.closest('[data-edit-sidecar-env]');
     if (sidecarEnv && !state.readOnly) return openSidecarEnvOverride(sidecarEnv.dataset.sidecarName, sidecarEnv.dataset.envName, sidecarEnv.dataset.effectiveValue);
     const sidecarResources = e.target.closest('[data-edit-sidecar-resources]');
@@ -1249,9 +1251,91 @@ function renderEffectiveAppOverview(inspected) {
   host.innerHTML = `
     <div class="overview-grid">${appFacts.join('')}</div>
     ${appMetadata ? `<div class="row g-2 mb-3">${appMetadata}</div>` : ''}
+    ${renderAppDependencyMap(inspected)}
     ${renderEffectiveContainerSection('Main containers', app.containers || [], 'main')}
     ${renderEffectiveContainerSection('Sidecars', app.sidecars || [], 'sidecar')}
     ${renderEffectiveInitContainers(app.init_containers || [])}`;
+}
+
+function renderAppDependencyMap(inspected) {
+  const app = inspected.effective || {};
+  const usage = (state.inspection?.usage || []).filter((item) => item.app_file === inspected.file_name);
+  const appUsage = uniqueDependencyUsage(usage.filter((item) => item.container === '*'));
+  const workloads = [
+    ...(app.containers || []).map((container) => ({container, role: 'main'})),
+    ...(app.sidecars || []).map((container) => ({container, role: 'sidecar'})),
+  ];
+  const appName = usage[0]?.app || state.model?.app_name || inspected.file_name.replace(/\.ya?ml$/i, '');
+  const edit = state.readOnly ? '' : '<button class="btn btn-sm btn-outline-primary" type="button" data-edit-panel="references"><i class="ti ti-pencil me-1"></i>Edit references</button>';
+  return `<div class="overview-section">
+    <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
+      <div><div class="overview-title mb-0"><i class="ti ti-hierarchy-2 me-1"></i>Dependency map</div><div class="text-muted small">Resolved links from this application to shared metamodel definitions.</div></div>
+      ${edit}
+    </div>
+    <div class="row g-2 align-items-stretch">
+      <div class="col-12 col-xl-3">
+        <div class="card card-sm h-100 border-primary">
+          <div class="card-body">
+            <div class="text-muted text-uppercase small mb-1">Application</div>
+            <div class="fw-semibold font-monospace text-break">${esc(appName)}</div>
+            <div class="mt-3"><div class="text-muted small mb-1">App-level dependencies</div>${renderDependencyNodes(appUsage, true)}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-xl-9">
+        <div class="d-flex flex-column gap-2">${workloads.map((item) => renderWorkloadDependencyRow(item.container, item.role, usage)).join('') || emptyState('ti-box', 'No workloads')}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderWorkloadDependencyRow(container, role, usage) {
+  const name = container.name || '?';
+  const matches = usage.filter((item) => item.container === name || (role === 'sidecar' && item.kind === 'sidecar_definition' && item.name === name));
+  const dependencies = uniqueDependencyUsage(matches);
+  return `<div class="card card-sm"><div class="card-body"><div class="row g-2 align-items-center">
+    <div class="col-12 col-lg-4">
+      <div class="d-flex align-items-center gap-2"><i class="ti ${role === 'sidecar' ? 'ti-box-multiple text-cyan' : 'ti-box text-blue'}"></i><div><div class="fw-semibold font-monospace text-break">${esc(name)}</div><div class="text-muted small">${esc(role === 'sidecar' ? 'Sidecar' : 'Main container')}</div></div></div>
+    </div>
+    <div class="col-12 col-lg-8"><div class="d-flex flex-wrap gap-1">${renderDependencyNodes(dependencies)}</div></div>
+  </div></div></div>`;
+}
+
+function uniqueDependencyUsage(items) {
+  const seen = new Set();
+  return (items || []).filter((item) => {
+    const key = `${item.kind}:${item.name}`;
+    if (!item.name || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((left, right) => `${left.kind}:${left.name}`.localeCompare(`${right.kind}:${right.name}`));
+}
+
+function renderDependencyNodes(items, stacked = false) {
+  if (!items.length) return '<span class="text-muted small">No shared dependencies.</span>';
+  const kinds = {
+    sidecar_definition: ['Shared sidecar', 'ti-box-multiple', 'bg-cyan-lt'],
+    container_profile: ['Profile', 'ti-template', 'bg-blue-lt'],
+    runtime_asset_definition: ['Runtime asset', 'ti-file-settings', 'bg-azure-lt'],
+    workload_identity_token: ['Token', 'ti-key', 'bg-orange-lt'],
+    shared_asset: ['Shared asset', 'ti-files', 'bg-green-lt'],
+  };
+  return items.map((item) => {
+    const [label, icon, color] = kinds[item.kind] || [item.kind, 'ti-link', 'bg-secondary-lt'];
+    const buttonClass = stacked ? 'd-block w-100 text-start mb-1' : '';
+    const badgeClass = stacked ? 'd-flex align-items-start text-start text-wrap w-100' : '';
+    return `<button class="btn btn-sm btn-ghost-secondary p-1 mw-100 ${buttonClass}" type="button" data-dependency-kind="${esc(item.kind)}" data-dependency-name="${esc(item.name)}" title="Open ${esc(label)} in Defaults"><span class="badge ${color} mw-100 ${badgeClass}"><i class="ti ${icon} me-1 flex-shrink-0"></i><span>${esc(label)}: <span class="font-monospace text-break">${esc(item.name)}</span></span></span></button>`;
+  }).join('');
+}
+
+function openDependencyDefinition(kind, name) {
+  if (!name) return;
+  setActive('defaults');
+  pushRoute({page: 'defaults'});
+  const filter = qs('#defaults-filter');
+  if (filter) filter.value = name;
+  renderDefaultsOverview();
+  window.requestAnimationFrame(() => qs('#defaults-overview')?.scrollIntoView({behavior: 'smooth', block: 'start'}));
 }
 
 function effectiveSummaryCard(title, value, icon) {

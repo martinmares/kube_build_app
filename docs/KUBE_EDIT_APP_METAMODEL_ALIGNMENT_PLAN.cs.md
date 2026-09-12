@@ -475,6 +475,22 @@ Checkpoint P4.1e 2026-09-12:
   odstrani odpovidajici blok a no-op je byte-for-byte. Repository/API testy,
   plny Go test/build a JS syntax check prosly.
 
+Checkpoint P4.2 2026-09-12:
+
+- [x] Pridat ke kazde aplikaci vizualni mapu efektivnich zavislosti bez
+  paralelniho resolveru v JavaScriptu.
+- [x] Rozlisit app-level reference, hlavni kontejnery a sidecary a zobrazit
+  jejich profily, runtime assets, workload identity tokeny a shared assets.
+- [x] Udelat uzly proklikavaci do vyfiltrovaneho katalogu Defaults a z mapy
+  zpristupnit existujici modal pro editaci explicitnich referenci aplikace.
+- [x] Rozsirit inspection usage o tranzitivni
+  `sidecar_definition -> profile/runtime asset -> token/shared asset` vazby
+  s ochranou proti cyklum a regresnim testem.
+
+Mapa pouziva pouze existujici Tabler/Bootstrap komponenty a nepridava novou
+CSS ani grafovou knihovnu. Browser smoke nad `fixtures/edit-metamodel` overil
+render i proklik profilu do presne vyfiltrovaneho Defaults katalogu.
+
 ### P5: Doplnit existujici editory na dnesni model
 
 - [ ] Probes: shared http a live/ready/start HTTP/exec/timing hodnoty,

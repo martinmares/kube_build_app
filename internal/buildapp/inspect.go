@@ -362,27 +362,51 @@ func inspectReferenceUsage(apps []InspectedApp, defaults *SourceDocument) []Refe
 }
 
 func expandReferenceUsage(base []ReferenceUsage, defaults SourceDocument) []ReferenceUsage {
-	usage := append([]ReferenceUsage(nil), base...)
-	for _, item := range base {
+	usage := []ReferenceUsage{}
+	queue := append([]ReferenceUsage(nil), base...)
+	expanded := map[string]bool{}
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+		usage = append(usage, item)
+		key := item.Kind + "\x00" + item.Name + "\x00" + item.AppFile + "\x00" + item.Container
+		if expanded[key] {
+			continue
+		}
+		expanded[key] = true
+		children := []ReferenceUsage{}
 		switch item.Kind {
 		case "runtime_asset_definition":
 			definition := namedDefinition(defaults.Model["runtime_asset_definitions"], item.Name)
 			source, _ := definition["source"].(map[string]any)
 			if len(source) == 0 {
-				source, _ = defaults.Model["runtime_asset_defaults"].(map[string]any)["source"].(map[string]any)
+				assetDefaults, _ := defaults.Model["runtime_asset_defaults"].(map[string]any)
+				source, _ = assetDefaults["source"].(map[string]any)
 			}
-			usage = appendReferenceFieldUsage(usage, item, source, "workload_identity_token_ref_name", "workload_identity_token", "runtime_asset_definitions.source")
-			usage = appendReferenceFieldUsage(usage, item, source, "ca_shared_asset_ref_name", "shared_asset", "runtime_asset_definitions.source")
+			children = appendReferenceFieldUsage(children, item, source, "workload_identity_token_ref_name", "workload_identity_token", "runtime_asset_definitions.source")
+			children = appendReferenceFieldUsage(children, item, source, "ca_shared_asset_ref_name", "shared_asset", "runtime_asset_definitions.source")
 		case "container_profile":
 			definition := namedDefinition(defaults.Model["container_profiles"], item.Name)
 			body, _ := definition["defaults"].(map[string]any)
-			usage = append(usage, inspectEnvReferenceUsage(item.Document, item.AppFile, item.App, item.Container, "container_profiles.defaults.envs", body["envs"])...)
+			children = append(children, inspectEnvReferenceUsage(item.Document, item.AppFile, item.App, item.Container, "container_profiles.defaults.envs", body["envs"])...)
 		case "sidecar_definition":
 			definition := namedDefinition(defaults.Model["sidecar_definitions"], item.Name)
-			usage = append(usage, inspectEnvReferenceUsage(item.Document, item.AppFile, item.App, item.Name, "sidecar_definitions.envs", definition["envs"])...)
+			parent := item
+			parent.Container = item.Name
+			children = appendReferenceListUsage(children, parent, definition, "profile_ref_names", "container_profile", "sidecar_definitions.profile_ref_names")
+			children = appendReferenceListUsage(children, parent, definition, "runtime_asset_ref_names", "runtime_asset_definition", "sidecar_definitions.runtime_asset_ref_names")
+			children = append(children, inspectEnvReferenceUsage(item.Document, item.AppFile, item.App, item.Name, "sidecar_definitions.envs", definition["envs"])...)
 		}
+		queue = append(queue, children...)
 	}
 	return deduplicateReferenceUsage(usage)
+}
+
+func appendReferenceListUsage(usage []ReferenceUsage, parent ReferenceUsage, values map[string]any, field, kind, yamlPath string) []ReferenceUsage {
+	for _, ref := range stringValues(values[field]) {
+		usage = append(usage, ReferenceUsage{Kind: kind, Name: ref, App: parent.App, AppFile: parent.AppFile, Container: parent.Container, Document: parent.Document, YAMLPath: yamlPath})
+	}
+	return usage
 }
 
 func appendReferenceFieldUsage(usage []ReferenceUsage, parent ReferenceUsage, values map[string]any, field, kind, yamlPath string) []ReferenceUsage {

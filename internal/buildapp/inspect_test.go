@@ -78,6 +78,41 @@ func TestInspectUsesBuilderCompositionAndPreservesSourceTemplates(t *testing.T) 
 	}
 }
 
+func TestExpandReferenceUsageFollowsSidecarDefinitionReferences(t *testing.T) {
+	defaults := SourceDocument{Model: map[string]any{
+		"sidecar_definitions": []any{map[string]any{
+			"name":                    "process-exporter",
+			"profile_ref_names":       []any{"exporter-profile"},
+			"runtime_asset_ref_names": []any{"exporter-config"},
+		}},
+		"container_profiles": []any{map[string]any{
+			"name": "exporter-profile",
+			"defaults": map[string]any{"envs": []any{map[string]any{
+				"name": "TOKEN", "workload_identity_token_ref_name": "runtime-token",
+			}}},
+		}},
+		"runtime_asset_definitions": []any{map[string]any{
+			"name":   "exporter-config",
+			"source": map[string]any{"ca_shared_asset_ref_name": "cluster-ca"},
+		}},
+	}}
+	base := []ReferenceUsage{{
+		Kind: "sidecar_definition", Name: "process-exporter", App: "api", AppFile: "api.yml", Document: "apps/api.yml",
+	}}
+
+	usage := expandReferenceUsage(base, defaults)
+	for _, expected := range []struct{ kind, name string }{
+		{"container_profile", "exporter-profile"},
+		{"runtime_asset_definition", "exporter-config"},
+		{"workload_identity_token", "runtime-token"},
+		{"shared_asset", "cluster-ca"},
+	} {
+		if !hasReferenceUsage(usage, expected.kind, expected.name, "process-exporter") {
+			t.Fatalf("missing transitive %s %q for shared sidecar: %#v", expected.kind, expected.name, usage)
+		}
+	}
+}
+
 func TestInspectDoesNotOfferResourcesOverrideWithExternalPolicy(t *testing.T) {
 	root := editMetamodelFixtureRoot(t)
 	policyRoot, err := filepath.Abs(filepath.Join("..", "..", "fixtures", "edit-metamodel", "resources"))
