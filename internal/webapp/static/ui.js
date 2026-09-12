@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, defaultsSidecarDefinition: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, defaultsSidecarDefinition: null, defaultsSidecarStartup: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -296,6 +296,8 @@ async function init() {
   });
   qs('#asset-structured')?.addEventListener('click', (e) => handleAssetStructuredClick(e));
   qs('#defaults-overview')?.addEventListener('click', async (e) => {
+    const editStartup = e.target.closest('[data-edit-sidecar-definition-startup]');
+    if (editStartup && !state.readOnly) return openDefaultsSidecarStartupEditor(editStartup.dataset.editSidecarDefinitionStartup);
     const editSidecar = e.target.closest('[data-edit-sidecar-definition]');
     if (editSidecar && !state.readOnly) return openDefaultsSidecarDefinitionEditor(editSidecar.dataset.editSidecarDefinition);
     const app = e.target.closest('[data-defaults-app]');
@@ -998,7 +1000,7 @@ function renderDefaultsCatalogItem(kind, item) {
   const summary = keys.slice(0, 7).map((key) => `<span class="badge bg-secondary-lt">${esc(key)}</span>`).join('');
   const usedBy = usages.slice(0, 6).map((usage) => `<button class="btn btn-sm btn-ghost-secondary" type="button" data-defaults-app="${esc(usage.app_file)}" title="${esc(usage.yaml_path)}"><i class="ti ti-apps me-1"></i>${esc(usage.app)}${usage.container ? ` / ${esc(usage.container)}` : ''}</button>`).join('');
   const assetLink = kind === 'shared_asset' && item.file ? `<button class="btn btn-sm btn-outline-secondary" type="button" data-defaults-asset="${esc(sharedAssetBrowserPath(item.file))}"><i class="ti ti-file me-1"></i>Open file</button>` : '';
-  const editAction = kind === 'sidecar_definition' && !state.readOnly ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition="${esc(name)}"><i class="ti ti-pencil me-1"></i>Edit image</button>` : '';
+  const editAction = kind === 'sidecar_definition' && !state.readOnly ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition="${esc(name)}"><i class="ti ti-photo me-1"></i>Edit image</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-startup="${esc(name)}"><i class="ti ti-terminal-2 me-1"></i>Edit startup</button>` : '';
   return `<div class="col-12 col-lg-6"><div class="card card-sm h-100"><div class="card-body"><div class="d-flex align-items-start justify-content-between gap-2"><div class="fw-semibold font-monospace text-break">${esc(name)}</div><span class="badge ${usages.length ? 'bg-blue-lt' : 'bg-secondary-lt'}">${usages.length} use${usages.length === 1 ? '' : 's'}</span></div><div class="d-flex flex-wrap gap-1 mt-2">${summary || '<span class="text-muted small">No additional fields.</span>'}</div>${usedBy || assetLink || editAction ? `<div class="d-flex flex-wrap gap-1 mt-3">${usedBy}${assetLink}${editAction}</div>` : ''}</div></div></div>`;
 }
 
@@ -2015,6 +2017,8 @@ function handleEditModalClick(e) {
   if (saveAppVar && !state.readOnly) return saveAppVars();
   if (e.target.closest('[data-save-references]') && !state.readOnly) return saveAppReferences();
   if (e.target.closest('[data-save-defaults-sidecar-definition]') && !state.readOnly) return saveDefaultsSidecarDefinition();
+  if (e.target.closest('[data-save-defaults-sidecar-startup]') && !state.readOnly) return saveDefaultsSidecarStartup('set');
+  if (e.target.closest('[data-remove-defaults-sidecar-startup]') && !state.readOnly) return confirmRemoveDefaultsSidecarStartup();
   const addReference = e.target.closest('[data-add-reference]');
   if (addReference && !state.readOnly) return addReferenceRow(addReference.closest('[data-reference-list]'));
   const removeReference = e.target.closest('[data-remove-reference]');
@@ -2486,6 +2490,84 @@ async function saveDefaultsSidecarDefinition() {
     state.editModalClose?.();
     state.editModalClose = null;
     state.defaultsSidecarDefinition = null;
+    await refreshRepositorySnapshot();
+    await loadInspection(true);
+  } catch (e) { showError(e); }
+}
+
+function defaultsSidecarStartupURL(name) {
+  return `/api/v1/envs/${encodeURIComponent(state.env)}/defaults/sidecar-definitions/${encodeURIComponent(name)}/startup`;
+}
+
+function renderDefaultsSidecarStartupEditor(current) {
+  const startup = current.startup || {};
+  const row = (field, label, present, values) => `<div class="mb-3">
+    <label class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" data-defaults-startup-enabled="${field}" ${present ? 'checked' : ''}><span class="form-check-label">Define ${esc(label.toLowerCase())}</span></label>
+    <textarea class="form-control font-monospace" rows="3" data-defaults-startup-value="${field}" placeholder="One item per line" ${present ? '' : 'disabled'}>${esc(startupLines(values))}</textarea>
+  </div>`;
+  const remove = current.startup ? '<button class="btn btn-outline-danger" type="button" data-remove-defaults-sidecar-startup><i class="ti ti-trash me-1"></i>Remove startup</button>' : '';
+  return `<div data-defaults-sidecar-startup-editor>
+    <div class="alert alert-info py-2"><i class="ti ti-info-circle me-2"></i>Command and arguments are whole lists. An enabled empty list is saved explicitly as [].</div>
+    ${row('command', 'Command', startup.command_present, startup.command)}
+    ${row('arguments', 'Arguments', startup.arguments_present, startup.arguments)}
+    <div class="d-flex align-items-center justify-content-between gap-2">${remove}<button class="btn btn-primary ms-auto" type="button" data-save-defaults-sidecar-startup><i class="ti ti-device-floppy me-1"></i>Save startup</button></div>
+  </div>`;
+}
+
+async function openDefaultsSidecarStartupEditor(name) {
+  if (!state.env || state.readOnly || !name) return;
+  clearError();
+  try {
+    const current = await api(defaultsSidecarStartupURL(name));
+    state.defaultsSidecarStartup = current;
+    openEditorModal(
+      `Edit sidecar startup: ${name}`,
+      'Updates only startup.command and startup.arguments in apps/_defaults.yml.',
+      renderDefaultsSidecarStartupEditor(current),
+    );
+    qsa('[data-defaults-startup-enabled]').forEach((toggle) => toggle.addEventListener('change', () => {
+      const textarea = qs(`[data-defaults-startup-value="${toggle.dataset.defaultsStartupEnabled}"]`);
+      if (textarea) textarea.disabled = !toggle.checked;
+    }));
+  } catch (e) { showError(e); }
+}
+
+function defaultsSidecarStartupValues() {
+  const list = (field) => {
+    const present = Boolean(qs(`[data-defaults-startup-enabled="${field}"]`)?.checked);
+    const raw = qs(`[data-defaults-startup-value="${field}"]`)?.value || '';
+    return {present, values: raw.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)};
+  };
+  const command = list('command');
+  const args = list('arguments');
+  return {command_present: command.present, command: command.values, arguments_present: args.present, arguments: args.values};
+}
+
+async function confirmRemoveDefaultsSidecarStartup() {
+  const current = state.defaultsSidecarStartup;
+  if (!current?.startup) return;
+  const confirmed = await confirmAction({
+    title: 'Remove shared sidecar startup?',
+    body: 'The complete startup block will be removed from this shared definition. Applications using it may change behavior.',
+    subject: current.name, confirmLabel: 'Remove startup', confirmClass: 'btn-danger', statusClass: 'bg-danger',
+  });
+  if (confirmed) await saveDefaultsSidecarStartup('remove');
+}
+
+async function saveDefaultsSidecarStartup(action) {
+  const current = state.defaultsSidecarStartup;
+  if (!state.env || state.readOnly || !current) return;
+  const startup = defaultsSidecarStartupValues();
+  if (action === 'set' && !startup.command_present && !startup.arguments_present) return showError('Define command or arguments, or remove the startup block.');
+  clearError();
+  try {
+    await apiPatch(defaultsSidecarStartupURL(current.name), {
+      expected_hash: current.content_hash,
+      startup: {action, startup},
+    });
+    state.editModalClose?.();
+    state.editModalClose = null;
+    state.defaultsSidecarStartup = null;
     await refreshRepositorySnapshot();
     await loadInspection(true);
   } catch (e) { showError(e); }

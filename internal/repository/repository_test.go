@@ -1722,3 +1722,103 @@ sidecar_definitions:
 		t.Fatalf("stale update error = %v, want conflict", err)
 	}
 }
+
+func TestUpdateDefaultsSidecarDefinitionStartupPreservesRawTemplatesAndOtherFields(t *testing.T) {
+	root := t.TempDir()
+	defaultsPath := filepath.Join(root, "dev", "apps", "_defaults.yml")
+	original := `sidecar_definitions:
+  - name: proxy
+    image: "{{env:REGISTRY_URL}}/proxy:1"
+    # startup comment
+    startup:
+      command: ["/bin/{{var:RUNNER}}"]
+      arguments:
+        - "--listen={{env:LISTEN}}"
+    envs:
+      - name: MODE
+        value: strict
+  - name: exporter
+    image: exporter:1
+`
+	writeFile(t, defaultsPath, original)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := repo.DefaultsSidecarDefinitionStartup("dev", "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Startup == nil || !current.Startup.CommandPresent || !current.Startup.ArgumentsPresent ||
+		len(current.Startup.Command) != 1 || current.Startup.Command[0] != "/bin/{{var:RUNNER}}" ||
+		len(current.Startup.Arguments) != 1 || current.Startup.Arguments[0] != "--listen={{env:LISTEN}}" {
+		t.Fatalf("unexpected raw startup: %#v", current.Startup)
+	}
+	if _, err := repo.UpdateDefaultsSidecarDefinitionStartup("dev", "proxy", DefaultsSidecarDefinitionStartupUpdate{Action: "set", Startup: *current.Startup}, current.ContentHash); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(defaultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != original {
+		t.Fatalf("no-op startup update changed source:\n%s", content)
+	}
+
+	updated, err := repo.UpdateDefaultsSidecarDefinitionStartup("dev", "proxy", DefaultsSidecarDefinitionStartupUpdate{
+		Action: "set",
+		Startup: SidecarStartupModel{
+			CommandPresent: true, Command: []string{},
+			ArgumentsPresent: true, Arguments: []string{"--config={{env:CONFIG_PATH}}"},
+		},
+	}, current.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Startup == nil || !updated.Startup.CommandPresent || len(updated.Startup.Command) != 0 || updated.Startup.Arguments[0] != "--config={{env:CONFIG_PATH}}" {
+		t.Fatalf("unexpected updated startup: %#v", updated.Startup)
+	}
+	content, err = os.ReadFile(defaultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(content)
+	for _, expected := range []string{`command: []`, `- "--config={{env:CONFIG_PATH}}"`, `image: "{{env:REGISTRY_URL}}/proxy:1"`, "value: strict", "image: exporter:1"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("updated source missing %q:\n%s", expected, got)
+		}
+	}
+
+	removed, err := repo.UpdateDefaultsSidecarDefinitionStartup("dev", "proxy", DefaultsSidecarDefinitionStartupUpdate{Action: "remove"}, updated.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.Startup != nil {
+		t.Fatalf("startup after remove = %#v", removed.Startup)
+	}
+	content, err = os.ReadFile(defaultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "startup:") || !strings.Contains(string(content), "value: strict") {
+		t.Fatalf("remove damaged source:\n%s", content)
+	}
+}
+
+func TestDefaultsSidecarDefinitionStartupRejectsUnknownFields(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), `sidecar_definitions:
+  - name: proxy
+    startup:
+      command: [proxy]
+      working_directory: /app
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DefaultsSidecarDefinitionStartup("dev", "proxy"); err == nil || !strings.Contains(err.Error(), "working_directory") {
+		t.Fatalf("unknown startup field error = %v", err)
+	}
+}

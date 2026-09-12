@@ -243,6 +243,7 @@ func TestMutatingEndpointsRequireWriteMode(t *testing.T) {
 		{http.MethodPatch, "/api/v1/envs/test/defaults/vars", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/container-envs", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter/startup", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/replicas", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/autoscaling", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/resources", `{}`},
@@ -1330,6 +1331,53 @@ func TestDefaultsSidecarDefinitionAPIUpdatesImage(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "value: java") {
 		t.Fatalf("PATCH discarded unrelated definition fields:\n%s", content)
+	}
+}
+
+func TestDefaultsSidecarDefinitionStartupAPI(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), `sidecar_definitions:
+  - name: proxy
+    image: proxy:1
+    startup:
+      command: ["{{env:PROXY_COMMAND}}"]
+`)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	path := "/api/v1/envs/dev/defaults/sidecar-definitions/proxy/startup"
+
+	get := httptest.NewRequest(http.MethodGet, path, nil)
+	getResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getResponse, get)
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getResponse.Code, getResponse.Body.String())
+	}
+	var current repository.DefaultsSidecarDefinitionStartup
+	if err := json.Unmarshal(getResponse.Body.Bytes(), &current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Startup == nil || current.Startup.Command[0] != "{{env:PROXY_COMMAND}}" {
+		t.Fatalf("GET lost raw startup template: %#v", current.Startup)
+	}
+	payload := fmt.Sprintf(`{"expected_hash":%q,"startup":{"action":"set","startup":{"command_present":true,"command":["proxy"],"arguments_present":true,"arguments":[]}}}`, current.ContentHash)
+	patch := httptest.NewRequest(http.MethodPatch, path, strings.NewReader(payload))
+	patchResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(patchResponse, patch)
+	if patchResponse.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d: %s", patchResponse.Code, patchResponse.Body.String())
+	}
+	if !strings.Contains(patchResponse.Body.String(), `"arguments_present":true`) {
+		t.Fatalf("unexpected PATCH body: %s", patchResponse.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(root, "dev", "apps", "_defaults.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "arguments: []") || !strings.Contains(string(content), "image: proxy:1") {
+		t.Fatalf("PATCH produced unexpected source:\n%s", content)
 	}
 }
 

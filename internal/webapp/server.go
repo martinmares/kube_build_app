@@ -150,6 +150,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/container-envs", s.handleDefaultsContainerEnvsUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/defaults/sidecar-definitions/{sidecar_name}", s.handleDefaultsSidecarDefinition)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/sidecar-definitions/{sidecar_name}", s.handleDefaultsSidecarDefinitionUpdate)
+	mux.HandleFunc("GET /api/v1/envs/{env}/defaults/sidecar-definitions/{sidecar_name}/startup", s.handleDefaultsSidecarDefinitionStartup)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/sidecar-definitions/{sidecar_name}/startup", s.handleDefaultsSidecarDefinitionStartupUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/replicas", s.handleAppReplicasUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/autoscaling", s.handleAppAutoscalingUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/apps/{app_file}/containers/{container_index}/resources", s.handleAppContainerResourcesUpdate)
@@ -672,6 +674,44 @@ func (s *Server) handleDefaultsSidecarDefinitionUpdate(w http.ResponseWriter, r 
 		return
 	}
 	writeJSON(w, http.StatusOK, definition)
+}
+
+func (s *Server) handleDefaultsSidecarDefinitionStartup(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	startup, err := s.repo.DefaultsSidecarDefinitionStartup(r.PathValue("env"), r.PathValue("sidecar_name"))
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, startup)
+}
+
+func (s *Server) handleDefaultsSidecarDefinitionStartupUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	var payload struct {
+		ExpectedHash string                                            `json:"expected_hash"`
+		Startup      repository.DefaultsSidecarDefinitionStartupUpdate `json:"startup"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	startup, err := s.repo.UpdateDefaultsSidecarDefinitionStartup(r.PathValue("env"), r.PathValue("sidecar_name"), payload.Startup, payload.ExpectedHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, startup)
 }
 
 func (s *Server) handleAppReplicasUpdate(w http.ResponseWriter, r *http.Request) {

@@ -428,6 +428,17 @@ Checkpoint P4.1a 2026-09-12:
   API a browser smoke overily zachovani envs/startup/resources i okolnich
   komentaru. Dalsi inkrement muze pridat startup nebo resources definice.
 
+Checkpoint P4.1b 2026-09-12:
+
+- existujici `sidecar_definitions[].startup` ma samostatny name-based
+  GET/PATCH kontrakt a Tabler modal pro `command` a `arguments`;
+- oba seznamy rozlisuji absent, explicitni `[]` a hodnoty. Raw template
+  segmenty se pri cteni presne zachovaji; interni preview marker se nepouziva;
+- no-op nemeni source, odstraneni celeho startup bloku vyzaduje potvrzeni a
+  writer zachova image, envs, resources, dalsi definice i komentare. Nezname
+  startup klice editaci blokuji. Repository/API testy a browser create/diff
+  smoke prosly.
+
 ### P5: Doplnit existujici editory na dnesni model
 
 - [ ] Probes: shared http a live/ready/start HTTP/exec/timing hodnoty,
