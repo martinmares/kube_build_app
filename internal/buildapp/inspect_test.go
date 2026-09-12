@@ -113,6 +113,37 @@ func TestExpandReferenceUsageFollowsSidecarDefinitionReferences(t *testing.T) {
 	}
 }
 
+func TestEffectiveInspectionAppExposesAdvancedConfiguration(t *testing.T) {
+	terminationGrace := 45
+	app := appModel{
+		Name: "api", Strategy: "recreate", SubdomainName: "internal",
+		SecurityContext:  map[string]any{"run_as_non_root": true},
+		TerminationGrace: &terminationGrace,
+		PodInfo:          podInfoSpec{Enabled: true, MountPath: "/etc/podinfo"},
+		DownwardAPI: downwardAPISpec{Mounts: []downwardAPIMountSpec{{
+			Name: "runtime-info", MountPath: "/etc/runtime-info",
+			Items: []downwardAPIItemSpec{{Path: "namespace", FieldPath: "metadata.namespace"}},
+		}}},
+		DeploymentRaw: map[string]any{"revisionHistoryLimit": 3},
+		PodRaw:        map[string]any{"hostNetwork": false},
+		RolloutOn: rolloutOnSpec{Checksums: map[string]rolloutChecksumSpec{
+			"configuration": {Files: []string{"assets/app.conf"}},
+		}},
+		Scheduling: schedulingSpec{Arch: "amd64", NodeSelector: map[string]any{"pool": "apps"}},
+	}
+
+	effective := effectiveInspectionApp(app, SourceDocument{}, SourceDocument{}, Options{})
+	if effective.Strategy != "recreate" || effective.SubdomainName != "internal" || effective.TerminationGracePeriod == nil || *effective.TerminationGracePeriod != 45 {
+		t.Fatalf("scalar advanced fields missing: %#v", effective)
+	}
+	if effective.SecurityContext["run_as_non_root"] != true || effective.PodInfo["mount_path"] != "/etc/podinfo" {
+		t.Fatalf("pod advanced fields missing: %#v", effective)
+	}
+	if effective.Scheduling["arch"] != "amd64" || effective.DeploymentRaw["revisionHistoryLimit"] != 3 || len(effective.DownwardAPI) == 0 || len(effective.RolloutOn) == 0 {
+		t.Fatalf("structured advanced fields missing: %#v", effective)
+	}
+}
+
 func TestInspectDoesNotOfferResourcesOverrideWithExternalPolicy(t *testing.T) {
 	root := editMetamodelFixtureRoot(t)
 	policyRoot, err := filepath.Abs(filepath.Join("..", "..", "fixtures", "edit-metamodel", "resources"))

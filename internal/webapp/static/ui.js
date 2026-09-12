@@ -263,6 +263,8 @@ async function init() {
     syncAppVarsEmptyState();
   });
   qs('#app-overview')?.addEventListener('click', (e) => {
+    const advanced = e.target.closest('[data-toggle-effective-advanced]');
+    if (advanced) return toggleEffectiveAdvanced(advanced);
     const dependency = e.target.closest('[data-dependency-kind]');
     if (dependency) return openDependencyDefinition(dependency.dataset.dependencyKind, dependency.dataset.dependencyName);
     const sidecarEnv = e.target.closest('[data-edit-sidecar-env]');
@@ -1252,6 +1254,7 @@ function renderEffectiveAppOverview(inspected) {
     <div class="overview-grid">${appFacts.join('')}</div>
     ${appMetadata ? `<div class="row g-2 mb-3">${appMetadata}</div>` : ''}
     ${renderAppDependencyMap(inspected)}
+    ${renderEffectiveAdvancedApp(inspected)}
     ${renderEffectiveContainerSection('Main containers', app.containers || [], 'main')}
     ${renderEffectiveContainerSection('Sidecars', app.sidecars || [], 'sidecar')}
     ${renderEffectiveInitContainers(app.init_containers || [])}`;
@@ -1338,6 +1341,72 @@ function openDependencyDefinition(kind, name) {
   window.requestAnimationFrame(() => qs('#defaults-overview')?.scrollIntoView({behavior: 'smooth', block: 'start'}));
 }
 
+function renderEffectiveAdvancedApp(inspected) {
+  const app = inspected.effective || {};
+  const configured = (path) => inspected.source?.fields?.[path]?.present || state.inspection?.defaults?.fields?.[path]?.present;
+  const object = (fields) => Object.fromEntries(fields.filter(([path, value]) => configured(path) && value !== undefined).map(([path, value]) => [path, value]));
+  const entries = [
+    effectiveAdvancedEntry('Deployment behavior', 'ti-adjustments', object([
+      ['strategy', app.strategy], ['subdomain_name', app.subdomain_name], ['min_available', app.min_available], ['max_unavailable', app.max_unavailable],
+      ['termination_grace_period', app.termination_grace_period], ['disable_shared_assets', app.disable_shared_assets], ['disable_create_service', app.disable_create_service],
+    ])),
+    effectiveAdvancedEntry('Metadata', 'ti-tags', object([
+      ['labels', app.labels], ['selector_labels', app.selector_labels], ['annotations', app.annotations], ['pod_annotations', app.pod_annotations],
+    ])),
+    effectiveAdvancedEntry('Pod identity and security', 'ti-shield-lock', object([
+      ['security_context', app.security_context], ['service_account', app.service_account], ['pod_info', app.pod_info], ['downward_api', app.downward_api],
+    ])),
+    effectiveAdvancedEntry('Scheduling', 'ti-affiliate', object([
+      ['arch', app.arch], ['node_selector', app.node_selector], ['tolerations', app.tolerations], ['scheduling', app.scheduling],
+    ])),
+    effectiveAdvancedEntry('Rollout triggers', 'ti-refresh', configured('rollout_on') ? app.rollout_on : null),
+    effectiveAdvancedEntry('Tools, registry and DNS', 'ti-tool', object([
+      ['tools', app.tools], ['registry', app.registry], ['dns', app.dns],
+    ])),
+    effectiveAdvancedEntry('Autoscaling raw', 'ti-arrows-maximize', configured('autoscaling.raw') ? app.autoscaling?.raw : null),
+    effectiveAdvancedEntry('Raw Kubernetes overlays', 'ti-code', object([
+      ['deployment_raw', app.deployment_raw], ['pod_raw', app.pod_raw],
+    ])),
+  ].filter(Boolean);
+  return renderEffectiveAdvancedDisclosure('Advanced application configuration', 'Scheduling, security, rollout and raw builder fields.', entries);
+}
+
+function effectiveAdvancedEntry(label, icon, value) {
+  if (!hasEffectiveValue(value)) return null;
+  return {label, icon, value};
+}
+
+function hasEffectiveValue(value) {
+  if (value === null || value === undefined || value === '') return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  return true;
+}
+
+function renderEffectiveAdvancedDisclosure(title, subtitle, entries) {
+  if (!entries.length) return '';
+  return `<div class="card card-sm mb-3" data-effective-advanced>
+    <div class="card-header p-2">
+      <button class="btn btn-sm btn-ghost-secondary w-100 d-flex align-items-center justify-content-between text-start" type="button" data-toggle-effective-advanced aria-expanded="false">
+        <span><i class="ti ti-chevron-right me-1" data-effective-advanced-icon></i><span class="fw-semibold">${esc(title)}</span><span class="text-muted ms-2 d-none d-md-inline">${esc(subtitle)}</span></span>
+        <span class="badge bg-secondary-lt">${entries.length}</span>
+      </button>
+    </div>
+    <div class="card-body hidden" data-effective-advanced-body><div class="row g-2">${entries.map((entry) => `<div class="col-12 col-xl-6"><div class="border rounded p-2 h-100"><div class="overview-subtitle"><i class="ti ${entry.icon} me-1"></i>${esc(entry.label)}</div><div class="font-monospace small text-break">${esc(compactEffectiveValue(entry.value))}</div></div></div>`).join('')}</div></div>
+  </div>`;
+}
+
+function toggleEffectiveAdvanced(button) {
+  const disclosure = button.closest('[data-effective-advanced]');
+  const body = disclosure?.querySelector('[data-effective-advanced-body]');
+  const icon = button.querySelector('[data-effective-advanced-icon]');
+  if (!body) return;
+  const expanded = body.classList.contains('hidden');
+  body.classList.toggle('hidden', !expanded);
+  button.setAttribute('aria-expanded', String(expanded));
+  if (icon) icon.className = `ti ${expanded ? 'ti-chevron-down' : 'ti-chevron-right'} me-1`;
+}
+
 function effectiveSummaryCard(title, value, icon) {
   return `<div class="col-12 col-lg-6"><div class="metric-card"><div class="overview-subtitle"><i class="ti ${icon} me-1"></i>${esc(title)}</div><div class="font-monospace small text-break">${esc(compactEffectiveValue(value))}</div></div></div>`;
 }
@@ -1369,7 +1438,19 @@ function renderEffectiveContainer(container, role) {
       <div class="col-12 col-xl-6"><div class="overview-subtitle">Runtime assets</div>${(container.runtime_asset_ref_names || []).length ? `<div class="chip-row">${container.runtime_asset_ref_names.map((name) => chip('asset', name)).join('')}</div>` : '<div class="text-muted small">No direct asset references.</div>'}</div>
     </div>
     <div class="overview-section"><div class="overview-subtitle">Environment</div>${envs.length ? `<div class="d-flex flex-column gap-1">${envs.map((entry) => renderEffectiveEnvEntry(container, entry, role)).join('')}</div>` : '<div class="text-muted small">No environment entries.</div>'}</div>
+    ${renderEffectiveContainerAdvanced(container)}
   </div>`;
+}
+
+function renderEffectiveContainerAdvanced(container) {
+  const entries = [
+    effectiveAdvancedEntry('Assets', 'ti-files', container.assets),
+    effectiveAdvancedEntry('Mounts', 'ti-folders', container.mounts),
+    effectiveAdvancedEntry('Environment sources', 'ti-database-import', container.env_from),
+    effectiveAdvancedEntry('Security context', 'ti-shield-lock', container.security_context),
+    effectiveAdvancedEntry('Raw Kubernetes overlay', 'ti-code', container.raw),
+  ].filter(Boolean);
+  return renderEffectiveAdvancedDisclosure('Advanced container configuration', 'Assets, mounts, env sources, security and raw fields.', entries);
 }
 
 function renderEffectiveResourcesAction(container, role) {
@@ -1458,7 +1539,13 @@ function pruneDisplayValue(value) {
 
 function renderEffectiveInitContainers(containers) {
   if (!containers.length) return '';
-  return `<div class="overview-section"><div class="overview-title"><i class="ti ti-player-skip-forward me-1"></i>Init containers</div><div class="runtime-list">${containers.map((container) => `<div class="runtime-row"><div class="runtime-row-main">${esc(container.name || '?')}</div><div class="runtime-row-meta">${esc(container.image || '')}</div></div>`).join('')}</div></div>`;
+  return `<div class="overview-section"><div class="overview-title"><i class="ti ti-player-skip-forward me-1"></i>Init containers</div><div class="container-stack">${containers.map(renderEffectiveInitContainer).join('')}</div></div>`;
+}
+
+function renderEffectiveInitContainer(container) {
+  const detail = Object.fromEntries(Object.entries(container || {}).filter(([key, value]) => !['name', 'image'].includes(key) && hasEffectiveValue(value)));
+  const entries = [effectiveAdvancedEntry('Resolved init configuration', 'ti-player-skip-forward', detail)].filter(Boolean);
+  return `<div class="card card-sm"><div class="card-body"><div class="d-flex align-items-start justify-content-between gap-2"><div><div class="fw-semibold font-monospace text-break">${esc(container.name || '?')}</div><div class="text-muted small font-monospace text-break">${esc(container.image || 'image not configured')}</div></div><span class="badge bg-secondary-lt">init</span></div>${renderEffectiveAdvancedDisclosure('Init container details', 'Startup, resources, mounts and security.', entries)}</div></div>`;
 }
 function renderContainerOverview(container) {
   const resources = container.resources || {};

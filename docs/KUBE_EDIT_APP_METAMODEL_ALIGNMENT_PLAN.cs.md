@@ -506,10 +506,20 @@ render i proklik profilu do presne vyfiltrovaneho Defaults katalogu.
   zachovat existujici advanced varianty, nedeklarovat nepodporovany build.
 - [ ] Image z release/profilu zobrazeno spravne; JAVA_ARGS zustava env
   retezec, automaticky jej neprevadet na runtime.java.
-- [ ] Doplnit read-only prehled ostatnich poli builderu: scheduling,
+- [x] Doplnit read-only prehled ostatnich poli builderu: scheduling,
   securityContext, mounts/assets, env_from, tools, explicit init,
   pod_info/downward_api, rollout_on, autoscaling.raw, raw escape hatches.
   Jejich kompletni nove strukturovane editory nejsou podminkou tohoto planu.
+
+Checkpoint P5.1 2026-09-12:
+
+- Effective inspection DTO zverejnuje top-level deployment chovani, metadata,
+  pod identity/security, scheduling, rollout, tools/registry/DNS a raw overlays.
+- Advanced app, container a init-container hodnoty jsou v UI pouze read-only a
+  standardne sbalene, aby nezvetsovaly bezny prehled. Blok se zobrazi jen pro
+  skutecne nakonfigurovane oblasti a pouziva pouze Tabler/Bootstrap komponenty.
+- Cileny DTO test, cela seriova Go suite, build, JS syntax a browser smoke na
+  desktopu i uzkem viewportu prosly. Fixture ani builder kontrakt se nezmenily.
 
 ### P6: Integrace, browser overeni, dokumentace
 

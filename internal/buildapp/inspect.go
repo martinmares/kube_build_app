@@ -87,20 +87,42 @@ type SourceField struct {
 }
 
 type EffectiveApp struct {
-	Name             string               `json:"name"`
-	Kind             string               `json:"kind"`
-	Replicas         int                  `json:"replicas"`
-	Ignore           bool                 `json:"ignore"`
-	Labels           map[string]any       `json:"labels,omitempty"`
-	Annotations      map[string]any       `json:"annotations,omitempty"`
-	PodAnnotations   map[string]any       `json:"pod_annotations,omitempty"`
-	WorkloadIdentity map[string]any       `json:"workload_identity,omitempty"`
-	Pod              map[string]any       `json:"pod,omitempty"`
-	Autoscaling      map[string]any       `json:"autoscaling,omitempty"`
-	RuntimeAssets    []map[string]any     `json:"runtime_assets,omitempty"`
-	Containers       []EffectiveContainer `json:"containers"`
-	Sidecars         []EffectiveContainer `json:"sidecars"`
-	InitContainers   []map[string]any     `json:"init_containers,omitempty"`
+	Name                   string               `json:"name"`
+	Kind                   string               `json:"kind"`
+	Replicas               int                  `json:"replicas"`
+	Ignore                 bool                 `json:"ignore"`
+	DisableSharedAssets    bool                 `json:"disable_shared_assets,omitempty"`
+	DisableCreateService   bool                 `json:"disable_create_service,omitempty"`
+	Strategy               string               `json:"strategy,omitempty"`
+	SubdomainName          string               `json:"subdomain_name,omitempty"`
+	MinAvailable           any                  `json:"min_available,omitempty"`
+	MaxUnavailable         any                  `json:"max_unavailable,omitempty"`
+	Labels                 map[string]any       `json:"labels,omitempty"`
+	SelectorLabels         map[string]any       `json:"selector_labels,omitempty"`
+	Annotations            map[string]any       `json:"annotations,omitempty"`
+	PodAnnotations         map[string]any       `json:"pod_annotations,omitempty"`
+	SecurityContext        map[string]any       `json:"security_context,omitempty"`
+	TerminationGracePeriod *int                 `json:"termination_grace_period,omitempty"`
+	ServiceAccount         string               `json:"service_account,omitempty"`
+	WorkloadIdentity       map[string]any       `json:"workload_identity,omitempty"`
+	PodInfo                map[string]any       `json:"pod_info,omitempty"`
+	DownwardAPI            map[string]any       `json:"downward_api,omitempty"`
+	Pod                    map[string]any       `json:"pod,omitempty"`
+	DeploymentRaw          map[string]any       `json:"deployment_raw,omitempty"`
+	PodRaw                 map[string]any       `json:"pod_raw,omitempty"`
+	Autoscaling            map[string]any       `json:"autoscaling,omitempty"`
+	RolloutOn              map[string]any       `json:"rollout_on,omitempty"`
+	RuntimeAssets          []map[string]any     `json:"runtime_assets,omitempty"`
+	Tools                  []map[string]any     `json:"tools,omitempty"`
+	Registry               []map[string]any     `json:"registry,omitempty"`
+	DNS                    []map[string]any     `json:"dns,omitempty"`
+	Arch                   string               `json:"arch,omitempty"`
+	NodeSelector           map[string]any       `json:"node_selector,omitempty"`
+	Tolerations            []any                `json:"tolerations,omitempty"`
+	Scheduling             map[string]any       `json:"scheduling,omitempty"`
+	Containers             []EffectiveContainer `json:"containers"`
+	Sidecars               []EffectiveContainer `json:"sidecars"`
+	InitContainers         []map[string]any     `json:"init_containers,omitempty"`
 }
 
 type EffectiveContainer struct {
@@ -579,10 +601,20 @@ func restoreTemplateValues(value any, templates map[string]string) any {
 func effectiveInspectionApp(app appModel, source, defaults SourceDocument, opts Options) *EffectiveApp {
 	result := &EffectiveApp{
 		Name: app.Name, Kind: app.Kind, Replicas: app.Replicas, Ignore: app.Ignore,
-		Labels: app.Labels, Annotations: app.Annotations, PodAnnotations: app.PodAnnotations,
-		WorkloadIdentity: genericYAMLMap(app.WorkloadIdentity), Pod: genericYAMLMap(app.Pod),
-		Autoscaling: genericYAMLMap(app.Autoscaling), RuntimeAssets: genericYAMLList(app.RuntimeAssets),
-		InitContainers: genericYAMLList(app.InitContainers),
+		DisableSharedAssets: app.DisableSharedAssets, DisableCreateService: app.DisableCreateService,
+		Strategy: app.Strategy, SubdomainName: app.SubdomainName,
+		MinAvailable: app.MinAvailable, MaxUnavailable: app.MaxUnavailable,
+		Labels: app.Labels, SelectorLabels: app.SelectorLabels,
+		Annotations: app.Annotations, PodAnnotations: app.PodAnnotations,
+		SecurityContext: app.SecurityContext, TerminationGracePeriod: app.TerminationGrace,
+		ServiceAccount: app.ServiceAccount, WorkloadIdentity: genericYAMLMap(app.WorkloadIdentity),
+		PodInfo: genericYAMLMap(app.PodInfo), DownwardAPI: genericYAMLMap(app.DownwardAPI),
+		Pod: genericYAMLMap(app.Pod), DeploymentRaw: app.DeploymentRaw, PodRaw: app.PodRaw,
+		Autoscaling: genericYAMLMap(app.Autoscaling), RolloutOn: genericYAMLMap(app.RolloutOn),
+		RuntimeAssets: genericYAMLList(app.RuntimeAssets), Tools: genericYAMLList(app.Tools),
+		Registry: genericYAMLList(app.Registry), DNS: genericYAMLList(app.DNS),
+		Arch: app.Arch, NodeSelector: app.NodeSelector, Tolerations: app.Tolerations,
+		Scheduling: genericYAMLMap(app.Scheduling), InitContainers: genericYAMLList(app.InitContainers),
 	}
 	for index, container := range app.Containers {
 		effective := effectiveInspectionContainer(container)
