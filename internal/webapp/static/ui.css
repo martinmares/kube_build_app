@@ -117,6 +117,7 @@ td > .validation-feedback { white-space: normal; min-width: 12rem; }
 .special-entry-action-btn:hover, .special-entry-action-btn:focus { background: color-mix(in srgb, var(--tblr-primary) 14%, transparent); color: var(--tblr-primary); }
 .special-entry-action-btn.btn-ghost-danger:hover, .special-entry-action-btn.btn-ghost-danger:focus { background: color-mix(in srgb, var(--tblr-danger) 14%, transparent); color: var(--tblr-danger); }
 .dependency-link { cursor: pointer; box-shadow: none; }
+.dependency-link:hover, .dependency-link:focus { background-color: color-mix(in srgb, currentColor 22%, transparent) !important; }
 .dependency-link:focus-visible { outline: 2px solid var(--tblr-primary); outline-offset: 2px; }
 .special-entry-preview-value { max-height: 7.5rem; overflow: auto; padding: .65rem .75rem; border-radius: 6px; background: color-mix(in srgb, var(--tblr-bg-surface) 82%, #000 18%); color: var(--tblr-body-color); font-size: .9rem; font-weight: 600; line-height: 1.42; white-space: pre-wrap; overflow-wrap: anywhere; }
 .special-entry-editor-list { max-height: 62vh; overflow: auto; border: 1px solid color-mix(in srgb, var(--tblr-border-color) 72%, transparent); border-radius: 8px; }
