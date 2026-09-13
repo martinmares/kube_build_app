@@ -29,3 +29,17 @@ containers:
     envs:
       - name: JAVA_ARGS
         value: -Xms256m -Xmx512m
+      - name: API_SECRET
+        secret_name: java-api-secret
+        key: token
+      - name: CPU_REQUEST
+        resource_name: requests.cpu
+        divisor: 1m
+      - name: POD_NAME
+        field_path: metadata.name
+      - name: TOKEN_FILE
+        workload_identity_token_ref_name: runtime-config
+      - name: CA_FILE
+        shared_asset_ref_name: test-ca
+      - name: DEFAULT_MODE
+        remove: true

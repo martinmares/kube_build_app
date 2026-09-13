@@ -2247,6 +2247,7 @@ function openEditPanel(panel, index) {
     title,
     subtitle,
     body,
+    wide: panel === 'container-envs',
     onClosed: () => { state.editModalClose = null; },
   });
   syncAutoscalingEditor();
@@ -2692,6 +2693,8 @@ function handleEditModalInput(e) {
   }
   const sidecarEnvKind = e.target.closest('[data-defaults-sidecar-env-kind]');
   if (sidecarEnvKind) syncDefaultsSidecarEnvRow(sidecarEnvKind.closest('[data-defaults-sidecar-env-row]'));
+  const containerEnvKind = e.target.closest('[data-container-env-kind]');
+  if (containerEnvKind) syncContainerEnvRow(containerEnvKind.closest('[data-container-env-row]'));
   const filter = e.target.closest('[data-special-entry-filter]');
   if (filter) filterSpecialEntryRows(filter.value || '');
   const compactValue = e.target.closest('.special-entry-value-input');
@@ -3763,40 +3766,59 @@ function validatePortValue(input, label) {
 }
 function renderContainerEnvsEditor(index, vars) {
   if (state.readOnly) return '';
-  const disabled = state.readOnly ? 'disabled' : '';
   const rows = (vars || []).map((item) => renderContainerEnvRow(index, item)).join('');
   return `
     <div class="container-env-editor mt-3" data-container-env-editor="${index}">
       <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
         <div class="overview-subtitle mb-0">Container envs</div>
-        <button class="btn btn-sm btn-outline-primary" type="button" data-add-container-env="${index}" ${disabled}><i class="ti ti-plus me-1"></i>Add env</button>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-add-container-env="${index}"><i class="ti ti-plus me-1"></i>Add env</button>
       </div>
       <div class="table-responsive">
-        <table class="table table-sm align-middle mb-0 container-env-table">
+        <table class="table table-sm table-vcenter mb-0 container-env-table">
+          <thead><tr><th style="width: 24%">Name</th><th style="width: 22%">Type</th><th>Configuration</th><th class="text-end">Action</th></tr></thead>
           <tbody data-container-env-body="${index}">
             ${rows || renderContainerEnvsEmpty(index)}
           </tbody>
         </table>
       </div>
       <div class="d-flex align-items-center justify-content-between gap-2 mt-2">
-        <div class="text-muted small">Edits name/value environment entries. valueFrom entries are preserved read-only.</div>
-        <button class="btn btn-sm btn-primary" type="button" data-save-container-envs="${index}" ${disabled}><i class="ti ti-device-floppy me-1"></i>Save envs</button>
+        <div class="text-muted small">Builder env sources are editable. Raw Kubernetes valueFrom and unknown entries remain read-only.</div>
+        <button class="btn btn-sm btn-primary" type="button" data-save-container-envs="${index}"><i class="ti ti-device-floppy me-1"></i>Save envs</button>
       </div>
+      <datalist id="container-env-token-names">${(state.model?.workload_identity_token_ref_names || []).map((name) => `<option value="${esc(name)}"></option>`).join('')}</datalist>
+      <datalist id="container-env-asset-names">${(state.model?.shared_asset_ref_names || []).map((name) => `<option value="${esc(name)}"></option>`).join('')}</datalist>
     </div>`;
 }
-function renderContainerEnvRow(index, item = {}) {
+function renderContainerEnvConfig(item, editable) {
+  if (!editable) return `<div class="form-control form-control-sm font-monospace text-muted" aria-readonly="true">${esc(envVarReadOnlyValue(item))}</div>`;
+  const field = (kind, name, placeholder, value) => {
+    const list = kind === 'workload_identity_token' ? ' list="container-env-token-names"' : kind === 'shared_asset' ? ' list="container-env-asset-names"' : '';
+    return `<div data-container-env-config="${kind}" class="${item.kind === kind ? '' : 'd-none'}"><input class="form-control form-control-sm font-monospace" data-container-env-config-field="${name}" value="${esc(value || '')}" placeholder="${esc(placeholder)}" autocomplete="off"${list}></div>`;
+  };
+  const pair = (kind, fields) => `<div data-container-env-config="${kind}" class="${item.kind === kind ? '' : 'd-none'}"><div class="row g-1">${fields.map(([name, placeholder, value]) => `<div class="col"><input class="form-control form-control-sm font-monospace" data-container-env-config-field="${name}" value="${esc(value || '')}" placeholder="${esc(placeholder)}" autocomplete="off"></div>`).join('')}</div></div>`;
+  return `${field('value', 'value', 'Value', item.value)}
+    ${pair('secret', [['secret_name', 'Secret name', item.secret_name], ['key', 'Key', item.key]])}
+    ${pair('resource', [['resource_name', 'requests.cpu', item.resource_name], ['divisor', 'Divisor (optional)', item.divisor]])}
+    ${field('field', 'field_path', 'metadata.name', item.field_path)}
+    ${field('workload_identity_token', 'workload_identity_token_ref_name', 'Token definition name', item.workload_identity_token_ref_name)}
+    ${field('shared_asset', 'shared_asset_ref_name', 'Shared asset name', item.shared_asset_ref_name)}
+    <div data-container-env-config="remove" class="${item.kind === 'remove' ? '' : 'd-none'}"><span class="text-muted small">Removes an inherited variable with this name.</span></div>`;
+}
+function renderContainerEnvRow(index, item = {kind: 'value', index: -1, is_value_editable: true}) {
   const editable = item.is_value_editable !== false;
-  const disabled = state.readOnly || !editable ? 'disabled' : '';
-  const valueText = editable ? (item.value || '') : envVarReadOnlyValue(item);
   const kind = item.kind || 'value';
+  const sourceIndex = Number.isInteger(item.index) ? item.index : -1;
+  const kindControl = editable
+    ? `<select class="form-select form-select-sm" data-container-env-kind>${defaultsSidecarEnvKinds.map(([value, label]) => `<option value="${value}" ${value === kind ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>`
+    : `<span class="badge bg-secondary-lt">${esc(kind === 'kubernetes_value_from' ? 'Raw valueFrom' : 'Unsupported')}</span>`;
   const remove = editable
-    ? `<button class="btn btn-sm btn-outline-danger btn-icon" type="button" data-remove-container-env="${index}" title="Remove env" ${state.readOnly ? 'disabled' : ''}><i class="ti ti-trash"></i></button>`
+    ? `<button class="btn btn-sm btn-ghost-danger btn-icon" type="button" data-remove-container-env="${index}" title="Remove env"><i class="ti ti-trash"></i></button>`
     : `<span class="badge bg-secondary-lt">read-only</span>`;
   return `
-    <tr data-container-env-row="${index}" data-env-editable="${editable ? 'true' : 'false'}">
-      <td><input class="form-control form-control-sm font-monospace" data-container-env-field="${index}:name" placeholder="NAME" value="${esc(item.name || '')}" ${disabled}></td>
-      <td><input class="form-control form-control-sm font-monospace" data-container-env-field="${index}:value" placeholder="value" value="${esc(valueText)}" ${disabled}></td>
-      <td class="text-nowrap"><span class="badge ${editable ? 'bg-blue-lt' : 'bg-secondary-lt'}">${esc(kind)}</span></td>
+    <tr data-container-env-row="${index}" data-env-editable="${editable ? 'true' : 'false'}" data-source-index="${sourceIndex}">
+      <td><input class="form-control form-control-sm font-monospace" data-container-env-name placeholder="VARIABLE_NAME" value="${esc(item.name || '')}" ${editable ? '' : 'disabled'}></td>
+      <td>${kindControl}</td>
+      <td>${renderContainerEnvConfig({...item, kind}, editable)}</td>
       <td class="table-action-col">${remove}</td>
     </tr>`;
 }
@@ -3824,17 +3846,62 @@ function addContainerEnvRow(index) {
   if (!body) return;
   body.querySelector(`[data-container-env-empty="${index}"]`)?.remove();
   body.insertAdjacentHTML('beforeend', renderContainerEnvRow(index));
-  qsa(`[data-container-env-row="${index}"]`).at(-1)?.querySelector(`[data-container-env-field="${index}:name"]`)?.focus();
+  qsa(`[data-container-env-row="${index}"]`).at(-1)?.querySelector('[data-container-env-name]')?.focus();
+}
+function syncContainerEnvRow(row) {
+  if (!row) return;
+  const kind = row.querySelector('[data-container-env-kind]')?.value || 'value';
+  row.querySelectorAll('[data-container-env-config]').forEach((config) => config.classList.toggle('d-none', config.dataset.containerEnvConfig !== kind));
+}
+function containerEnvValues(index) {
+  const field = (row, name) => row.querySelector(`[data-container-env-config-field="${name}"]`)?.value || '';
+  return qsa(`[data-container-env-row="${index}"]`).map((row) => {
+    const sourceIndex = Number(row.dataset.sourceIndex);
+    if (row.dataset.envEditable !== 'true') return {source_index: sourceIndex, name: row.querySelector('[data-container-env-name]')?.value || '', kind: 'preserve'};
+    const item = {source_index: sourceIndex, name: row.querySelector('[data-container-env-name]')?.value?.trim() || '', kind: row.querySelector('[data-container-env-kind]')?.value || 'value'};
+    if (item.kind === 'value') item.value = field(row, 'value');
+    if (item.kind === 'secret') Object.assign(item, {secret_name: field(row, 'secret_name').trim(), key: field(row, 'key').trim()});
+    if (item.kind === 'resource') Object.assign(item, {resource_name: field(row, 'resource_name').trim(), divisor: field(row, 'divisor').trim()});
+    if (item.kind === 'field') item.field_path = field(row, 'field_path').trim();
+    if (item.kind === 'workload_identity_token') item.workload_identity_token_ref_name = field(row, 'workload_identity_token_ref_name').trim();
+    if (item.kind === 'shared_asset') item.shared_asset_ref_name = field(row, 'shared_asset_ref_name').trim();
+    return item;
+  });
+}
+function validateContainerEnvsForm(index, items) {
+  clearInvalidInputs(`[data-container-env-editor="${index}"]`);
+  const rows = qsa(`[data-container-env-row="${index}"]`);
+  const seen = new Set();
+  for (let position = 0; position < items.length; position++) {
+    const item = items[position];
+    const row = rows[position];
+    const nameInput = row?.querySelector('[data-container-env-name]');
+    if (!variableNameRe.test(item.name)) return invalidInput(nameInput, `Variable ${position + 1} needs a valid name.`);
+    if (seen.has(item.name)) return invalidInput(nameInput, `Variable name ${item.name} is duplicated.`);
+    seen.add(item.name);
+    if (item.kind === 'preserve') continue;
+    const required = (name, message) => {
+      const input = row?.querySelector(`[data-container-env-config-field="${name}"]`);
+      return input?.value?.trim() ? null : invalidInput(input, message);
+    };
+    let invalid = null;
+    if (item.kind === 'secret') invalid = required('secret_name', 'Secret name is required.') || required('key', 'Secret key is required.');
+    if (item.kind === 'resource') invalid = required('resource_name', 'Resource name is required.');
+    if (item.kind === 'field') invalid = required('field_path', 'Field path is required.');
+    if (item.kind === 'workload_identity_token') invalid = required('workload_identity_token_ref_name', 'Token definition name is required.');
+    if (item.kind === 'shared_asset') invalid = required('shared_asset_ref_name', 'Shared asset name is required.');
+    if (invalid) return invalid;
+    if (item.kind === 'workload_identity_token' && !(state.model?.workload_identity_token_ref_names || []).includes(item.workload_identity_token_ref_name)) return invalidInput(row?.querySelector('[data-container-env-config-field="workload_identity_token_ref_name"]'), `Unknown token definition ${item.workload_identity_token_ref_name}.`);
+    if (item.kind === 'shared_asset' && !(state.model?.shared_asset_ref_names || []).includes(item.shared_asset_ref_name)) return invalidInput(row?.querySelector('[data-container-env-config-field="shared_asset_ref_name"]'), `Unknown shared asset ${item.shared_asset_ref_name}.`);
+  }
+  return {ok: true};
 }
 async function saveContainerEnvs(index) {
   if (!state.env || !state.appFile || state.readOnly || !Number.isInteger(index)) return;
   clearError();
-  const validation = validateNamedRows(qs(`[data-container-env-body="${index}"]`), `[data-container-env-field="${index}:name"]`, 'Environment variable name');
+  const items = containerEnvValues(index);
+  const validation = validateContainerEnvsForm(index, items);
   if (!validation.ok) return showError(validation.message);
-  const items = qsa(`[data-container-env-row="${index}"][data-env-editable="true"]`).map((row) => ({
-    name: row.querySelector(`[data-container-env-field="${index}:name"]`)?.value?.trim() || '',
-    value: row.querySelector(`[data-container-env-field="${index}:value"]`)?.value || '',
-  })).filter((item) => item.name !== '');
   try {
     await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/apps/${encodeURIComponent(state.appFile)}/containers/${index}/envs`, {items, expected_hash: state.appContentHash});
     state.editModalClose?.();

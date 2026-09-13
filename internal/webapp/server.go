@@ -929,8 +929,8 @@ func (s *Server) handleAppContainerEnvsUpdate(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var payload struct {
-		ExpectedHash string               `json:"expected_hash"`
-		Items        []repository.VarItem `json:"items"`
+		ExpectedHash string                          `json:"expected_hash"`
+		Items        []repository.ContainerEnvUpdate `json:"items"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

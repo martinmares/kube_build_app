@@ -624,6 +624,8 @@ func TestAppContainerEnvsUpdateEndpoint(t *testing.T) {
 	root := t.TempDir()
 	appPath := filepath.Join(root, "test", "apps", "api.yml")
 	writeFile(t, appPath, "name: api\ncontainers:\n  - name: api\n")
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), "workload_identity:\n  tokens:\n    - name: runtime-config\n      audience: config.example.test\n")
+	writeFile(t, filepath.Join(root, "test", "shared.assets.yml"), "assets:\n  - name: test-ca\n    file: ca.pem\n    to: /etc/ssl/test-ca.pem\n")
 	repo, err := repository.New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -634,14 +636,14 @@ func TestAppContainerEnvsUpdateEndpoint(t *testing.T) {
 	}
 
 	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
-	body := `{"expected_hash":"` + detail.ContentHash + `","items":[{"name":"MODE","value":"api"},{"name":"PORT","value":"8080"}]}`
+	body := `{"expected_hash":"` + detail.ContentHash + `","items":[{"source_index":-1,"name":"MODE","kind":"value","value":"api"},{"source_index":-1,"name":"SECRET","kind":"secret","secret_name":"api-secret","key":"token"},{"source_index":-1,"name":"TOKEN_FILE","kind":"workload_identity_token","workload_identity_token_ref_name":"runtime-config"},{"source_index":-1,"name":"CA_FILE","kind":"shared_asset","shared_asset_ref_name":"test-ca"}]}`
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/envs/test/apps/api.yml/containers/0/envs", strings.NewReader(body))
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"name":"MODE"`) || !strings.Contains(response.Body.String(), `"value":"8080"`) {
+	if !strings.Contains(response.Body.String(), `"name":"MODE"`) || !strings.Contains(response.Body.String(), `"kind":"secret"`) || !strings.Contains(response.Body.String(), `"workload_identity_token_ref_names":["runtime-config"]`) || !strings.Contains(response.Body.String(), `"shared_asset_ref_names":["test-ca"]`) {
 		t.Fatalf("unexpected response:\n%s", response.Body.String())
 	}
 }

@@ -1,9 +1,11 @@
 package repository
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -320,7 +322,7 @@ containers:
 	if container.EnvFromCount != 1 || container.MountsCount != 1 {
 		t.Fatalf("unexpected env_from/mounts count: env_from=%d mounts=%d", container.EnvFromCount, container.MountsCount)
 	}
-	if len(container.Envs) != 2 || container.Envs[1].Kind != "secret" || container.Envs[1].SecretName == nil || *container.Envs[1].SecretName != "app-secret" {
+	if len(container.Envs) != 2 || container.Envs[1].Kind != "kubernetes_value_from" || container.Envs[1].Value == nil || !contains(*container.Envs[1].Value, "app-secret") {
 		t.Fatalf("unexpected envs model: %#v", container.Envs)
 	}
 	if len(container.Ports) != 1 || len(container.Ports[0].ExposeAs) != 1 || !container.Ports[0].ExposeAs[0].IngressEnabled {
@@ -681,7 +683,10 @@ containers:
 		t.Fatal(err)
 	}
 
-	result, err := repo.UpdateAppContainerEnvs("test", "api.yml", 1, []VarItem{{Name: "MODE", Value: "new"}, {Name: "QUEUE", Value: "critical"}}, "")
+	result, err := repo.UpdateAppContainerEnvs("test", "api.yml", 1, []ContainerEnvUpdate{
+		{SourceIndex: 0, Name: "MODE", Kind: "value", Value: "new"},
+		{SourceIndex: -1, Name: "QUEUE", Kind: "value", Value: "critical"},
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -695,7 +700,7 @@ containers:
 	if !contains(detail.Content, "API_ONLY") {
 		t.Fatalf("first container env was changed unexpectedly:\n%s", detail.Content)
 	}
-	if !contains(detail.Content, "  - name: worker\n    envs:\n      - name: MODE\n        value: \"new\"\n      - name: QUEUE\n        value: \"critical\"\n    image: worker:1") {
+	if !contains(detail.Content, "  - name: worker\n    envs:\n      - name: MODE\n        value: new\n      - name: QUEUE\n        value: critical\n    image: worker:1") {
 		t.Fatalf("worker envs not updated in place:\n%s", detail.Content)
 	}
 }
@@ -719,18 +724,21 @@ containers:
 		t.Fatal(err)
 	}
 
-	result, err := repo.UpdateAppContainerEnvs("test", "api.yml", 0, []VarItem{{Name: "PLAIN", Value: "new"}}, "")
+	result, err := repo.UpdateAppContainerEnvs("test", "api.yml", 0, []ContainerEnvUpdate{
+		{SourceIndex: 0, Name: "PLAIN", Kind: "value", Value: "new"},
+		{SourceIndex: 1, Name: "SECRET_TOKEN", Kind: "preserve"},
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Envs) != 2 || result.Envs[1].Kind != "secret" {
-		t.Fatalf("envs = %#v, want preserved secret", result.Envs)
+	if len(result.Envs) != 2 || result.Envs[1].Kind != "kubernetes_value_from" {
+		t.Fatalf("envs = %#v, want preserved raw valueFrom", result.Envs)
 	}
 	detail, err := repo.AppDetail("test", "api.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(detail.Content, `value: "new"`) || !contains(detail.Content, "valueFrom:") || !contains(detail.Content, "name: api-secret") {
+	if !contains(detail.Content, `value: new`) || !contains(detail.Content, "valueFrom:") || !contains(detail.Content, "name: api-secret") {
 		t.Fatalf("valueFrom variable was not preserved:\n%s", detail.Content)
 	}
 }
@@ -762,14 +770,145 @@ containers:
 	if len(envs) != 4 || envs[0].Value == nil || *envs[0].Value != "" || !envs[0].IsValueEditable {
 		t.Fatalf("empty value was not preserved: %#v", envs)
 	}
-	if envs[1].Kind != "workload_identity_token" || envs[1].WorkloadIdentityTokenRefName == nil || *envs[1].WorkloadIdentityTokenRefName != "runtime-config" || envs[1].IsValueEditable {
+	if envs[1].Kind != "workload_identity_token" || envs[1].WorkloadIdentityTokenRefName == nil || *envs[1].WorkloadIdentityTokenRefName != "runtime-config" || !envs[1].IsValueEditable {
 		t.Fatalf("token reference was not preserved: %#v", envs[1])
 	}
-	if envs[2].Kind != "shared_asset" || envs[2].SharedAssetRefName == nil || *envs[2].SharedAssetRefName != "test-ca" || envs[2].IsValueEditable {
+	if envs[2].Kind != "shared_asset" || envs[2].SharedAssetRefName == nil || *envs[2].SharedAssetRefName != "test-ca" || !envs[2].IsValueEditable {
 		t.Fatalf("shared asset reference was not preserved: %#v", envs[2])
 	}
-	if envs[3].Kind != "remove" || !envs[3].Remove || envs[3].IsValueEditable {
+	if envs[3].Kind != "remove" || !envs[3].Remove || !envs[3].IsValueEditable {
 		t.Fatalf("remove env was not preserved: %#v", envs[3])
+	}
+}
+
+func TestUpdateAppContainerEnvsSupportsBuilderSourcesAndPreservesRawEntries(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), `workload_identity:
+  tokens:
+    - name: runtime-config
+      audience: config.example.test
+`)
+	writeFile(t, filepath.Join(root, "test", "shared.assets.yml"), `assets:
+  - name: test-ca
+    file: ca.pem
+    to: /etc/ssl/test-ca.pem
+`)
+	appPath := filepath.Join(root, "test", "apps", "api.yml")
+	writeFile(t, appPath, `name: api
+containers:
+  - name: api
+    envs:
+      - name: PLAIN
+        value: "old"
+      - name: SECRET
+        secret_name: api-secret
+        key: token
+      - name: CPU_REQUEST
+        resource_name: requests.cpu
+        divisor: 1m
+      - name: POD_NAME
+        field_path: metadata.name
+      - name: TOKEN_FILE
+        workload_identity_token_ref_name: runtime-config
+      - name: CA_FILE
+        shared_asset_ref_name: test-ca
+      - name: INHERITED
+        remove: true
+      - name: RAW_SECRET
+        valueFrom:
+          secretKeyRef:
+            name: raw-secret
+            key: password
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := repo.AppModel("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	envs := model.Containers[0].Envs
+	wantKinds := []string{"value", "secret", "resource", "field", "workload_identity_token", "shared_asset", "remove", "kubernetes_value_from"}
+	if len(envs) != len(wantKinds) {
+		t.Fatalf("envs = %#v", envs)
+	}
+	for index, kind := range wantKinds {
+		if envs[index].Kind != kind {
+			t.Fatalf("envs[%d].kind = %q, want %q", index, envs[index].Kind, kind)
+		}
+	}
+	if !envs[1].IsValueEditable || envs[7].IsValueEditable {
+		t.Fatalf("builder/raw editability mismatch: %#v", envs)
+	}
+	if !reflect.DeepEqual(model.WorkloadIdentityTokenRefNames, []string{"runtime-config"}) || !reflect.DeepEqual(model.SharedAssetRefNames, []string{"test-ca"}) {
+		t.Fatalf("reference catalogs missing: tokens=%v assets=%v", model.WorkloadIdentityTokenRefNames, model.SharedAssetRefNames)
+	}
+
+	updates := []ContainerEnvUpdate{
+		{SourceIndex: 0, Name: "PLAIN", Kind: "value", Value: "old"},
+		{SourceIndex: 1, Name: "SECRET", Kind: "secret", SecretName: "api-secret", Key: "token"},
+		{SourceIndex: 2, Name: "CPU_REQUEST", Kind: "resource", ResourceName: "requests.cpu", Divisor: "1m"},
+		{SourceIndex: 3, Name: "POD_NAME", Kind: "field", FieldPath: "metadata.name"},
+		{SourceIndex: 4, Name: "TOKEN_FILE", Kind: "workload_identity_token", WorkloadIdentityTokenRefName: "runtime-config"},
+		{SourceIndex: 5, Name: "CA_FILE", Kind: "shared_asset", SharedAssetRefName: "test-ca"},
+		{SourceIndex: 6, Name: "INHERITED", Kind: "remove"},
+		{SourceIndex: 7, Name: "RAW_SECRET", Kind: "preserve"},
+	}
+	original, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateAppContainerEnvs("test", "api.yml", 0, updates, ""); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(original, unchanged) {
+		t.Fatalf("no-op env save changed source:\n%s", unchanged)
+	}
+
+	updates[1].Key = "credential"
+	if _, err := repo.UpdateAppContainerEnvs("test", "api.yml", 0, updates, ""); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(changed)
+	if !contains(text, "key: credential") || !contains(text, "valueFrom:") || !contains(text, "name: raw-secret") {
+		t.Fatalf("builder update lost raw env entry:\n%s", text)
+	}
+	if strings.Index(text, "name: SECRET") > strings.Index(text, "name: RAW_SECRET") {
+		t.Fatalf("environment entry order changed:\n%s", text)
+	}
+}
+
+func TestUpdateAppContainerEnvsRejectsMissingPreservedEntryAndUnknownReference(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    envs:
+      - name: RAW
+        valueFrom:
+          fieldRef: {fieldPath: metadata.name}
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateAppContainerEnvs("test", "api.yml", 0, nil, ""); err == nil || !contains(err.Error(), "preserve every read-only") {
+		t.Fatalf("missing preserve error = %v", err)
+	}
+	if _, err := repo.UpdateAppContainerEnvs("test", "api.yml", 0, []ContainerEnvUpdate{
+		{SourceIndex: 0, Name: "RAW", Kind: "preserve"},
+		{SourceIndex: -1, Name: "TOKEN", Kind: "workload_identity_token", WorkloadIdentityTokenRefName: "missing"},
+	}, ""); err == nil || !contains(err.Error(), "unknown workload identity token") {
+		t.Fatalf("unknown token error = %v", err)
 	}
 }
 

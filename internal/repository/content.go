@@ -71,11 +71,27 @@ type AppContainerResources struct {
 }
 
 type AppContainerEnvs struct {
-	Env            string        `json:"env"`
-	FileName       string        `json:"file_name"`
-	ContentHash    string        `json:"content_hash"`
-	ContainerIndex int           `json:"container_index"`
-	Envs           []EnvVarModel `json:"envs"`
+	Env                           string        `json:"env"`
+	FileName                      string        `json:"file_name"`
+	ContentHash                   string        `json:"content_hash"`
+	ContainerIndex                int           `json:"container_index"`
+	Envs                          []EnvVarModel `json:"envs"`
+	WorkloadIdentityTokenRefNames []string      `json:"workload_identity_token_ref_names"`
+	SharedAssetRefNames           []string      `json:"shared_asset_ref_names"`
+}
+
+type ContainerEnvUpdate struct {
+	SourceIndex                  int    `json:"source_index"`
+	Name                         string `json:"name"`
+	Kind                         string `json:"kind"`
+	Value                        string `json:"value,omitempty"`
+	SecretName                   string `json:"secret_name,omitempty"`
+	Key                          string `json:"key,omitempty"`
+	ResourceName                 string `json:"resource_name,omitempty"`
+	Divisor                      string `json:"divisor,omitempty"`
+	FieldPath                    string `json:"field_path,omitempty"`
+	WorkloadIdentityTokenRefName string `json:"workload_identity_token_ref_name,omitempty"`
+	SharedAssetRefName           string `json:"shared_asset_ref_name,omitempty"`
 }
 
 type AppContainerProbes struct {
@@ -231,17 +247,19 @@ type ContainerEnvGroupUpdate struct {
 }
 
 type AppModel struct {
-	Env                  string           `json:"env"`
-	FileName             string           `json:"file_name"`
-	AppName              *string          `json:"app_name"`
-	SidecarRefNames      []string         `json:"sidecar_ref_names"`
-	RuntimeAssetRefNames []string         `json:"runtime_asset_ref_names"`
-	Replicas             *int             `json:"replicas"`
-	Kind                 *string          `json:"kind"`
-	Autoscaling          AutoscalingModel `json:"autoscaling"`
-	InitContainersCount  int              `json:"init_containers_count"`
-	Containers           []ContainerModel `json:"containers"`
-	Sidecars             []ContainerModel `json:"sidecars"`
+	Env                           string           `json:"env"`
+	FileName                      string           `json:"file_name"`
+	AppName                       *string          `json:"app_name"`
+	SidecarRefNames               []string         `json:"sidecar_ref_names"`
+	RuntimeAssetRefNames          []string         `json:"runtime_asset_ref_names"`
+	WorkloadIdentityTokenRefNames []string         `json:"workload_identity_token_ref_names"`
+	SharedAssetRefNames           []string         `json:"shared_asset_ref_names"`
+	Replicas                      *int             `json:"replicas"`
+	Kind                          *string          `json:"kind"`
+	Autoscaling                   AutoscalingModel `json:"autoscaling"`
+	InitContainersCount           int              `json:"init_containers_count"`
+	Containers                    []ContainerModel `json:"containers"`
+	Sidecars                      []ContainerModel `json:"sidecars"`
 }
 
 type ContainerModel struct {
@@ -572,7 +590,7 @@ func (r *Repository) UpdateAppContainerResources(envName string, appFile string,
 	return AppContainerResources{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Resources: model.Containers[containerIndex].Resources}, nil
 }
 
-func (r *Repository) UpdateAppContainerEnvs(envName string, appFile string, containerIndex int, items []VarItem, expectedHash string) (AppContainerEnvs, error) {
+func (r *Repository) UpdateAppContainerEnvs(envName string, appFile string, containerIndex int, items []ContainerEnvUpdate, expectedHash string) (AppContainerEnvs, error) {
 	if containerIndex < 0 {
 		return AppContainerEnvs{}, errors.New("container index must be greater than or equal to 0")
 	}
@@ -586,6 +604,13 @@ func (r *Repository) UpdateAppContainerEnvs(envName string, appFile string, cont
 	}
 	if expectedHash != "" && expectedHash != contentHash(contentBytes) {
 		return AppContainerEnvs{}, NewConflictError("app file changed before save; refresh and apply the edit again")
+	}
+	tokenNames, sharedAssetNames, err := r.envReferenceNames(envName)
+	if err != nil {
+		return AppContainerEnvs{}, err
+	}
+	if err := validateContainerEnvUpdates(items, tokenNames, sharedAssetNames); err != nil {
+		return AppContainerEnvs{}, err
 	}
 	updated, err := replaceContainerEnvsBlock(string(contentBytes), containerIndex, items)
 	if err != nil {
@@ -605,7 +630,11 @@ func (r *Repository) UpdateAppContainerEnvs(envName string, appFile string, cont
 	if err != nil {
 		return AppContainerEnvs{}, err
 	}
-	return AppContainerEnvs{Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash, ContainerIndex: containerIndex, Envs: model.Containers[containerIndex].Envs}, nil
+	return AppContainerEnvs{
+		Env: envName, FileName: filepath.Base(path), ContentHash: detail.ContentHash,
+		ContainerIndex: containerIndex, Envs: model.Containers[containerIndex].Envs,
+		WorkloadIdentityTokenRefNames: tokenNames, SharedAssetRefNames: sharedAssetNames,
+	}, nil
 }
 
 func (r *Repository) Defaults(envName string) (DefaultsModel, error) {
@@ -850,6 +879,10 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 	}
 	rootMap, _ := root.(map[string]any)
 	model := AppModel{Env: envName, FileName: detail.FileName}
+	model.WorkloadIdentityTokenRefNames, model.SharedAssetRefNames, err = r.envReferenceNames(envName)
+	if err != nil {
+		return AppModel{}, err
+	}
 	model.AppName = stringPtr(stringValue(rootMap["name"]))
 	model.SidecarRefNames = stringSlice(rootMap["sidecar_ref_names"])
 	model.RuntimeAssetRefNames = stringSlice(rootMap["runtime_asset_ref_names"])
@@ -953,6 +986,29 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 		})
 	}
 	return model, nil
+}
+
+func (r *Repository) envReferenceNames(envName string) ([]string, []string, error) {
+	var tokenNames []string
+	defaultsFile, err := r.defaultsFile(envName)
+	if err == nil {
+		detail, detailErr := r.AssetDetail(envName, defaultsFile)
+		if detailErr != nil {
+			return nil, nil, detailErr
+		}
+		root, parseErr := rawSourceModelRoot(detail.Content)
+		if parseErr != nil {
+			return nil, nil, fmt.Errorf("parse %s: %w", defaultsFile, parseErr)
+		}
+		tokenNames = namedDefinitionNames(nestedMap(root, "workload_identity")["tokens"])
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, nil, err
+	}
+	sharedAssetNames, err := r.sharedAssetReferenceNames(envName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tokenNames, sharedAssetNames, nil
 }
 
 func externalHostModel(index int, host map[string]any) ExternalHostModel {
@@ -2310,32 +2366,34 @@ func replaceContainerResourcesBlock(content string, containerIndex int, resource
 	return out, nil
 }
 
-func replaceContainerEnvsBlock(content string, containerIndex int, items []VarItem) (string, error) {
+func replaceContainerEnvsBlock(content string, containerIndex int, items []ContainerEnvUpdate) (string, error) {
 	lines, start, end, err := containerBlockRange(content, containerIndex)
 	if err != nil {
 		return "", err
 	}
-
-	varsStart, varsEnd := containerChildBlockRange(lines, start, end, "envs")
-
-	preserved := [][]string{}
-	preservedNames := map[string]bool{}
-	if varsStart >= 0 {
-		for _, block := range splitVarItemBlocks(lines[varsStart+1 : varsEnd]) {
-			name := varBlockName(block)
-			if !isEditableVarBlock(block) {
-				preserved = append(preserved, block)
-				if name != "" {
-					preservedNames[name] = true
-				}
-			}
-		}
-	}
-	if err := validateContainerEnvItems(items, preservedNames); err != nil {
+	root, err := rawSourceModelRoot(content)
+	if err != nil {
 		return "", err
 	}
+	containers := anySlice(root["containers"])
+	if containerIndex >= len(containers) {
+		return "", errors.New("container index not found")
+	}
+	container, _ := containers[containerIndex].(map[string]any)
+	existing := anySlice(container["envs"])
+	merged, err := mergeContainerEnvs(existing, items)
+	if err != nil {
+		return "", err
+	}
+	if reflect.DeepEqual(existing, merged) {
+		return content, nil
+	}
 
-	replacement := renderContainerEnvsBlock(items, preserved)
+	varsStart, varsEnd := containerChildBlockRange(lines, start, end, "envs")
+	replacement, err := renderContainerEnvsBlock(merged)
+	if err != nil {
+		return "", err
+	}
 	insertAt := start + 1
 	if varsStart >= 0 {
 		insertAt = varsStart
@@ -2353,6 +2411,133 @@ func replaceContainerEnvsBlock(content string, containerIndex int, items []VarIt
 		out += "\n"
 	}
 	return out, nil
+}
+
+func mergeContainerEnvs(existing []any, updates []ContainerEnvUpdate) ([]any, error) {
+	preserved := map[int]bool{}
+	for index, raw := range existing {
+		values, ok := raw.(map[string]any)
+		if !ok || !isBuilderEnvMap(values) {
+			preserved[index] = true
+		}
+	}
+	seenPreserved := map[int]bool{}
+	seenEditable := map[int]bool{}
+	seenNames := map[string]bool{}
+	out := make([]any, 0, len(updates))
+	for index, update := range updates {
+		if update.Kind == "preserve" {
+			if !preserved[update.SourceIndex] || seenPreserved[update.SourceIndex] {
+				return nil, fmt.Errorf("envs[%d] has invalid preserved source index", index)
+			}
+			seenPreserved[update.SourceIndex] = true
+			values, _ := existing[update.SourceIndex].(map[string]any)
+			name := strings.TrimSpace(stringValue(values["name"]))
+			if name != "" && seenNames[name] {
+				return nil, fmt.Errorf("duplicate variable name %q", name)
+			}
+			seenNames[name] = name != ""
+			out = append(out, existing[update.SourceIndex])
+			continue
+		}
+		if update.SourceIndex >= 0 {
+			if update.SourceIndex >= len(existing) || preserved[update.SourceIndex] || seenEditable[update.SourceIndex] {
+				return nil, fmt.Errorf("envs[%d] has invalid editable source index", index)
+			}
+			seenEditable[update.SourceIndex] = true
+		}
+		item := update.defaultsItem()
+		name := strings.TrimSpace(item.Name)
+		if seenNames[name] {
+			return nil, fmt.Errorf("duplicate variable name %q", name)
+		}
+		seenNames[name] = true
+		out = append(out, containerEnvItemMap(item))
+	}
+	if len(seenPreserved) != len(preserved) {
+		return nil, errors.New("request must preserve every read-only environment entry")
+	}
+	return out, nil
+}
+
+func validateContainerEnvUpdates(updates []ContainerEnvUpdate, tokenNames, sharedAssetNames []string) error {
+	items := make([]DefaultsSidecarEnvItem, 0, len(updates))
+	for _, update := range updates {
+		if update.Kind == "preserve" {
+			continue
+		}
+		items = append(items, update.defaultsItem())
+	}
+	items = normalizeDefaultsSidecarEnvItems(items)
+	if err := validateDefaultsSidecarEnvItems(items); err != nil {
+		return err
+	}
+	return validateDefaultsSidecarEnvReferences(items, tokenNames, sharedAssetNames)
+}
+
+func isBuilderEnvMap(values map[string]any) bool {
+	_, err := parseDefaultsSidecarEnvItem(values)
+	return err == nil
+}
+
+func (update ContainerEnvUpdate) defaultsItem() DefaultsSidecarEnvItem {
+	kind := strings.TrimSpace(update.Kind)
+	if kind == "" {
+		kind = "value"
+	}
+	return DefaultsSidecarEnvItem{
+		Name: update.Name, Kind: kind, Value: update.Value,
+		SecretName: update.SecretName, Key: update.Key,
+		ResourceName: update.ResourceName, Divisor: update.Divisor,
+		FieldPath:                    update.FieldPath,
+		WorkloadIdentityTokenRefName: update.WorkloadIdentityTokenRefName,
+		SharedAssetRefName:           update.SharedAssetRefName,
+	}
+}
+
+func containerEnvItemMap(item DefaultsSidecarEnvItem) map[string]any {
+	item = normalizeDefaultsSidecarEnvItems([]DefaultsSidecarEnvItem{item})[0]
+	values := map[string]any{"name": item.Name}
+	switch item.Kind {
+	case "value":
+		values["value"] = item.Value
+	case "secret":
+		values["secret_name"], values["key"] = item.SecretName, item.Key
+	case "resource":
+		values["resource_name"] = item.ResourceName
+		if item.Divisor != "" {
+			values["divisor"] = item.Divisor
+		}
+	case "field":
+		values["field_path"] = item.FieldPath
+	case "workload_identity_token":
+		values["workload_identity_token_ref_name"] = item.WorkloadIdentityTokenRefName
+	case "shared_asset":
+		values["shared_asset_ref_name"] = item.SharedAssetRefName
+	case "remove":
+		values["remove"] = true
+	}
+	return values
+}
+
+func renderContainerEnvsBlock(items []any) ([]string, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	var buffer bytes.Buffer
+	encoder := yaml.NewEncoder(&buffer)
+	encoder.SetIndent(2)
+	err := encoder.Encode(map[string]any{"envs": items})
+	_ = encoder.Close()
+	if err != nil {
+		return nil, fmt.Errorf("render container envs: %w", err)
+	}
+	rawLines := strings.Split(strings.TrimSuffix(buffer.String(), "\n"), "\n")
+	lines := make([]string, 0, len(rawLines))
+	for _, line := range rawLines {
+		lines = append(lines, "    "+line)
+	}
+	return lines, nil
 }
 
 func replaceContainerRuntimeBlock(content string, containerIndex int, runtime JavaRuntimeUpdate) (string, error) {
@@ -3561,41 +3746,6 @@ func cleanStringItems(items []string) []string {
 	return out
 }
 
-func splitVarItemBlocks(lines []string) [][]string {
-	blocks := [][]string{}
-	start := -1
-	for idx, line := range lines {
-		if strings.HasPrefix(line, "      - ") {
-			if start >= 0 {
-				blocks = append(blocks, lines[start:idx])
-			}
-			start = idx
-		}
-	}
-	if start >= 0 {
-		blocks = append(blocks, lines[start:])
-	}
-	return blocks
-}
-
-func isEditableVarBlock(lines []string) bool {
-	hasName := false
-	hasValue := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "- name:") || strings.HasPrefix(trimmed, "name:") {
-			hasName = true
-		}
-		if strings.HasPrefix(trimmed, "valueFrom:") {
-			return false
-		}
-		if strings.HasPrefix(trimmed, "value:") {
-			hasValue = true
-		}
-	}
-	return hasName && hasValue
-}
-
 func varBlockName(lines []string) string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -3605,33 +3755,6 @@ func varBlockName(lines []string) string {
 		}
 	}
 	return ""
-}
-
-func renderContainerEnvsBlock(items []VarItem, preserved [][]string) []string {
-	if len(items) == 0 && len(preserved) == 0 {
-		return nil
-	}
-	lines := []string{"    envs:"}
-	for _, item := range items {
-		lines = append(lines, "      - name: "+strings.TrimSpace(item.Name), "        value: "+strconv.Quote(item.Value))
-	}
-	for _, block := range preserved {
-		lines = append(lines, block...)
-	}
-	return lines
-}
-
-func validateContainerEnvItems(items []VarItem, preservedNames map[string]bool) error {
-	if err := validateVarItems(items); err != nil {
-		return err
-	}
-	for _, item := range items {
-		name := strings.TrimSpace(item.Name)
-		if preservedNames[name] {
-			return fmt.Errorf("variable name %q is already used by a read-only variable", name)
-		}
-	}
-	return nil
 }
 
 func isTopLevelLine(line string) bool {
@@ -3734,52 +3857,53 @@ func parseVarsLines(lines []string) []VarItem {
 }
 
 func envVarModel(index int, varMap map[string]any) EnvVarModel {
-	model := EnvVarModel{Index: index, Name: stringPtr(stringValue(varMap["name"])), Kind: "value", IsValueEditable: true}
-	if rawValue, exists := varMap["value"]; exists {
-		value := stringValue(rawValue)
+	model := EnvVarModel{Index: index, Name: stringPtr(stringValue(varMap["name"])), Kind: "unsupported", IsValueEditable: false}
+	if valueFrom, exists := varMap["valueFrom"]; exists {
+		model.Kind = "kubernetes_value_from"
+		value := rawValueFromSummary(valueFrom)
 		model.Value = &value
 		return model
 	}
-	if value := stringValue(varMap["workload_identity_token_ref_name"]); value != "" {
-		model.Kind = "workload_identity_token"
-		model.WorkloadIdentityTokenRefName = stringPtr(value)
-		model.IsValueEditable = false
+	item, err := parseDefaultsSidecarEnvItem(varMap)
+	if err != nil {
+		value := "unsupported builder fields"
+		model.Value = &value
 		return model
 	}
-	if value := stringValue(varMap["shared_asset_ref_name"]); value != "" {
-		model.Kind = "shared_asset"
-		model.SharedAssetRefName = stringPtr(value)
-		model.IsValueEditable = false
-		return model
-	}
-	if boolValue(varMap["remove"]) {
-		model.Kind = "remove"
+	model.Kind = item.Kind
+	model.IsValueEditable = true
+	switch item.Kind {
+	case "value":
+		value := item.Value
+		model.Value = &value
+	case "secret":
+		model.SecretName, model.Key = stringPtr(item.SecretName), stringPtr(item.Key)
+	case "resource":
+		model.ResourceName, model.Divisor = stringPtr(item.ResourceName), stringPtr(item.Divisor)
+	case "field":
+		model.FieldPath = stringPtr(item.FieldPath)
+	case "workload_identity_token":
+		model.WorkloadIdentityTokenRefName = stringPtr(item.WorkloadIdentityTokenRefName)
+	case "shared_asset":
+		model.SharedAssetRefName = stringPtr(item.SharedAssetRefName)
+	case "remove":
 		model.Remove = true
-		model.IsValueEditable = false
-		return model
-	}
-	valueFrom, _ := varMap["valueFrom"].(map[string]any)
-	if secret, ok := valueFrom["secretKeyRef"].(map[string]any); ok {
-		model.Kind = "secret"
-		model.SecretName = stringPtr(stringValue(secret["name"]))
-		model.Key = stringPtr(stringValue(secret["key"]))
-		model.IsValueEditable = false
-		return model
-	}
-	if resource, ok := valueFrom["resourceFieldRef"].(map[string]any); ok {
-		model.Kind = "resource"
-		model.ResourceName = stringPtr(stringValue(resource["resource"]))
-		model.Divisor = stringPtr(stringValue(resource["divisor"]))
-		model.IsValueEditable = false
-		return model
-	}
-	if field, ok := valueFrom["fieldRef"].(map[string]any); ok {
-		model.Kind = "field"
-		model.FieldPath = stringPtr(stringValue(field["fieldPath"]))
-		model.IsValueEditable = false
-		return model
 	}
 	return model
+}
+
+func rawValueFromSummary(value any) string {
+	values, _ := value.(map[string]any)
+	if secret, ok := values["secretKeyRef"].(map[string]any); ok {
+		return "secretKeyRef " + stringValue(secret["name"]) + ":" + stringValue(secret["key"])
+	}
+	if resource, ok := values["resourceFieldRef"].(map[string]any); ok {
+		return "resourceFieldRef " + stringValue(resource["resource"])
+	}
+	if field, ok := values["fieldRef"].(map[string]any); ok {
+		return "fieldRef " + stringValue(field["fieldPath"])
+	}
+	return "raw valueFrom"
 }
 
 func autoscalingModel(data map[string]any) AutoscalingModel {

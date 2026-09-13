@@ -501,7 +501,7 @@ render i proklik profilu do presne vyfiltrovaneho Defaults katalogu.
   TLS private-key/certificate data nevypisovat zbytecne do souhrnnych karet.
 - [x] Resources: ephemeral-storage a zachovani dalsich resources,
   literal/template vstupy, local/inherited/external-policy indikace.
-- [ ] Env typy: value, secret/resource/field formy builderu, token/shared
+- [x] Env typy: value, secret/resource/field formy builderu, token/shared
   asset refs, remove. Nezamichat raw Kubernetes valueFrom s metamodellem;
   zachovat existujici advanced varianty, nedeklarovat nepodporovany build.
 - [ ] Image z release/profilu zobrazeno spravne; JAVA_ARGS zustava env
@@ -553,6 +553,19 @@ Checkpoint P5.4 2026-09-12:
   privatni TLS certificate/key data do karet ani telemetrie nekopiruje.
 - Dependency badge jsou primo klikatelne Tabler badge bez svetleho hover
   podkladu. Dark-mode browser kontrola vsech typu odkazu a ports no-op prosly.
+
+Checkpoint P5.5 2026-09-13:
+
+- Main-container env editor rozlisuje builder-native value, secret, resource,
+  field, workload identity token, shared asset a remove zdroje.
+- Raw Kubernetes `valueFrom` a nezname polozky se nezamichavaji do builder
+  metamodelu: UI je oznaci read-only a server vyzaduje jejich explicitni
+  zachovani podle zdrojoveho indexu.
+- Token a shared-asset reference se validuji proti lokalnim katalogum na
+  klientu i serveru. Poradi polozek, raw bloky a shodny source zustavaji
+  zachovane; browser no-op je byte-identicky.
+- Repository/API testy, JS syntax, build a siroky dark-mode modal nad anonymni
+  fixture prosly.
 
 ### P6: Integrace, browser overeni, dokumentace
 
