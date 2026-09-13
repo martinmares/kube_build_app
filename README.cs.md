@@ -4,16 +4,16 @@
 
 Nástroj má jednoduchý runtime: načte deklarativní metadata prostředí, app modely a assety, a zapíše Kubernetes YAML do cílového adresáře. Ruby implementace je historická reference; Go implementace je produktizované CLI jako single binary, s Cobra commandy a shell completion.
 
-Repozitář teď obsahuje dvě související binárky:
+Repozitář teď obsahuje tři související binárky, ale pouze dvě aktivní produktové plochy:
 
 ```text
 kube-build-app = build/render Kubernetes manifestů
 kube-edit-app  = webový editor environment repozitářů
-kube-ops-app   = prototyp operations/sync runneru nad vyrenderovanými manifesty
+kube-ops-app   = sandbox prototyp, ne aktivní produktový směr
 ```
 
 `kube-edit-app` je cílový Go přepis Rust aplikace `kube-environments-ui`. Viz `docs/KUBE_EDIT_APP_PLAN.md`.
-`kube-ops-app` je raný prototyp operations portálu/sync runneru. Začíná načítáním configu, výpočtem render digestu, prototypovým desired/applied statusem, diffem proti applied snapshotu a CLI inspection příkazy. Viz `docs/KUBE_OPS_APP_PLAN.md`.
+`kube-ops-app` zůstává pouze sandbox prototypem. Použitelné read-only koncepty se přesouvají do `kube-edit-app`; sync/reconcile zůstává odpovědností ArgoCD. Viz `docs/KUBE_OPS_TO_EDIT_APP_MIGRATION_PLAN.md`.
 
 ## kube-edit-app Workflow
 
@@ -40,6 +40,39 @@ Doporučený postup editace:
 7. Použít `Accept selected`, které commitne jen vybrané dirty soubory. UI zobrazí výsledný commit hash a commitnuté cesty.
 
 Read-only režim stále zobrazuje strukturované preview, build checks, generated file preview a diffy, ale mutační prvky jsou schované nebo vypnuté a mutační API endpointy vrací `403`. Je to preferovaný režim pro review, L2 kontrolu a dashboardy. `--allow-write` používejte jen pro záměrné editace repozitáře.
+
+Pro repozitář, kde každé prostředí potřebuje jiné build vstupy, použijte
+serverovou mapu build kontextů:
+
+```bash
+kube-edit-app serve \
+  --root ./environments \
+  --build-config ./kube-edit-build.yml
+```
+
+```yaml
+environments:
+  dev:
+    env_url: https://config.example.test/dev/render
+    env_url_headers:
+      - 'Authorization: Bearer token'
+    release_manifest: releases/dev.yml
+    resource_policy_root: policies
+    image_policy: strict
+  test:
+    env_file: inputs/test.env
+```
+
+Mapa musí obsahovat právě všechny environmenty nalezené pod `--root`.
+Neznámé klíče a neplatné kontexty ukončí server ještě před otevřením HTTP
+listeneru. Relativní cesty se vyhodnocují vůči adresáři build configu.
+`--build-config` nelze kombinovat s per-build CLI flagy; serverové, auth,
+EncJson a kubeconfig volby zůstávají globální. Kompletní schema a bezpečnostní
+pravidla jsou v
+[`docs/KUBE_EDIT_APP_BUILD_CONTEXT.cs.md`](docs/KUBE_EDIT_APP_BUILD_CONTEXT.cs.md).
+
+Za path-based reverse proxy použijte `--base-path /editor`; celé UI, statické
+soubory i API pak běží pod `/editor/`.
 
 ### Trusted Proxy Autentizace
 

@@ -1,8 +1,7 @@
 # kube-edit-app: sladeni s aktualnim metamodellem builderu
 
-Datum: 2026-09-11. Vychozi commit: `162e6e2`, VERSION `0.13.1`.
-Stav: etapy P0-P2 implementovany; P3-P6 cekaji.
-Autor zadani chce implementaci predat dalsi session/modelu.
+Datum: 2026-09-11, uzavreno 2026-09-13. Vychozi commit: `162e6e2`, VERSION `0.13.1`.
+Stav: etapy P0-P6 implementovany a overeny; jednotlive checkpointy jsou nize.
 Tento dokument nahrazuje stare poradi praci v
 `KUBE_EDIT_APP_MODEL_WORK_PLAN.cs.md` pro tento konkretni ukol.
 
@@ -504,7 +503,7 @@ render i proklik profilu do presne vyfiltrovaneho Defaults katalogu.
 - [x] Env typy: value, secret/resource/field formy builderu, token/shared
   asset refs, remove. Nezamichat raw Kubernetes valueFrom s metamodellem;
   zachovat existujici advanced varianty, nedeklarovat nepodporovany build.
-- [ ] Image z release/profilu zobrazeno spravne; JAVA_ARGS zustava env
+- [x] Image z release/profilu zobrazeno spravne; JAVA_ARGS zustava env
   retezec, automaticky jej neprevadet na runtime.java.
 - [x] Doplnit read-only prehled ostatnich poli builderu: scheduling,
   securityContext, mounts/assets, env_from, tools, explicit init,
@@ -567,17 +566,59 @@ Checkpoint P5.5 2026-09-13:
 - Repository/API testy, JS syntax, build a siroky dark-mode modal nad anonymni
   fixture prosly.
 
+Checkpoint P5.6 2026-09-13:
+
+- Image provenance rozlisuje skutecne pouzity profil, lokalni hodnotu, sdilenou
+  sidecar definici, odpovidajici release manifest override a CLI `--image`.
+  Pouha pritomnost release manifestu uz neoznaci image, pro kterou manifest
+  zadny zaznam nepouzil.
+- Vitezny zdroj je v Effective overview zobrazen primo vedle vysledne image;
+  v obecnem seznamu puvodu kontejneru se neopakuje.
+- Regresni fixture overuje profile i release image a zaroven explicitne hlida,
+  ze `JAVA_ARGS` zustava jedinou env string hodnotou a nevznika `runtime.java`.
+- Cileny inspection test, build, JS syntax a light/dark browser kontrola nad
+  `.tmp/edit-metamodel-smoke/environments` prosly.
+
 ### P6: Integrace, browser overeni, dokumentace
 
-- [ ] Multi-env konfigurace build kontextu, pokud nebyla dokoncena v P1.
-- [ ] Auth pro vsechny nove endpointy: read-only, env reader/writer, admin;
+- [x] Multi-env konfigurace build kontextu, pokud nebyla dokoncena v P1.
+- [x] Auth pro vsechny nove endpointy: read-only, env reader/writer, admin;
   nevytvaret pres defaults edit pristup do jineho env. Git pravidla zachovat.
-- [ ] Regrese env.secured/unsecured special editoru, Git diff/commit flow,
+- [x] Regrese env.secured/unsecured special editoru, Git diff/commit flow,
   no-op, concurrent edit 409, base-path, back/forward a modal lifecycle.
-- [ ] Browser smoke nad anonymni fixture desktop i uzsi viewport;
+- [x] Browser smoke nad anonymni fixture desktop i uzsi viewport;
   zadne bezici testy proti skutecnemu clusteru/vaultu nejsou nutne.
-- [ ] Docs README.md/README.cs.md, screenshoty pouze pokud uzitecne,
+- [x] Docs README.md/README.cs.md, screenshoty pouze pokud uzitecne,
   aktualni handoff a checklist skutecne hotovych/odlozenych bodu.
+
+Checkpoint P6.1 2026-09-13:
+
+- `--build-config` poskytuje striktni mapu vsech repository environments na
+  build kontexty. Schema pouziva builder-native options, relativni cesty vuci
+  config souboru, zakazuje konfliktni per-build CLI flagy a validuje vsechny
+  kontexty pred otevrenim HTTP listeneru.
+- Vsechny Build/inspection/cluster operace vybiraji kontext podle env z URL.
+  Citlive remote hlavicky zustavaji jen na serveru.
+- Trusted proxy auth test pokryva nove metamodel GET/PATCH endpointy pro
+  reader/writer/admin, filtr environment listu a zakaz pristupu do ciziho env.
+- `--base-path` nyni skutecne mountuje HTML, staticke soubory i API pod jednim
+  prefixem; frontend uz neposila absolutni API requesty mimo prefix.
+- Parser, CLI fail-fast, per-env server routing a base-path maji regresni testy;
+  cilene Go testy a JS syntax check prosly.
+
+Checkpoint P6.2 2026-09-13:
+
+- Audit potvrdil existujici pokryti Git restore/selected commit, secured JSON
+  sifrovani jen zmenenych hodnot, zachovani poradi a HTTP 409 guardu. Pro
+  unsecured JSON pribyl explicitni byte-identicky no-op a stale-hash test.
+- Browser nad `.tmp/edit-metamodel-smoke/environments` bezel s realnym
+  `--build-config` a `--base-path`. Desktop i 700 px viewport nacetly Apps a
+  Defaults, modal se otevrel a zavrel pres Escape a Back/Forward obnovily URL,
+  viditelnou stranku i aktivni navigaci. Jediny console 404 byl favicon.
+- README v obou jazycich a detailni build-context dokument popisuji schema,
+  fail-fast pravidla, bezpecnost remote hlavicek a reverse-proxy prefix.
+- `go test -p 1 ./...`, `just build`, `node --check` a `git diff --check`
+  prosly. Screenshot nebyl pridan, protoze tato etapa nemenila layout.
 
 ## 7. Testovaci matice a definice hotovo
 

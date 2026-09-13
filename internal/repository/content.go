@@ -873,11 +873,10 @@ func (r *Repository) AppModel(envName string, appFile string) (AppModel, error) 
 	if err != nil {
 		return AppModel{}, err
 	}
-	var root any
-	if err := yaml.Unmarshal([]byte(renderVarsPreview(detail.Content)), &root); err != nil {
+	rootMap, err := rawSourceModelRoot(renderVarsPreview(detail.Content))
+	if err != nil {
 		return AppModel{}, err
 	}
-	rootMap, _ := root.(map[string]any)
 	model := AppModel{Env: envName, FileName: detail.FileName}
 	model.WorkloadIdentityTokenRefNames, model.SharedAssetRefNames, err = r.envReferenceNames(envName)
 	if err != nil {
@@ -2054,13 +2053,14 @@ func applyTextEdits(content string, edits []textEdit) string {
 }
 
 func defaultsModelFromDetail(detail AssetDetail) (DefaultsModel, error) {
-	var root any
+	rootMap := map[string]any{}
 	if strings.TrimSpace(detail.Content) != "" {
-		if err := yaml.Unmarshal([]byte(detail.Content), &root); err != nil {
+		var err error
+		rootMap, err = rawSourceModelRoot(detail.Content)
+		if err != nil {
 			return DefaultsModel{}, err
 		}
 	}
-	rootMap, _ := root.(map[string]any)
 	model := DefaultsModel{Env: detail.Env, FileName: detail.RelativePath, Path: detail.Path, ContentHash: detail.ContentHash, IsDirty: detail.IsDirty, Vars: extractVars(detail.Content)}
 	for gIdx, rawGroup := range anySlice(rootMap["container_envs"]) {
 		groupMap, _ := rawGroup.(map[string]any)

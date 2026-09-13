@@ -1,12 +1,15 @@
 package webapp
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"kube-env/internal/appinfo"
+	"kube-env/internal/repository"
 )
 
 func TestParseTrustedProxyGroupsAdmin(t *testing.T) {
@@ -112,6 +115,98 @@ func TestTrustedProxyAuthGitMutationsRequireAdmin(t *testing.T) {
 
 	if res.Code != http.StatusForbidden {
 		t.Fatalf("git commit status = %d, want 403", res.Code)
+	}
+}
+
+func TestTrustedProxyAuthCoversMetamodelEndpointRoles(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{
+		TrustedProxyAuth: TrustedProxyAuthOptions{Enabled: true},
+	})
+	cases := []struct {
+		method string
+		path   string
+		write  bool
+	}{
+		{http.MethodGet, "/api/v1/envs/dev/apps/api.yml/model", false},
+		{http.MethodGet, "/api/v1/envs/dev/apps/api.yml/references", false},
+		{http.MethodPatch, "/api/v1/envs/dev/apps/api.yml/references", true},
+		{http.MethodGet, "/api/v1/envs/dev/apps/api.yml/sidecars/exporter/envs/MODE/override", false},
+		{http.MethodPatch, "/api/v1/envs/dev/apps/api.yml/sidecars/exporter/envs/MODE/override", true},
+		{http.MethodGet, "/api/v1/envs/dev/apps/api.yml/sidecars/exporter/resources/override", false},
+		{http.MethodPatch, "/api/v1/envs/dev/apps/api.yml/sidecars/exporter/resources/override", true},
+		{http.MethodGet, "/api/v1/envs/dev/apps/api.yml/sidecars/exporter/startup/override", false},
+		{http.MethodPatch, "/api/v1/envs/dev/apps/api.yml/sidecars/exporter/startup/override", true},
+		{http.MethodGet, "/api/v1/envs/dev/defaults", false},
+		{http.MethodPatch, "/api/v1/envs/dev/defaults/container-envs", true},
+		{http.MethodGet, "/api/v1/envs/dev/defaults/sidecar-definitions/exporter", false},
+		{http.MethodPatch, "/api/v1/envs/dev/defaults/sidecar-definitions/exporter", true},
+		{http.MethodPatch, "/api/v1/envs/dev/defaults/sidecar-definitions/exporter/startup", true},
+		{http.MethodPatch, "/api/v1/envs/dev/defaults/sidecar-definitions/exporter/resources", true},
+		{http.MethodPatch, "/api/v1/envs/dev/defaults/sidecar-definitions/exporter/envs", true},
+		{http.MethodPatch, "/api/v1/envs/dev/defaults/sidecar-definitions/exporter/references", true},
+		{http.MethodGet, "/api/v1/envs/dev/inspect", false},
+		{http.MethodGet, "/api/v1/envs/dev/build-context", false},
+	}
+
+	for _, item := range cases {
+		name := item.method + " " + item.path
+		t.Run(name, func(t *testing.T) {
+			assertAuthResult(t, server, item.method, item.path, "kube-edit-app:env:dev:reader", !item.write)
+			assertAuthResult(t, server, item.method, item.path, "kube-edit-app:env:dev:writer", true)
+			assertAuthResult(t, server, item.method, strings.Replace(item.path, "/envs/dev/", "/envs/test/", 1), "kube-edit-app:env:dev:writer", false)
+			assertAuthResult(t, server, item.method, item.path, "kube-edit-app:role:admin", true)
+		})
+	}
+}
+
+func TestTrustedProxyAuthFiltersEnvironmentList(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "api.yml"), "name: api\n")
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), "name: api\n")
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{
+		TrustedProxyAuth: TrustedProxyAuthOptions{Enabled: true},
+	})
+	request := authReq(http.MethodGet, "/api/v1/envs", "kube-edit-app:env:dev:reader", "")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Items []struct {
+			Name string `json:"name"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].Name != "dev" {
+		t.Fatalf("visible environments = %#v, want only dev", payload.Items)
+	}
+}
+
+func assertAuthResult(t *testing.T, server *Server, method, path, groups string, allowed bool) {
+	t.Helper()
+	request := authReq(method, path, groups, `{}`)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	denied := response.Code == http.StatusUnauthorized || response.Code == http.StatusForbidden
+	if allowed && denied {
+		t.Fatalf("status = %d, want request to pass authorization", response.Code)
+	}
+	if !allowed && !denied {
+		t.Fatalf("status = %d, want authorization denial", response.Code)
 	}
 }
 

@@ -320,6 +320,10 @@ func Inspect(opts Options) (Inspection, error) {
 			if appErr == nil {
 				appErr = applyImageOverrides(apps, opts)
 			}
+			imageOverrideOrigins := map[imageKey]InspectOrigin{}
+			if appErr == nil {
+				imageOverrideOrigins, appErr = inspectImageOverrideOrigins(apps, opts)
+			}
 			if appErr == nil {
 				appErr = applyReplicaProfile(apps, envDir, opts)
 			}
@@ -328,7 +332,7 @@ func Inspect(opts Options) (Inspection, error) {
 				appErr = validateApps(apps, sharedAssets)
 			}
 			if appErr == nil {
-				result.Apps[index].Effective = effectiveInspectionApp(apps[0], result.Apps[index].Source, defaultsSource, opts)
+				result.Apps[index].Effective = effectiveInspectionApp(apps[0], result.Apps[index].Source, defaultsSource, opts, imageOverrideOrigins)
 			}
 		}
 		if appErr != nil {
@@ -598,7 +602,50 @@ func restoreTemplateValues(value any, templates map[string]string) any {
 	return value
 }
 
-func effectiveInspectionApp(app appModel, source, defaults SourceDocument, opts Options) *EffectiveApp {
+func inspectImageOverrideOrigins(apps []appModel, opts Options) (map[imageKey]InspectOrigin, error) {
+	origins := map[imageKey]InspectOrigin{}
+	selection, err := releaseImageSelectionFromOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(opts.ReleaseManifest) != "" {
+		manifest, err := loadReleaseManifest(opts.ReleaseManifest)
+		if err != nil {
+			return nil, err
+		}
+		origin := InspectOrigin{Kind: "release_manifest", Document: filepath.ToSlash(opts.ReleaseManifest), YAMLPath: "images"}
+		for _, app := range apps {
+			for _, container := range app.Containers {
+				image, err := manifest.imageFor(app.Name, container.Name, selection)
+				if err != nil {
+					return nil, err
+				}
+				if image != "" {
+					origins[imageKey{App: app.Name, Container: container.Name}] = origin
+				}
+			}
+			for _, sidecar := range app.Sidecars {
+				image, err := manifest.sidecarImageFor(app.Name, sidecar.Name, selection)
+				if err != nil {
+					return nil, err
+				}
+				if image != "" {
+					origins[imageKey{App: app.Name, Container: sidecar.Name}] = origin
+				}
+			}
+		}
+	}
+	cliImages, err := parseImageOverrides(opts.ImageOverrides)
+	if err != nil {
+		return nil, err
+	}
+	for key := range cliImages {
+		origins[key] = InspectOrigin{Kind: "cli_image_override", Document: "command line", YAMLPath: "--image"}
+	}
+	return origins, nil
+}
+
+func effectiveInspectionApp(app appModel, source, defaults SourceDocument, opts Options, imageOverrideOrigins map[imageKey]InspectOrigin) *EffectiveApp {
 	result := &EffectiveApp{
 		Name: app.Name, Kind: app.Kind, Replicas: app.Replicas, Ignore: app.Ignore,
 		DisableSharedAssets: app.DisableSharedAssets, DisableCreateService: app.DisableCreateService,
@@ -619,14 +666,14 @@ func effectiveInspectionApp(app appModel, source, defaults SourceDocument, opts 
 	for index, container := range app.Containers {
 		effective := effectiveInspectionContainer(container)
 		effective.Origins = inspectContainerOrigins(source, defaults, "containers", index, effective.Name)
-		effective.Fields = inspectContainerFields(effective, source, defaults, opts, "containers", index)
+		effective.Fields = inspectContainerFields(effective, source, defaults, opts, "containers", index, imageOverrideOrigins[imageKey{App: app.Name, Container: effective.Name}])
 		effective.EnvEntries = inspectEnvEntries(effective, source, defaults, "containers", index)
 		result.Containers = append(result.Containers, effective)
 	}
 	for index, sidecar := range app.Sidecars {
 		effective := effectiveInspectionContainer(sidecar)
 		effective.Origins = inspectContainerOrigins(source, defaults, "sidecars", index, effective.Name)
-		effective.Fields = inspectContainerFields(effective, source, defaults, opts, "sidecars", index)
+		effective.Fields = inspectContainerFields(effective, source, defaults, opts, "sidecars", index, imageOverrideOrigins[imageKey{App: app.Name, Container: effective.Name}])
 		effective.EnvEntries = inspectEnvEntries(effective, source, defaults, "sidecars", index)
 		result.Sidecars = append(result.Sidecars, effective)
 	}
@@ -753,7 +800,7 @@ func effectiveInspectionContainer(container containerSpec) EffectiveContainer {
 	}
 }
 
-func inspectContainerFields(container EffectiveContainer, source, defaults SourceDocument, opts Options, scope string, index int) map[string]InspectField {
+func inspectContainerFields(container EffectiveContainer, source, defaults SourceDocument, opts Options, scope string, index int, imageOverrideOrigin InspectOrigin) map[string]InspectField {
 	values := map[string]any{
 		"image": container.Image, "startup": container.Startup, "envs": container.Envs,
 		"resources": container.Resources, "ports": container.Ports, "probes": container.Probes,
@@ -772,7 +819,11 @@ func inspectContainerFields(container EffectiveContainer, source, defaults Sourc
 			_, local = localSidecar[field]
 			path = fmt.Sprintf("sidecars[name=%s].%s", container.Name, field)
 		}
-		origins := inspectFieldOrigins(source, defaults, opts, scope, index, sourceIndex, field, local)
+		origins := inspectFieldOrigins(source, defaults, opts, scope, index, sourceIndex, field, local, container.Name)
+		if field == "image" && imageOverrideOrigin.Kind != "" {
+			imageOverrideOrigin.Target = path
+			origins = append(origins, imageOverrideOrigin)
+		}
 		reason := ""
 		canEdit := scope == "containers"
 		if scope == "sidecars" && (field == "resources" || field == "startup") {
@@ -806,7 +857,7 @@ func inspectContainerFields(container EffectiveContainer, source, defaults Sourc
 	return result
 }
 
-func inspectFieldOrigins(source, defaults SourceDocument, opts Options, scope string, index, sourceIndex int, field string, local bool) []InspectOrigin {
+func inspectFieldOrigins(source, defaults SourceDocument, opts Options, scope string, index, sourceIndex int, field string, local bool, effectiveContainerName string) []InspectOrigin {
 	target := fmt.Sprintf("%s[%d].%s", scope, index, field)
 	origins := []InspectOrigin{}
 	container := sourceContainer(source, scope, sourceIndex)
@@ -819,6 +870,19 @@ func inspectFieldOrigins(source, defaults SourceDocument, opts Options, scope st
 		if field == "envs" && len(inspectAnySlice(defaults.Model["container_envs"])) > 0 {
 			origins = append(origins, InspectOrigin{Kind: "container_env_defaults", Document: defaults.Path, YAMLPath: "container_envs", Target: target})
 		}
+	} else {
+		definition := namedDefinition(defaults.Model["sidecar_definitions"], effectiveContainerName)
+		if definition != nil {
+			definitionName := strings.TrimSpace(fmt.Sprint(definition["name"]))
+			for _, ref := range stringValues(definition["profile_ref_names"]) {
+				if definitionHasField(defaults, "container_profiles", ref, field) {
+					origins = append(origins, InspectOrigin{Kind: "container_profile", Document: defaults.Path, YAMLPath: "container_profiles", DefinitionName: ref, Target: target})
+				}
+			}
+			if _, present := definition[field]; present {
+				origins = append(origins, InspectOrigin{Kind: "sidecar_definition", Document: defaults.Path, YAMLPath: "sidecar_definitions", DefinitionName: definitionName, Target: target})
+			}
+		}
 	}
 	if local {
 		localPath := fmt.Sprintf("%s[%d].%s", scope, sourceIndex, field)
@@ -826,9 +890,6 @@ func inspectFieldOrigins(source, defaults SourceDocument, opts Options, scope st
 	}
 	if field == "resources" && strings.TrimSpace(opts.ResourcePolicyRoot) != "" {
 		origins = append(origins, InspectOrigin{Kind: "external_resource_policy", Document: filepath.ToSlash(filepath.Join(opts.ResourcePolicyRoot, opts.Environment, "apps", filepath.Base(source.Path))), YAMLPath: scope, Target: target})
-	}
-	if field == "image" && strings.TrimSpace(opts.ReleaseManifest) != "" {
-		origins = append(origins, InspectOrigin{Kind: "release_manifest", Document: filepath.ToSlash(opts.ReleaseManifest), YAMLPath: "applications", Target: target})
 	}
 	return origins
 }

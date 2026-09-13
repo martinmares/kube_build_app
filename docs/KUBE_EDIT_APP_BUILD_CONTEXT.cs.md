@@ -1,12 +1,11 @@
 # kube-edit-app: build context a inspection API
 
-Stav po etape P1, 2026-09-11.
+Stav po etape P6, 2026-09-13.
 
 `kube-edit-app serve` pouziva pro Build validate, summary, inventory,
-preview, inspection a zjisteni cluster namespace jednu kopii
-`buildapp.Options`. Prostredi vybrane v URL meni pouze `Environment`;
-ostatni volby jsou v tomto prvnim inkrementu spolecne pro cely server.
-Plne nastaveni po prostredich bude resit pozdejsi `--build-config`.
+preview, inspection a zjisteni cluster namespace jeden resolver
+`buildapp.Options`. Server podporuje bud jeden spolecny kontext z CLI, nebo
+explicitni kontext pro kazde prostredi pres `--build-config`.
 
 ## Vstupy serveru
 
@@ -24,6 +23,63 @@ Build kontext lze sestavit z techto voleb:
 
 Neplatne nebo konfliktni volby ukonci server pred otevrenim listen socketu.
 Remote env se v ramci jedne builder operace stahuje pouze jednou.
+
+## Kontexty pro vice prostredi
+
+Server nad repository s rozdilnymi vstupy pro jednotliva prostredi lze
+spustit takto:
+
+```bash
+kube-edit-app serve \
+  --root ./environments \
+  --build-config ./kube-edit-build.yml
+```
+
+```yaml
+environments:
+  dev:
+    namespace: app-dev
+    env_url: https://config.example.test/dev/render
+    env_url_headers:
+      - 'Authorization: Bearer token'
+    env_url_insecure: true
+    release_manifest: releases/dev.yml
+    resource_policy_root: policies
+    image_policy: strict
+    image_reference: digest
+    yaml_indent: 2
+  test:
+    env_file: inputs/test.env
+    vars_sources: []
+    decrypt_secured: false
+```
+
+Podporovane klice odpovidaji per-build CLI volbam: `namespace`, `env_file`,
+`env_url`, `env_url_headers`, `env_url_insecure`, `vars_sources`,
+`decrypt_secured`, `release_manifest`, `images`, `image_policy`,
+`image_reference`, `force_image_tag`, `force_image_prefix`,
+`resource_policy_root`, `replica_profile`, `replica_profiles_file`, `down`,
+`sync_metadata_profile`, `sync_metadata_prefix`, `sync_set`, `yaml_indent`,
+`legacy_apply_env` a `helm_escape_assets`.
+
+Pravidla jsou zamerne fail-fast:
+
+- config musi obsahovat prave vsechna prostredi nalezena pod `--root`;
+- nezname YAML klice a dalsi YAML dokument jsou chyba;
+- relativni `env_file`, `release_manifest`, `resource_policy_root` a
+  `replica_profiles_file` se vyhodnocuji vuci adresari config souboru;
+- `--build-config` nelze kombinovat s per-build CLI flagy, aby nevznikla
+  skryta precedence; globalni server/auth/EncJson/kubeconfig volby zustavaji;
+- kazdy kontext se validuje pred otevrenim listen socketu.
+
+Hodnoty hlavicek ani remote env promenne se klientovi neposilaji. Config
+soubor proto chranit jako serverovou konfiguraci a nevkladat ho do UI.
+
+## Reverse proxy base path
+
+`--base-path /editor` namountuje HTML, staticke soubory i API pod
+`/editor/`; pozadavek na `/editor` je presmerovan na kanonickou cestu.
+Frontend vsechny API adresy sklada z tohoto serverem predaneho prefixu.
 
 ## HTTP API
 

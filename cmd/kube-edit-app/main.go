@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -34,6 +35,7 @@ type cliOptions struct {
 	authHeaderEmail   string
 	authHeaderGroups  string
 	authGroupPrefix   string
+	buildConfig       string
 	build             buildapp.Options
 	showVersion       bool
 }
@@ -94,6 +96,7 @@ func newServeCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	cmd.Flags().StringVar(&opts.authHeaderEmail, "auth-header-email", envDefault("KUBE_EDIT_AUTH_HEADER_EMAIL", "X-Auth-Email"), "trusted proxy email header")
 	cmd.Flags().StringVar(&opts.authHeaderGroups, "auth-header-groups", envDefault("KUBE_EDIT_AUTH_HEADER_GROUPS", "X-Auth-Groups"), "trusted proxy groups header")
 	cmd.Flags().StringVar(&opts.authGroupPrefix, "auth-group-prefix", envDefault("KUBE_EDIT_AUTH_GROUP_PREFIX", "kube-edit-app"), "trusted proxy group prefix")
+	cmd.Flags().StringVar(&opts.buildConfig, "build-config", "", "per-environment build context YAML file")
 	cmd.Flags().StringVar(&opts.build.Namespace, "namespace", "", "override target namespace for build and cluster inspection")
 	cmd.Flags().StringVarP(&opts.build.ResourcePolicyRoot, "resource-policy-root", "P", "", "external resource policy root directory")
 	cmd.Flags().StringVarP(&opts.build.Profile, "profile", "p", "", "replica profile name")
@@ -120,24 +123,61 @@ func newServeCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	return cmd
 }
 
-func runServe(_ *cobra.Command, info appinfo.Info, opts *cliOptions) error {
+func runServe(cmd *cobra.Command, info appinfo.Info, opts *cliOptions) error {
 	if opts.readOnly && opts.allowWrite {
 		return errors.New("--read-only and --allow-write cannot be used together")
 	}
 	if opts.root == "" {
 		return errors.New("--root is required or ENVIRONMENTS_ROOT must be set")
 	}
+	if opts.buildConfig == "" && opts.build.ResourcePolicyRoot != "" && samePath(opts.root, opts.build.ResourcePolicyRoot) {
+		return errors.New("--resource-policy-root resolves to the same directory as --root; omit it unless resource policies are stored in a separate directory")
+	}
 	opts.build.Root = opts.root
 	opts.build.EncjsonPath = opts.encjsonPath
 	opts.build.EncjsonLegacyPath = opts.encjsonLegacyPath
 	opts.build.EncjsonKeydir = opts.encjsonKeydir
-	if _, err := buildapp.DescribeBuildContext(opts.build); err != nil {
-		return fmt.Errorf("invalid build context: %w", err)
-	}
-
 	repo, err := repository.New(opts.root)
 	if err != nil {
 		return fmt.Errorf("invalid repository root: %w", err)
+	}
+	buildOptionsByEnv := map[string]buildapp.Options(nil)
+	if opts.buildConfig == "" {
+		if _, err := buildapp.DescribeBuildContext(opts.build); err != nil {
+			return fmt.Errorf("invalid build context: %w", err)
+		}
+	} else {
+		if changed := changedBuildContextFlags(cmd); len(changed) > 0 {
+			return fmt.Errorf("--build-config cannot be combined with per-build CLI flags: --%s", strings.Join(changed, ", --"))
+		}
+		buildOptionsByEnv, err = loadEditorBuildConfig(opts.buildConfig, opts.build)
+		if err != nil {
+			return fmt.Errorf("invalid --build-config: %w", err)
+		}
+		environments, err := repo.Environments()
+		if err != nil {
+			return fmt.Errorf("discover build-config environments: %w", err)
+		}
+		discovered := make([]string, 0, len(environments))
+		for _, environment := range environments {
+			discovered = append(discovered, environment.Name)
+		}
+		if err := validateBuildConfigEnvironments(buildOptionsByEnv, discovered); err != nil {
+			return fmt.Errorf("invalid --build-config: %w", err)
+		}
+		for env, configured := range buildOptionsByEnv {
+			configured.Root = opts.root
+			configured.EncjsonPath = opts.encjsonPath
+			configured.EncjsonLegacyPath = opts.encjsonLegacyPath
+			configured.EncjsonKeydir = opts.encjsonKeydir
+			if configured.ResourcePolicyRoot != "" && samePath(opts.root, configured.ResourcePolicyRoot) {
+				return fmt.Errorf("invalid --build-config environment %q: resource_policy_root resolves to the same directory as --root", env)
+			}
+			if _, err := buildapp.DescribeBuildContext(configured); err != nil {
+				return fmt.Errorf("invalid --build-config environment %q: %w", env, err)
+			}
+			buildOptionsByEnv[env] = configured
+		}
 	}
 
 	serverOpts := webapp.Options{
@@ -150,6 +190,7 @@ func runServe(_ *cobra.Command, info appinfo.Info, opts *cliOptions) error {
 		Kubeconfig:        opts.kubeconfig,
 		KubeContext:       opts.kubeContext,
 		BuildOptions:      opts.build,
+		BuildOptionsByEnv: buildOptionsByEnv,
 		TrustedProxyAuth: webapp.TrustedProxyAuthOptions{
 			Enabled:      opts.trustedProxy,
 			HeaderUser:   opts.authHeaderUser,
@@ -164,6 +205,36 @@ func runServe(_ *cobra.Command, info appinfo.Info, opts *cliOptions) error {
 		return err
 	}
 	return nil
+}
+
+func changedBuildContextFlags(cmd *cobra.Command) []string {
+	names := []string{
+		"namespace", "resource-policy-root", "profile", "profiles-file",
+		"decrypt-secured", "env-file", "env-url", "env-url-header", "env-url-insecure", "vars-source",
+		"legacy-apply-env", "helm-escape-assets", "release-manifest", "image", "image-policy", "image-reference",
+		"force-image-tag", "force-image-prefix", "sync-metadata-profile", "sync-metadata-prefix", "sync-set", "down", "yaml-indent",
+	}
+	changed := []string{}
+	for _, name := range names {
+		if cmd.Flags().Changed(name) {
+			changed = append(changed, name)
+		}
+	}
+	return changed
+}
+
+func samePath(left, right string) bool {
+	leftAbs, leftErr := filepath.Abs(left)
+	rightAbs, rightErr := filepath.Abs(right)
+	if leftErr != nil || rightErr != nil {
+		return filepath.Clean(left) == filepath.Clean(right)
+	}
+	leftInfo, leftStatErr := os.Stat(leftAbs)
+	rightInfo, rightStatErr := os.Stat(rightAbs)
+	if leftStatErr == nil && rightStatErr == nil {
+		return os.SameFile(leftInfo, rightInfo)
+	}
+	return filepath.Clean(leftAbs) == filepath.Clean(rightAbs)
 }
 
 func envDefault(name, fallback string) string {

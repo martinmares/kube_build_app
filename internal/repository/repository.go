@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 type Environment struct {
@@ -262,12 +260,8 @@ func summarizeApp(path string) (App, error) {
 }
 
 func summarizeAppYAML(path string, content string) (App, bool) {
-	var root any
-	if err := yaml.Unmarshal([]byte(renderVarsPreview(content)), &root); err != nil {
-		return App{}, false
-	}
-	rootMap, ok := root.(map[string]any)
-	if !ok {
+	rootMap, err := rawSourceModelRoot(renderVarsPreview(content))
+	if err != nil {
 		return App{}, false
 	}
 	return App{

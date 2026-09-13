@@ -53,6 +53,39 @@ Recommended editing flow:
 
 Read-only mode still renders structured previews, build checks, generated file preview and diffs, but mutating controls are hidden or disabled and mutating API endpoints return `403`. This is the preferred mode for review, L2 inspection and dashboards. Use `--allow-write` only for intentional repository edits.
 
+For repositories where each environment needs different build inputs, use a
+server-side build context map:
+
+```bash
+kube-edit-app serve \
+  --root ./environments \
+  --build-config ./kube-edit-build.yml
+```
+
+```yaml
+environments:
+  dev:
+    env_url: https://config.example.test/dev/render
+    env_url_headers:
+      - 'Authorization: Bearer token'
+    release_manifest: releases/dev.yml
+    resource_policy_root: policies
+    image_policy: strict
+  test:
+    env_file: inputs/test.env
+```
+
+The map must contain exactly every environment found under `--root`. Unknown
+keys and invalid contexts fail before the HTTP listener starts. Relative file
+paths are resolved from the build config directory. `--build-config` cannot be
+combined with per-build CLI flags; server, authentication, EncJson and
+kubeconfig flags remain global. See
+[`docs/KUBE_EDIT_APP_BUILD_CONTEXT.cs.md`](docs/KUBE_EDIT_APP_BUILD_CONTEXT.cs.md)
+for the complete schema and security rules.
+
+Behind a path-based reverse proxy, `--base-path /editor` serves the complete UI,
+static assets and API under `/editor/`.
+
 ### Trusted Proxy Authentication
 
 `kube-edit-app` can be protected by a trusted reverse proxy that authenticates

@@ -11,10 +11,12 @@ async function apiErrorMessage(response) {
   } catch (_) {}
   return `${response.status} ${response.statusText}: ${body}`;
 }
-const api = async (url) => { const r = await fetch(url, { credentials: 'same-origin' }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
-const apiPost = async (url) => { const r = await fetch(url, { method: 'POST', credentials: 'same-origin' }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
-const apiPostJSON = async (url, payload) => { const r = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload || {}) }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
-const apiPatch = async (url, payload) => { const r = await fetch(url, { method: 'PATCH', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
+const appBasePath = document.body?.dataset.basePath === '/' ? '' : (document.body?.dataset.basePath || '').replace(/\/$/, '');
+const appURL = (url) => url.startsWith('/') ? `${appBasePath}${url}` : url;
+const api = async (url) => { const r = await fetch(appURL(url), { credentials: 'same-origin' }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
+const apiPost = async (url) => { const r = await fetch(appURL(url), { method: 'POST', credentials: 'same-origin' }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
+const apiPostJSON = async (url, payload) => { const r = await fetch(appURL(url), { method: 'POST', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload || {}) }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
+const apiPatch = async (url, payload) => { const r = await fetch(appURL(url), { method: 'PATCH', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) }); if (!r.ok) throw new Error(await apiErrorMessage(r)); return await r.json(); };
 function showError(e) { const el = qs('#ui-error'); el.textContent = String(e); el.classList.remove('hidden'); }
 function clearError() { const el = qs('#ui-error'); el.textContent = ''; el.classList.add('hidden'); }
 function setText(id, value) { const el = qs(id); if (el) el.textContent = value ?? '-'; }
@@ -1420,10 +1422,12 @@ function renderEffectiveContainer(container, role) {
   const startup = container.startup || {};
   const probes = container.probes || {};
   const origins = effectiveContainerOrigins(container);
+  const imageOrigins = container.fields?.image?.origins || [];
+  const imageOrigin = imageOrigins.length ? imageOrigins[imageOrigins.length - 1] : null;
   const envs = container.env_entries || [];
   return `<div class="container-card">
     <div class="d-flex align-items-start justify-content-between gap-2 mb-3">
-      <div><div class="fw-semibold font-monospace text-break">${esc(container.name || '?')}</div><div class="text-muted small font-monospace text-break">${esc(container.image || 'image not configured')}</div></div>
+      <div class="min-w-0"><div class="fw-semibold font-monospace text-break">${esc(container.name || '?')}</div><div class="d-flex flex-wrap align-items-center gap-1"><span class="text-muted small font-monospace text-break">${esc(container.image || 'image not configured')}</span>${imageOrigin ? renderOriginBadge(imageOrigin) : ''}</div></div>
       <span class="badge ${role === 'sidecar' ? 'bg-cyan-lt' : 'bg-blue-lt'}">${esc(role)}</span>
     </div>
     <div class="d-flex flex-wrap gap-1 mb-3">${origins.length ? origins.map(renderOriginBadge).join('') : '<span class="badge bg-secondary-lt">origin unavailable</span>'}</div>
@@ -1484,7 +1488,8 @@ function effectiveContainerOrigins(container) {
     const key = `${origin.kind}:${origin.definition_name || ''}:${origin.document || ''}`;
     if (!seen.has(key)) { seen.add(key); result.push(origin); }
   }
-  for (const field of Object.values(container.fields || {})) {
+  for (const [fieldName, field] of Object.entries(container.fields || {})) {
+    if (fieldName === 'image') continue;
     for (const origin of field.origins || []) {
       const key = `${origin.kind}:${origin.definition_name || ''}:${origin.document || ''}`;
       if (!seen.has(key)) { seen.add(key); result.push(origin); }
@@ -1498,6 +1503,7 @@ function renderOriginBadge(origin) {
     local: ['bg-green-lt', 'Local'], container_profile: ['bg-blue-lt', 'Profile'],
     container_env_defaults: ['bg-secondary-lt', 'Defaults env'], sidecar_definition: ['bg-cyan-lt', 'Shared sidecar'],
     external_resource_policy: ['bg-orange-lt', 'External policy'], release_manifest: ['bg-purple-lt', 'Release'],
+    cli_image_override: ['bg-yellow-lt', 'CLI image'],
   };
   const [style, label] = styles[origin.kind] || ['bg-secondary-lt', origin.kind || 'origin'];
   const detail = origin.definition_name ? `: ${origin.definition_name}` : '';

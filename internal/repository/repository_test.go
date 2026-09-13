@@ -781,6 +781,54 @@ containers:
 	}
 }
 
+func TestAppModelAndReferencesAcceptUnquotedEnvironmentTemplates(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), `container_profiles:
+  - name: web-service
+    ports:
+      - name: http
+        port: {{env:DEFAULT_EXPOSE_PORT}}
+        expose_as:
+          - service_name: api
+            port: {{env:DEFAULT_HTTP_PORT}}
+`)
+	writeFile(t, filepath.Join(root, "test", "apps", "api.yml"), `vars:
+  - name: APP_NAME
+    value: api
+name: "{{var:APP_NAME}}"
+containers:
+  - name: "{{var:APP_NAME}}"
+    profile_ref_names:
+      - web-service
+    ports:
+      - name: metrics
+        port: {{env:METRICS_PORT}}
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model, err := repo.AppModel("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.AppName == nil || *model.AppName != "api" {
+		t.Fatalf("app name = %v, want resolved local var api", model.AppName)
+	}
+	if len(model.Containers) != 1 || len(model.Containers[0].Ports) != 1 || model.Containers[0].Ports[0].Port == nil || *model.Containers[0].Ports[0].Port != "{{env:METRICS_PORT}}" {
+		t.Fatalf("local env template was not preserved: %#v", model.Containers)
+	}
+
+	references, err := repo.AppReferences("test", "api.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(references.Catalog.ContainerProfiles, []string{"web-service"}) {
+		t.Fatalf("container profile catalog = %v, want web-service", references.Catalog.ContainerProfiles)
+	}
+}
+
 func TestUpdateAppContainerEnvsSupportsBuilderSourcesAndPreservesRawEntries(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "test", "apps", "_defaults.yml"), `workload_identity:
@@ -1522,6 +1570,35 @@ func TestUpdateSpecialEntriesUpdatesEnvUnsecuredJSON(t *testing.T) {
 	}
 	if !contains(detail.Content, `"A":"two"`) || !contains(detail.Content, `"COUNT":2`) || !contains(detail.Content, `"FLAG":true`) {
 		t.Fatalf("unexpected env.unsecured.json content:\n%s", detail.Content)
+	}
+}
+
+func TestUpdateSpecialEntriesNoOpIsByteStableAndStaleHashConflicts(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "test", "env.unsecured.json")
+	original := []byte("{\n  \"environment\": {\n    \"B\": \"two\",\n    \"A\": 1\n  }\n}\n")
+	writeFile(t, path, string(original))
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := repo.SpecialEntries("test", "env.unsecured.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateSpecialEntries("test", "env.unsecured.json", current.Entries, current.ContentHash); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("no-op special entries update changed bytes:\n%s", after)
+	}
+	writeFile(t, path, "{\n  \"environment\": {\n    \"B\": \"external change\",\n    \"A\": 1\n  }\n}\n")
+	if _, err := repo.UpdateSpecialEntries("test", "env.unsecured.json", current.Entries, current.ContentHash); !IsConflictError(err) {
+		t.Fatalf("stale special entries update error = %v, want conflict", err)
 	}
 }
 

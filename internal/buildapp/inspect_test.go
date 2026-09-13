@@ -40,6 +40,9 @@ func TestInspectUsesBuilderCompositionAndPreservesSourceTemplates(t *testing.T) 
 	if imageField.WriteTarget == nil || imageField.WriteTarget.ExpectedHash != java.Source.ContentHash || !imageField.Capabilities.CanOverride {
 		t.Fatalf("safe image write metadata missing: %#v", imageField)
 	}
+	if !hasInspectOrigin(imageField.Origins, "container_profile", "java-service") || hasInspectOrigin(imageField.Origins, "release_manifest", "") {
+		t.Fatalf("profile image provenance is incorrect: %#v", imageField.Origins)
+	}
 	if sourceField := java.Source.Fields["containers[0].profile_ref_names"]; !sourceField.Present || sourceField.Line == 0 {
 		t.Fatalf("source field metadata missing: %#v", java.Source.Fields)
 	}
@@ -47,6 +50,12 @@ func TestInspectUsesBuilderCompositionAndPreservesSourceTemplates(t *testing.T) 
 	localEnv := inspectedEnvByName(t, container.EnvEntries, "JAVA_ARGS")
 	if !hasInspectOrigin(defaultEnv.Origins, "container_env_defaults", "*") || !localEnv.Capabilities.CanReset || !hasInspectOrigin(localEnv.Origins, "local", "JAVA_ARGS") {
 		t.Fatalf("env entry provenance missing: %#v", container.EnvEntries)
+	}
+	if localEnv.Effective["value"] != "-Xms256m -Xmx512m" {
+		t.Fatalf("JAVA_ARGS changed from an env string: %#v", localEnv.Effective)
+	}
+	if _, converted := container.Runtime["java"]; converted {
+		t.Fatalf("JAVA_ARGS was converted to runtime.java: %#v", container.Runtime)
 	}
 	if len(java.Effective.RuntimeAssets) != 1 {
 		t.Fatalf("runtime assets = %#v, want selected java-config", java.Effective.RuntimeAssets)
@@ -75,6 +84,34 @@ func TestInspectUsesBuilderCompositionAndPreservesSourceTemplates(t *testing.T) 
 	}
 	if !hasResolvedReferenceUsage(inspection.Usage, "workload_identity_token", "runtime-config", "java-api") || !hasResolvedReferenceUsage(inspection.Usage, "shared_asset", "test-ca", "java-api") {
 		t.Fatalf("transitive runtime asset usage missing: %#v", inspection.Usage)
+	}
+}
+
+func TestInspectMarksOnlyImagesResolvedFromReleaseManifest(t *testing.T) {
+	root := editMetamodelFixtureRoot(t)
+	inspection, err := Inspect(Options{
+		Environment:     "dev",
+		Root:            root,
+		ReleaseManifest: filepath.Join(root, "dev", "_release.yml"),
+		ImagePolicy:     "strict",
+		ImageReference:  "tag",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	java := inspectedAppByName(t, inspection, "java-api.yml")
+	container := java.Effective.Containers[0]
+	if container.Image != "registry.release.example.test/java-api:2026.09.11" {
+		t.Fatalf("release image = %q", container.Image)
+	}
+	imageOrigins := container.Fields["image"].Origins
+	if len(imageOrigins) == 0 || imageOrigins[len(imageOrigins)-1].Kind != "release_manifest" {
+		t.Fatalf("release image is not the winning provenance: %#v", imageOrigins)
+	}
+
+	processExporter := effectiveContainerByName(t, java.Effective.Sidecars, "process-exporter")
+	if hasInspectOrigin(processExporter.Fields["image"].Origins, "release_manifest", "") || !hasInspectOrigin(processExporter.Fields["image"].Origins, "sidecar_definition", "process-exporter") {
+		t.Fatalf("non-overridden sidecar image provenance is incorrect: %#v", processExporter.Fields["image"].Origins)
 	}
 }
 
@@ -132,7 +169,7 @@ func TestEffectiveInspectionAppExposesAdvancedConfiguration(t *testing.T) {
 		Scheduling: schedulingSpec{Arch: "amd64", NodeSelector: map[string]any{"pool": "apps"}},
 	}
 
-	effective := effectiveInspectionApp(app, SourceDocument{}, SourceDocument{}, Options{})
+	effective := effectiveInspectionApp(app, SourceDocument{}, SourceDocument{}, Options{}, nil)
 	if effective.Strategy != "recreate" || effective.SubdomainName != "internal" || effective.TerminationGracePeriod == nil || *effective.TerminationGracePeriod != 45 {
 		t.Fatalf("scalar advanced fields missing: %#v", effective)
 	}

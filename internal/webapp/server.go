@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -34,7 +35,8 @@ var contentFiles embed.FS
 var indexTemplate = template.Must(template.ParseFS(contentFiles, "templates/index.html"))
 
 type indexPageData struct {
-	AppName string
+	AppName  string
+	BasePath string
 }
 
 type Server struct {
@@ -98,6 +100,7 @@ type Options struct {
 	Kubeconfig        string
 	KubeContext       string
 	BuildOptions      buildapp.Options
+	BuildOptionsByEnv map[string]buildapp.Options
 	TrustedProxyAuth  TrustedProxyAuthOptions
 }
 
@@ -117,6 +120,7 @@ func NewServer(info appinfo.Info, repo *repository.Repository, options ...Option
 	if opts.BasePath == "" {
 		opts.BasePath = "/"
 	}
+	opts.BasePath = normalizeBasePath(opts.BasePath)
 	opts.TrustedProxyAuth = normalizeTrustedProxyAuth(opts.TrustedProxyAuth)
 	return &Server{info: info, repo: repo, options: opts, buildPreviewDirs: map[string]buildPreviewSnapshot{}}
 }
@@ -181,7 +185,32 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/envs/{env}/preview", s.handleBuildPreview)
 	mux.HandleFunc("GET /api/v1/envs/{env}/preview/{preview_id}/content/{file_path...}", s.handleBuildPreviewContent)
 	mux.HandleFunc("GET /api/v1/envs/{env}/cluster", s.handleClusterStatus)
-	return s.authMiddleware(mux)
+	handler := s.authMiddleware(mux)
+	if s.options.BasePath == "/" {
+		return handler
+	}
+	prefix := strings.TrimSuffix(s.options.BasePath, "/")
+	root := http.NewServeMux()
+	root.Handle(s.options.BasePath, http.StripPrefix(prefix, handler))
+	root.HandleFunc(prefix, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, s.options.BasePath, http.StatusPermanentRedirect)
+	})
+	return root
+}
+
+func normalizeBasePath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "/" {
+		return "/"
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	value = pathpkg.Clean(value)
+	if value == "/" {
+		return value
+	}
+	return strings.TrimSuffix(value, "/") + "/"
 }
 
 func (s *Server) ListenAndServe(addr string) error {
@@ -196,7 +225,7 @@ func (s *Server) ListenAndServe(addr string) error {
 
 func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := indexTemplate.Execute(w, indexPageData{AppName: s.info.Name}); err != nil {
+	if err := indexTemplate.Execute(w, indexPageData{AppName: s.info.Name, BasePath: s.options.BasePath}); err != nil {
 		slog.Error("render index failed", "error", err)
 	}
 }
@@ -1763,6 +1792,9 @@ func randomID() (string, error) {
 
 func (s *Server) buildOptions(env string) buildapp.Options {
 	opts := s.options.BuildOptions
+	if configured, ok := s.options.BuildOptionsByEnv[env]; ok {
+		opts = configured
+	}
 	opts.Environment = env
 	opts.Root = s.repo.Root()
 	opts.Target = ""

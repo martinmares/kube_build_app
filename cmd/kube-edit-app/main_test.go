@@ -87,6 +87,25 @@ func TestServeRejectsConflictingWriteFlags(t *testing.T) {
 	}
 }
 
+func TestServeRejectsResourcePolicyRootMatchingRepositoryRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "test"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, policyRoot := range []string{root, filepath.Join(root, ".")} {
+		cmd := newRootCommand(appinfo.For(appinfo.EditAppName), &cliOptions{})
+		cmd.SetArgs([]string{"serve", "--root", root, "--resource-policy-root", policyRoot})
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatalf("serve with matching resource policy root %q succeeded, want error", policyRoot)
+		}
+		if !strings.Contains(err.Error(), "--resource-policy-root resolves to the same directory as --root") {
+			t.Fatalf("unexpected error for %q: %v", policyRoot, err)
+		}
+	}
+}
+
 func TestServeExposesBuilderContextFlags(t *testing.T) {
 	cmd := newRootCommand(appinfo.For(appinfo.EditAppName), &cliOptions{})
 	serve, _, err := cmd.Find([]string{"serve"})
@@ -94,6 +113,7 @@ func TestServeExposesBuilderContextFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{
+		"build-config",
 		"namespace", "resource-policy-root", "profile", "profiles-file",
 		"env-file", "env-url", "env-url-header", "env-url-insecure",
 		"release-manifest", "image-policy", "image-reference",
@@ -102,6 +122,42 @@ func TestServeExposesBuilderContextFlags(t *testing.T) {
 		if serve.Flags().Lookup(name) == nil {
 			t.Errorf("serve flag --%s is missing", name)
 		}
+	}
+}
+
+func TestServeRejectsBuildConfigCombinedWithBuildFlags(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "dev"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(t.TempDir(), "build.yml")
+	if err := os.WriteFile(config, []byte("environments:\n  dev: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCommand(appinfo.For(appinfo.EditAppName), &cliOptions{})
+	cmd.SetArgs([]string{"serve", "--root", root, "--build-config", config, "--image-policy", "strict"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--build-config cannot be combined") || !strings.Contains(err.Error(), "--image-policy") {
+		t.Fatalf("error = %v, want explicit build flag conflict", err)
+	}
+}
+
+func TestServeRejectsIncompleteBuildConfigBeforeListening(t *testing.T) {
+	root := t.TempDir()
+	for _, env := range []string{"dev", "test"} {
+		if err := os.MkdirAll(filepath.Join(root, env), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config := filepath.Join(t.TempDir(), "build.yml")
+	if err := os.WriteFile(config, []byte("environments:\n  dev: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCommand(appinfo.For(appinfo.EditAppName), &cliOptions{})
+	cmd.SetArgs([]string{"serve", "--root", root, "--build-config", config})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "build config is missing environments: test") {
+		t.Fatalf("error = %v, want missing environment failure", err)
 	}
 }
 

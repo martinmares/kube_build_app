@@ -855,6 +855,43 @@ func TestIndexAndStaticAssets(t *testing.T) {
 	}
 }
 
+func TestBasePathMountsIndexStaticAssetsAndAPI(t *testing.T) {
+	server := NewServer(appinfo.For(appinfo.EditAppName), nil, Options{BasePath: "editor"})
+
+	redirectReq := httptest.NewRequest(http.MethodGet, "/editor", nil)
+	redirectRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(redirectRes, redirectReq)
+	if redirectRes.Code != http.StatusPermanentRedirect || redirectRes.Header().Get("Location") != "/editor/" {
+		t.Fatalf("base redirect = %d %q, want 308 /editor/", redirectRes.Code, redirectRes.Header().Get("Location"))
+	}
+
+	indexReq := httptest.NewRequest(http.MethodGet, "/editor/", nil)
+	indexRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(indexRes, indexReq)
+	if indexRes.Code != http.StatusOK {
+		t.Fatalf("index status = %d, want 200", indexRes.Code)
+	}
+	for _, expected := range []string{`data-base-path="/editor/"`, `href="/editor/static/ui.css"`, `src="/editor/static/ui.js"`} {
+		if !strings.Contains(indexRes.Body.String(), expected) {
+			t.Fatalf("prefixed index missing %q:\n%s", expected, indexRes.Body.String())
+		}
+	}
+
+	staticReq := httptest.NewRequest(http.MethodGet, "/editor/static/ui.js", nil)
+	staticRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(staticRes, staticReq)
+	if staticRes.Code != http.StatusOK || !strings.Contains(staticRes.Body.String(), "const appBasePath") {
+		t.Fatalf("prefixed static response = %d:\n%s", staticRes.Code, staticRes.Body.String())
+	}
+
+	infoReq := httptest.NewRequest(http.MethodGet, "/editor/api/v1/info", nil)
+	infoRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(infoRes, infoReq)
+	if infoRes.Code != http.StatusOK || !strings.Contains(infoRes.Body.String(), `"base_path":"/editor/"`) {
+		t.Fatalf("prefixed API response = %d:\n%s", infoRes.Code, infoRes.Body.String())
+	}
+}
+
 func TestBuildReadOnlyEndpoints(t *testing.T) {
 	root := t.TempDir()
 	writeBuildFixture(t, root)
@@ -910,6 +947,32 @@ func TestInspectionAndBuildContextEndpointsUseConfiguredOptions(t *testing.T) {
 	server.Handler().ServeHTTP(inspectRes, inspectReq)
 	if inspectRes.Code != http.StatusOK || !strings.Contains(inspectRes.Body.String(), `"namespace":"web-override"`) || !strings.Contains(inspectRes.Body.String(), `"sidecars"`) || !strings.Contains(inspectRes.Body.String(), `"container_profile"`) || !strings.Contains(inspectRes.Body.String(), `"shared_assets"`) || !strings.Contains(inspectRes.Body.String(), `"app_file":"java-api.yml"`) {
 		t.Fatalf("unexpected inspection response (%d): %s", inspectRes.Code, inspectRes.Body.String())
+	}
+}
+
+func TestBuildContextEndpointUsesEnvironmentSpecificOptions(t *testing.T) {
+	root := t.TempDir()
+	for _, env := range []string{"dev", "test"} {
+		writeFile(t, filepath.Join(root, env, "apps", "api.yml"), "name: api\ncontainers:\n  - name: api\n")
+	}
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{
+		BuildOptions: buildapp.Options{Namespace: "global-namespace", YAMLIndent: 2},
+		BuildOptionsByEnv: map[string]buildapp.Options{
+			"dev":  {Namespace: "dev-namespace", YAMLIndent: 4},
+			"test": {Namespace: "test-namespace", YAMLIndent: 2},
+		},
+	})
+	for env, namespace := range map[string]string{"dev": "dev-namespace", "test": "test-namespace"} {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/envs/"+env+"/build-context", nil)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"namespace_override":"`+namespace+`"`) {
+			t.Fatalf("%s context (%d) = %s", env, response.Code, response.Body.String())
+		}
 	}
 }
 
