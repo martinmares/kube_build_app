@@ -2412,6 +2412,20 @@ RELEASE_PUSH_TOKEN
 
 Pokud je `RELEASE_PUSH_TOKEN` nastavený v GitLab CI/CD variables, publish job aktualizuje `CHANGELOG.md` a pushne změnu zpět s `[skip ci]`.
 
+## GitHub Release Workflow
+
+GitHub Actions workflow provede stejný release build při změně `VERSION` ve
+větvi `main`. Push do remote `github` následně:
+
+- spustí kompletní Go testy
+- vygeneruje release notes z git historie
+- vytvoří stejné multiplatformní balíčky jako GitLab
+- vytvoří nebo aktualizuje GitHub Release `v<VERSION>`
+- nahraje všechny `tar.gz` balíčky a `SHA256SUMS`
+
+Workflow používá `GITHUB_TOKEN` poskytovaný repozitářem; žádný další release
+token není potřeba. Commity beze změny `VERSION` tento workflow nespustí.
+
 ## Licence
 
 Tento projekt je poskytován pod licencí MIT.

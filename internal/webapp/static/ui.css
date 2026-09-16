@@ -152,5 +152,5 @@ i.ti { font-size: 1.1rem; line-height: 1; vertical-align: -.125em; }
 @media (max-width: 991.98px) { .card-header { align-items: flex-start; flex-direction: column; gap: .5rem; } .table-responsive table { min-width: 760px; } .apps-list-card, .assets-list-card { position: static; max-height: none; } .apps-list-table, .assets-list-table { max-height: none; } }
 @media (max-width: 575.98px) { .overview-grid { grid-template-columns: 1fr; } }
 #profile-workspace .field-width { max-width: 640px; }
-#profile-workspace .table input { min-width: 100px; }
+#profile-workspace .table input:not([type="checkbox"]):not([type="radio"]) { min-width: 100px; }
 #profile-workspace .table select { min-width: 150px; }

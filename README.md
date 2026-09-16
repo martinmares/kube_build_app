@@ -2429,6 +2429,21 @@ RELEASE_PUSH_TOKEN
 
 When `RELEASE_PUSH_TOKEN` is set in GitLab CI/CD variables, the publish job updates `CHANGELOG.md` and pushes it back with `[skip ci]`.
 
+## GitHub Release Workflow
+
+The GitHub Actions workflow mirrors the release build when `VERSION` changes on
+the `main` branch. A push to the `github` remote then:
+
+- runs the complete Go test suite
+- generates release notes from git history
+- builds the same cross-platform packages as GitLab
+- creates or updates the `v<VERSION>` GitHub Release
+- uploads all `tar.gz` packages and `SHA256SUMS`
+
+The workflow uses the repository-provided `GITHUB_TOKEN`; no additional release
+token is required. Commits that do not change `VERSION` do not start this
+workflow.
+
 ## License
 
 This project is licensed under the MIT License.
