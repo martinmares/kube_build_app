@@ -320,7 +320,7 @@ containers:
 	}
 	asset := loadYAML(t, result.Assets[0])
 	wantSyncID := "test/app/api/container/api/asset/assets/client.conf:/app/resources/client.jks"
-	assertSyncMetadata(t, asset, wantSyncID, "100")
+	assertSyncMetadata(t, asset, wantSyncID, "100", "kube-deploy-sync")
 	if got := digString(asset, "data", "client.conf"); got != "runtime={{RUNTIME_SECRET}}\n" {
 		t.Fatalf("asset content = %q, runtime placeholder must remain untouched", got)
 	}
@@ -751,7 +751,7 @@ containers:
 	}
 
 	ingress := loadYAML(t, filepath.Join(target, "services", "external", "api-public-ingress.yml"))
-	assertSyncMetadata(t, ingress, "test/Ingress/nac-test/api-public", "400")
+	assertSyncMetadata(t, ingress, "test/Ingress/nac-test/api-public", "400", "kube-deploy-sync")
 	if got := digString(ingress, "kind"); got != "Ingress" {
 		t.Fatalf("ingress kind = %q", got)
 	}
@@ -763,7 +763,7 @@ containers:
 	}
 
 	route := loadYAML(t, filepath.Join(target, "services", "external", "api-route-route.yml"))
-	assertSyncMetadata(t, route, "test/Route/nac-test/api-route", "400")
+	assertSyncMetadata(t, route, "test/Route/nac-test/api-route", "400", "kube-deploy-sync")
 	if got := digString(route, "kind"); got != "Route" {
 		t.Fatalf("route kind = %q", got)
 	}
@@ -2479,7 +2479,7 @@ containers:
 	}
 
 	hpa := loadYAML(t, filepath.Join(target, "deployments", "api-hpa.yml"))
-	assertSyncMetadata(t, hpa, "test/HorizontalPodAutoscaler/nac-test/api", "210")
+	assertSyncMetadata(t, hpa, "test/HorizontalPodAutoscaler/nac-test/api", "210", "kube-deploy-sync")
 	if got := digString(hpa, "apiVersion"); got != "autoscaling/v2" {
 		t.Fatalf("apiVersion = %q, want autoscaling/v2", got)
 	}
@@ -2798,7 +2798,7 @@ subdomain_name: stateful-headless
 		t.Fatalf("recreate strategy type = %q, want Recreate", got)
 	}
 	recreateBudget := loadYAML(t, filepath.Join(target, "deployments", "recreate-budget.yml"))
-	assertSyncMetadata(t, recreateBudget, "test/PodDisruptionBudget/nac-test/recreate", "190")
+	assertSyncMetadata(t, recreateBudget, "test/PodDisruptionBudget/nac-test/recreate", "190", "kube-deploy-sync")
 	if got := digInt(recreateBudget, "spec", "minAvailable"); got != 1 {
 		t.Fatalf("minAvailable = %d, want 1", got)
 	}
@@ -2811,13 +2811,13 @@ subdomain_name: stateful-headless
 		t.Fatalf("one-by-one maxUnavailable = %d, want 1", got)
 	}
 	oneByOneBudget := loadYAML(t, filepath.Join(target, "deployments", "one-by-one-budget.yml"))
-	assertSyncMetadata(t, oneByOneBudget, "test/PodDisruptionBudget/nac-test/one-by-one", "190")
+	assertSyncMetadata(t, oneByOneBudget, "test/PodDisruptionBudget/nac-test/one-by-one", "190", "kube-deploy-sync")
 	if got := digInt(oneByOneBudget, "spec", "maxUnavailable"); got != 1 {
 		t.Fatalf("budget maxUnavailable = %d, want 1", got)
 	}
 
 	stateful := loadYAML(t, filepath.Join(target, "deployments", "stateful-deployment.yml"))
-	assertSyncMetadata(t, stateful, "test/StatefulSet/nac-test/stateful", "200")
+	assertSyncMetadata(t, stateful, "test/StatefulSet/nac-test/stateful", "200", "kube-deploy-sync")
 	if got := digString(stateful, "kind"); got != "StatefulSet" {
 		t.Fatalf("kind = %q, want StatefulSet", got)
 	}
@@ -3505,19 +3505,19 @@ containers:
 		t.Fatal(err)
 	}
 	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
-	assertSyncMetadata(t, deployment, "test/Deployment/nac-test/api", "200")
+	assertSyncMetadata(t, deployment, "test/Deployment/nac-test/api", "200", "kube-deploy-sync")
 	if got := digString(deployment, "metadata", "labels", "kube-build-app.io/sync-set"); got != "test" {
 		t.Fatalf("deployment sync-set = %q, want test", got)
 	}
 
 	service := loadYAML(t, filepath.Join(target, "services", "api-service.yml"))
-	assertSyncMetadata(t, service, "test/Service/nac-test/api", "300")
+	assertSyncMetadata(t, service, "test/Service/nac-test/api", "300", "kube-deploy-sync")
 
 	if len(result.Assets) != 1 {
 		t.Fatalf("len(assets) = %d, want 1", len(result.Assets))
 	}
 	configMap := loadYAML(t, result.Assets[0])
-	assertSyncMetadata(t, configMap, "test/app/api/container/api/asset/assets/app.conf:/app/app.conf", "100")
+	assertSyncMetadata(t, configMap, "test/app/api/container/api/asset/assets/app.conf:/app/app.conf", "100", "kube-deploy-sync")
 }
 
 func TestBuildSyncMetadataSupportsCustomPrefixAndSyncSet(t *testing.T) {
@@ -3540,6 +3540,12 @@ name: api
 		t.Fatal(err)
 	}
 	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "metadata", "labels", "app.kubernetes.io/managed-by"); got != "kube-deploy-sync" {
+		t.Fatalf("managed-by label = %q, want kube-deploy-sync", got)
+	}
+	if got := digString(deployment, "metadata", "labels", "sync.example.test/generated-by"); got != "kube-build-app" {
+		t.Fatalf("custom generated-by = %q, want kube-build-app", got)
+	}
 	if got := digString(deployment, "metadata", "labels", "sync.example.test/sync-set"); got != "release-2026.20" {
 		t.Fatalf("custom sync-set = %q, want release-2026.20", got)
 	}
@@ -3653,7 +3659,7 @@ containers:
 		t.Fatal(err)
 	}
 	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
-	assertSyncMetadata(t, deployment, "test/Deployment/nac-test/api", "200")
+	assertSyncMetadata(t, deployment, "test/Deployment/nac-test/api", "200", "argocd")
 	if got := digString(deployment, "metadata", "annotations", "argocd.argoproj.io/sync-wave"); got != "200" {
 		t.Fatalf("argocd sync-wave = %q, want 200", got)
 	}
@@ -5346,10 +5352,13 @@ func digString(value any, path ...string) string {
 	return ""
 }
 
-func assertSyncMetadata(t *testing.T, object map[string]any, syncID string, order string) {
+func assertSyncMetadata(t *testing.T, object map[string]any, syncID string, order string, manager string) {
 	t.Helper()
-	if got := digString(object, "metadata", "labels", "app.kubernetes.io/managed-by"); got != "kube-build-app" {
-		t.Fatalf("managed-by label = %q, want kube-build-app", got)
+	if got := digString(object, "metadata", "labels", "app.kubernetes.io/managed-by"); got != manager {
+		t.Fatalf("managed-by label = %q, want %q", got, manager)
+	}
+	if got := digString(object, "metadata", "labels", "kube-build-app.io/generated-by"); got != "kube-build-app" {
+		t.Fatalf("generated-by label = %q, want kube-build-app", got)
 	}
 	if got := digString(object, "metadata", "labels", "kube-build-app.io/sync-id-hash"); len(got) != 16 {
 		t.Fatalf("sync-id-hash = %q, want 16 hex chars", got)

@@ -916,7 +916,8 @@ func applySyncMetadata(object map[string]any, opts Options, spec syncMetadataSpe
 	labels := ensureMap(metadata, "labels")
 	annotations := ensureMap(metadata, "annotations")
 
-	labels["app.kubernetes.io/managed-by"] = "kube-build-app"
+	labels["app.kubernetes.io/managed-by"] = profile
+	labels[prefix+"/generated-by"] = "kube-build-app"
 	labels[prefix+"/sync-set"] = syncSet
 	labels[prefix+"/sync-id-hash"] = shortSyncIDHash(spec.ID)
 	annotations[prefix+"/sync-id"] = spec.ID

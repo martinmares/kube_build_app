@@ -45,7 +45,8 @@ Recommended generated metadata:
 ```yaml
 metadata:
   labels:
-    app.kubernetes.io/managed-by: kube-build-app
+    app.kubernetes.io/managed-by: kube-deploy-sync
+    kube-build-app.io/generated-by: kube-build-app
     kube-build-app.io/sync-set: dev
     kube-build-app.io/sync-id-hash: "a1b2c3d4e5f6"
   annotations:
@@ -56,6 +57,8 @@ metadata:
 
 Rationale:
 
+- `app.kubernetes.io/managed-by` identifies the active sync engine and therefore depends on the selected profile.
+- `generated-by` records `kube-build-app` as the manifest producer independently of the sync engine.
 - Full `sync-id` belongs in an annotation because label values have strict length and character constraints.
 - `sync-id-hash` is a short label suitable for selection/indexing.
 - `sync-set` groups all objects belonging to one rendered target, usually an environment or release scope.
@@ -80,7 +83,7 @@ nac-dev
 `kube-deploy-sync` can list live managed objects by:
 
 ```text
-app.kubernetes.io/managed-by=kube-build-app
+app.kubernetes.io/managed-by=kube-deploy-sync
 kube-build-app.io/sync-set=<sync-set>
 ```
 
@@ -196,7 +199,7 @@ Algorithm:
 parse desired objects
 require sync metadata on every desired object
 index desired by sync-id
-list live objects by managed-by + sync-set
+list live objects by profile-specific managed-by + sync-set
 index live by sync-id
 
 for each desired sync-id:
@@ -231,8 +234,8 @@ Initial profiles:
 
 ```text
 none              -> default today, no sync metadata
-kube-deploy-sync  -> full sync metadata contract
-argocd            -> sync metadata plus ArgoCD-compatible sync wave output
+kube-deploy-sync  -> full sync metadata contract, managed-by=kube-deploy-sync
+argocd            -> sync metadata, managed-by=argocd, plus ArgoCD-compatible sync wave output
 ```
 
 Possible CLI shape:
