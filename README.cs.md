@@ -32,8 +32,8 @@ kube-edit-app serve --root ./environments --allow-write
 Doporučený postup editace:
 
 1. Vybrat environment.
-2. Otevřít `Apps` pro app model nebo `Assets` pro environment JSON/defaults/assets.
-3. Ve write režimu provést strukturovanou editaci. Aktuální editory pokrývají local vars, defaults vars/container envs, replicas, autoscaling, resources, Java runtime, probes, ports/services/ingress, container envs a special env JSON entries.
+2. Otevřít `Apps` pro app model, `Defaults` pro `_defaults.yml` a sdílené definice nebo `Assets` pro environment JSON a soubory.
+3. Ve write režimu provést strukturovanou editaci. Aktuální editory pokrývají local vars, defaults vars/container envs, container profily (jeden záložkový formulář se společným Save/Cancel pro image, startup, envs, CPU/memory, HTTP probes a porty/služby), sdílené sidecar definice, reference, replicas, autoscaling, resources, Java runtime, probes, ports/services/ingress, container envs a special env JSON entries. Položka `_defaults.yml` v Assets je pouze read-only souhrn zdroje s odkazem zpět do Defaults.
 4. Opravit případné chyby podle inline validačních hlášek přímo u polí.
 5. Otevřít `Build`, spustit validaci a případně vykreslit build preview file tree.
 6. Otevřít `Changed files`, rozbalit inline diffy a vybrat soubory k přijetí.

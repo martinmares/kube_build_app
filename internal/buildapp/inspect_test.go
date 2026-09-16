@@ -218,6 +218,71 @@ func TestInspectKeepsSourceWhenBuildVariablesFail(t *testing.T) {
 	}
 }
 
+func TestInspectExposesTemplateReferenceNamesWithoutBuildValues(t *testing.T) {
+	root := t.TempDir()
+	envDir := filepath.Join(root, "dev")
+	if err := os.MkdirAll(filepath.Join(envDir, "apps"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "apps", "_defaults.yml"), []byte("vars:\n  - name: DEFAULT_PORT\n    value: 80\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "apps", "api.yml"), []byte("vars:\n  - name: APP_NAME\n    value: api\ncontainers: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(envDir, "build.env")
+	if err := os.WriteFile(envFile, []byte("NAMESPACE=test\nSECRET_TOKEN=must-not-leak\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	inspection, err := Inspect(Options{Environment: "dev", Root: root, EnvFile: envFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, expected := range []string{`"namespace":"var","name":"DEFAULT_PORT"`, `"namespace":"var","name":"APP_NAME"`, `"namespace":"env","name":"SECRET_TOKEN"`} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("template reference metadata missing %s: %s", expected, text)
+		}
+	}
+	if strings.Contains(text, "must-not-leak") {
+		t.Fatalf("build variable value leaked through inspection: %s", text)
+	}
+}
+
+func TestInspectDoesNotCatalogUnreferencedProcessEnvironment(t *testing.T) {
+	root := t.TempDir()
+	apps := filepath.Join(root, "dev", "apps")
+	if err := os.MkdirAll(apps, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(apps, "api.yml"), []byte("name: api\ncontainers:\n  - name: api\n    image: '{{env:VISIBLE_IMAGE}}'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VISIBLE_IMAGE", "registry.example/api:1")
+	t.Setenv("HOST_ONLY_SECRET", "must-not-leak")
+
+	inspection, err := Inspect(Options{Environment: "dev", Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(inspection.TemplateRefs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, `"name":"VISIBLE_IMAGE"`) {
+		t.Fatalf("referenced environment name missing: %s", text)
+	}
+	if strings.Contains(text, "HOST_ONLY_SECRET") || strings.Contains(text, "must-not-leak") {
+		t.Fatalf("unreferenced process environment leaked: %s", text)
+	}
+}
+
 func TestDescribeBuildContextDoesNotExposeHeaderValues(t *testing.T) {
 	context, err := DescribeBuildContext(Options{
 		EnvURL:         "https://config.example.test/render",

@@ -152,6 +152,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/envs/{env}/defaults", s.handleDefaults)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/vars", s.handleDefaultsVarsUpdate)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/container-envs", s.handleDefaultsContainerEnvsUpdate)
+	mux.HandleFunc("GET /api/v1/envs/{env}/defaults/container-profiles/{profile_name}", s.handleDefaultsContainerProfile)
+	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/container-profiles/{profile_name}", s.handleDefaultsContainerProfileUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/defaults/sidecar-definitions/{sidecar_name}", s.handleDefaultsSidecarDefinition)
 	mux.HandleFunc("PATCH /api/v1/envs/{env}/defaults/sidecar-definitions/{sidecar_name}", s.handleDefaultsSidecarDefinitionUpdate)
 	mux.HandleFunc("GET /api/v1/envs/{env}/defaults/sidecar-definitions/{sidecar_name}/startup", s.handleDefaultsSidecarDefinitionStartup)
@@ -684,6 +686,44 @@ func (s *Server) handleDefaultsSidecarDefinition(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, definition)
+}
+
+func (s *Server) handleDefaultsContainerProfile(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	profile, err := s.repo.DefaultsContainerProfile(r.PathValue("env"), r.PathValue("profile_name"))
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, profile)
+}
+
+func (s *Server) handleDefaultsContainerProfileUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		writeError(w, http.StatusServiceUnavailable, "repository root is not configured")
+		return
+	}
+	if s.options.ReadOnly {
+		writeError(w, http.StatusForbidden, "mutating API endpoints are disabled")
+		return
+	}
+	var payload struct {
+		ExpectedHash string                                    `json:"expected_hash"`
+		Profile      repository.DefaultsContainerProfileUpdate `json:"profile"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	profile, err := s.repo.UpdateDefaultsContainerProfile(r.PathValue("env"), r.PathValue("profile_name"), payload.Profile, payload.ExpectedHash)
+	if err != nil {
+		writeError(w, statusForError(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, profile)
 }
 
 func (s *Server) handleDefaultsSidecarDefinitionUpdate(w http.ResponseWriter, r *http.Request) {

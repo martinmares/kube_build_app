@@ -1,5 +1,10 @@
 # kube-edit-app: sladeni s aktualnim metamodellem builderu
 
+> Aktualizace 2026-09-13 vecer: technicke checkpointy nize nejsou schvalenim
+> UX. Uzivatel odmitl katalogove Defaults a mikroeditory. Dalsi produktovy smer
+> a checklist jsou v [novem navrhu editoru](KUBE_EDIT_APP_EDITOR_REDESIGN.cs.md).
+> Jeho pokyny maji prednost pred zdejsim pozadavkem zachovat modalni editory.
+
 Datum: 2026-09-11, uzavreno 2026-09-13. Vychozi commit: `162e6e2`, VERSION `0.13.1`.
 Stav: etapy P0-P6 implementovany a overeny; jednotlive checkpointy jsou nize.
 Tento dokument nahrazuje stare poradi praci v
@@ -401,6 +406,10 @@ Checkpoint P3.3 2026-09-11:
 
 ### P4: Editace sdilenych definic a identity
 
+- [x] Container profile workspace: jeden siroky vizualni editor vybraneho
+  `container_profiles[]` zaznamu se sekcemi pro cely `defaults` model;
+  prvni zapisovatelna sekce je image, s optimistic lock a byte-preserving
+  no-op/zapisem ostatnich poli.
 - [ ] Container profiles a sidecar definitions: create/edit/duplicate,
   startup command/arguments jako seznamy, image, envs vcetne ref typu,
   resources, profily sidecaru a runtime asset refs.

@@ -242,6 +242,7 @@ func TestMutatingEndpointsRequireWriteMode(t *testing.T) {
 		{http.MethodPatch, "/api/v1/envs/test/apps/api.yml/sidecars/exporter/startup/override", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/vars", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/container-envs", `{}`},
+		{http.MethodPatch, "/api/v1/envs/test/defaults/container-profiles/java-service", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter/startup", `{}`},
 		{http.MethodPatch, "/api/v1/envs/test/defaults/sidecar-definitions/exporter/resources", `{}`},
@@ -1357,6 +1358,52 @@ func TestDefaultsUpdateEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(envsRes.Body.String(), `"container_envs"`) || !strings.Contains(envsRes.Body.String(), `"LOG_LEVEL"`) {
 		t.Fatalf("unexpected container envs response:\n%s", envsRes.Body.String())
+	}
+}
+
+func TestDefaultsContainerProfileAPIUpdatesImage(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "dev", "apps", "_defaults.yml"), `container_profiles:
+  - name: java-service
+    defaults:
+      image: java:1
+      startup:
+        command: ["/app/start-java.sh"]
+`)
+	repo, err := repository.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(appinfo.For(appinfo.EditAppName), repo, Options{ReadOnly: false})
+	path := "/api/v1/envs/dev/defaults/container-profiles/java-service"
+
+	getResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, path, nil))
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getResponse.Code, getResponse.Body.String())
+	}
+	if !strings.Contains(getResponse.Body.String(), `"defaults":{"image":"java:1","startup":{"command":["/app/start-java.sh"]}}`) {
+		t.Fatalf("GET does not expose the complete profile defaults: %s", getResponse.Body.String())
+	}
+	var current repository.DefaultsContainerProfile
+	if err := json.Unmarshal(getResponse.Body.Bytes(), &current); err != nil {
+		t.Fatal(err)
+	}
+	payload := fmt.Sprintf(`{"expected_hash":%q,"profile":{"image":"registry.example/java:2"}}`, current.ContentHash)
+	patchResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(patchResponse, httptest.NewRequest(http.MethodPatch, path, strings.NewReader(payload)))
+	if patchResponse.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d: %s", patchResponse.Code, patchResponse.Body.String())
+	}
+	if !strings.Contains(patchResponse.Body.String(), `"image":"registry.example/java:2"`) {
+		t.Fatalf("unexpected PATCH body: %s", patchResponse.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(root, "dev", "apps", "_defaults.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `command: ["/app/start-java.sh"]`) {
+		t.Fatalf("PATCH discarded unrelated profile fields:\n%s", content)
 	}
 }
 

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="cs" data-bs-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Defaults editor · návrh</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css">
+<style>
+/* Keep field lengths readable inside the existing Tabler layout. */
+.editor-width {max-width: 960px;}
+.field-width {max-width: 640px;}
+.table input {min-width: 100px;}
+.table select {min-width: 160px;}
+pre {white-space: pre-wrap; overflow-wrap: anywhere;}
+</style>
+</head>
+<body>
+<header class="navbar"><div class="container-xl"><span class="navbar-brand">kube-edit-app</span><div class="d-flex align-items-center gap-3"><span class="badge bg-yellow-lt">Klikací návrh</span><button id="theme" class="btn btn-sm">Světlý / tmavý režim</button></div></div></header>
+<main class="container-xl py-4">
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3"><div><div class="subheader">Prostředí dev</div><h1 class="h2 mb-1">Defaults</h1><span class="text-secondary">Společné nastavení aplikací · apps/_defaults.yml</span></div><span class="text-secondary small">Změny v ukázce se neukládají do souborů.</span></div>
+<div class="row gx-3 gy-4">
+<aside class="col-12 col-md-3 col-xl-2"><nav id="sections" class="nav nav-pills flex-row flex-md-column" aria-label="Části Defaults"></nav></aside>
+<section class="col-12 col-md-9 col-xl-10"><div class="editor-width">
+<div id="notice" role="status" aria-live="polite"></div>
+<div id="selection" class="mb-3"></div>
+<div class="card">
+<div id="heading" class="card-header"></div>
+<div id="tabs" class="card-header py-0"></div>
+<form id="editor" class="card-body" novalidate></form>
+<div class="card-footer d-flex flex-wrap align-items-center justify-content-between gap-2"><span id="dirty" class="text-secondary small" aria-live="polite"></span><div class="btn-list"><button id="cancel" class="btn">Zrušit změny</button><button id="save" class="btn btn-primary">Uložit profil</button></div></div>
+</div>
+<details id="review" class="mt-3"><summary class="text-secondary">Změny připravené k uložení</summary><div id="changes" class="mt-2"></div></details>
+</div></section>
+</div>
+</main><script src="prototype.js"></script>
+</body></html>

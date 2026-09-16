@@ -145,6 +145,8 @@ func TestTrustedProxyAuthCoversMetamodelEndpointRoles(t *testing.T) {
 		{http.MethodPatch, "/api/v1/envs/dev/apps/api.yml/sidecars/exporter/startup/override", true},
 		{http.MethodGet, "/api/v1/envs/dev/defaults", false},
 		{http.MethodPatch, "/api/v1/envs/dev/defaults/container-envs", true},
+		{http.MethodGet, "/api/v1/envs/dev/defaults/container-profiles/java-service", false},
+		{http.MethodPatch, "/api/v1/envs/dev/defaults/container-profiles/java-service", true},
 		{http.MethodGet, "/api/v1/envs/dev/defaults/sidecar-definitions/exporter", false},
 		{http.MethodPatch, "/api/v1/envs/dev/defaults/sidecar-definitions/exporter", true},
 		{http.MethodPatch, "/api/v1/envs/dev/defaults/sidecar-definitions/exporter/startup", true},

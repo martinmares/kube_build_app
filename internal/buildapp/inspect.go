@@ -45,11 +45,25 @@ type Inspection struct {
 	Environment    string           `json:"environment"`
 	Namespace      string           `json:"namespace,omitempty"`
 	Context        BuildContext     `json:"context"`
+	TemplateRefs   []TemplateRef    `json:"template_references,omitempty"`
 	EffectiveError string           `json:"effective_error,omitempty"`
 	Defaults       *SourceDocument  `json:"defaults,omitempty"`
 	SharedAssets   *SourceDocument  `json:"shared_assets,omitempty"`
 	Usage          []ReferenceUsage `json:"usage,omitempty"`
 	Apps           []InspectedApp   `json:"apps"`
+}
+
+// TemplateRef is safe editor metadata. Build-variable values are never exposed.
+type TemplateRef struct {
+	Namespace            string   `json:"namespace"`
+	Name                 string   `json:"name"`
+	Sources              []string `json:"sources"`
+	DependsOnApplication bool     `json:"depends_on_application,omitempty"`
+}
+
+type templateRefEntry struct {
+	sources map[string]struct{}
+	app     bool
 }
 
 type ReferenceUsage struct {
@@ -289,6 +303,7 @@ func Inspect(opts Options) (Inspection, error) {
 		}
 		result.SharedAssets = &sharedSource
 	}
+	result.TemplateRefs = sourceTemplateRefs(result)
 	result.Usage = inspectReferenceUsage(result.Apps, result.Defaults)
 
 	vars, err := loadBuildVars(envDir, opts)
@@ -296,6 +311,7 @@ func Inspect(opts Options) (Inspection, error) {
 		result.EffectiveError = err.Error()
 		return result, nil
 	}
+	result.TemplateRefs = appendBuildTemplateRefs(result.TemplateRefs, vars, context.VariableSources)
 	result.Namespace = strings.TrimSpace(vars["NAMESPACE"])
 	sharedAssets, err := loadSharedAssets(envDir, vars, opts)
 	if err != nil {
@@ -342,6 +358,106 @@ func Inspect(opts Options) (Inspection, error) {
 	}
 	normalizeInspectionUsage(result.Usage, result.Apps)
 	return result, nil
+}
+
+func sourceTemplateRefs(inspection Inspection) []TemplateRef {
+	entries := map[string]*templateRefEntry{}
+	addDocument := func(document *SourceDocument, application bool) {
+		if document == nil {
+			return
+		}
+		items, _ := document.Model["vars"].([]any)
+		for _, raw := range items {
+			item, _ := raw.(map[string]any)
+			name, _ := item["name"].(string)
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			key := "var:" + name
+			current := entries[key]
+			if current == nil {
+				current = &templateRefEntry{sources: map[string]struct{}{}}
+				entries[key] = current
+			}
+			current.sources[document.Path] = struct{}{}
+			current.app = current.app || application
+		}
+		for _, match := range inspectEnvTemplatePattern.FindAllStringSubmatch(document.RawContent, -1) {
+			name := match[1]
+			key := "env:" + name
+			current := entries[key]
+			if current == nil {
+				current = &templateRefEntry{sources: map[string]struct{}{}}
+				entries[key] = current
+			}
+			current.sources[document.Path+" (reference)"] = struct{}{}
+			current.app = current.app || application
+		}
+	}
+	addDocument(inspection.Defaults, false)
+	for index := range inspection.Apps {
+		addDocument(&inspection.Apps[index].Source, true)
+	}
+	return sortedTemplateRefs(entries)
+}
+
+func appendBuildTemplateRefs(refs []TemplateRef, vars map[string]string, sources []string) []TemplateRef {
+	label := "build variables"
+	if len(sources) > 0 {
+		label += " (" + strings.Join(sources, " + ") + ")"
+	}
+	includeAll := true
+	for _, source := range sources {
+		if source == "env" {
+			includeAll = false
+			break
+		}
+	}
+	byKey := map[string]int{}
+	for index := range refs {
+		byKey[refs[index].Namespace+":"+refs[index].Name] = index
+	}
+	for name := range vars {
+		key := "env:" + name
+		index, exists := byKey[key]
+		if !exists {
+			if !includeAll {
+				continue
+			}
+			refs = append(refs, TemplateRef{Namespace: "env", Name: name})
+			index = len(refs) - 1
+			byKey[key] = index
+		}
+		refs[index].Sources = appendUniqueString(refs[index].Sources, label)
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Namespace != refs[j].Namespace {
+			return refs[i].Namespace < refs[j].Namespace
+		}
+		return refs[i].Name < refs[j].Name
+	})
+	return refs
+}
+
+func sortedTemplateRefs(entries map[string]*templateRefEntry) []TemplateRef {
+	refs := make([]TemplateRef, 0, len(entries))
+	for key, item := range entries {
+		sources := make([]string, 0, len(item.sources))
+		for source := range item.sources {
+			sources = append(sources, source)
+		}
+		sort.Strings(sources)
+		namespace, name, _ := strings.Cut(key, ":")
+		refs = append(refs, TemplateRef{Namespace: namespace, Name: name, Sources: sources, DependsOnApplication: item.app})
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Namespace != refs[j].Namespace {
+			return refs[i].Namespace < refs[j].Namespace
+		}
+		return refs[i].Name < refs[j].Name
+	})
+	return refs
 }
 
 func inspectReferenceUsage(apps []InspectedApp, defaults *SourceDocument) []ReferenceUsage {
@@ -520,6 +636,7 @@ func inspectSourceDocument(path, root string) (SourceDocument, error) {
 }
 
 var inspectTemplatePattern = regexp.MustCompile(`\{\{[^{}\r\n]+\}\}`)
+var inspectEnvTemplatePattern = regexp.MustCompile(`\{\{\s*env\s*:\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
 
 func parseTemplateYAML(content []byte) (map[string]any, error) {
 	model, _, err := parseTemplateYAMLDocument(content)

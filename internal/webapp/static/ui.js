@@ -1,4 +1,4 @@
-const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, defaultsSidecarDefinition: null, defaultsSidecarStartup: null, defaultsSidecarResources: null, defaultsSidecarEnvs: null, defaultsSidecarReferences: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
+const state = { envs: [], env: null, apps: [], assets: [], assetOpenDirs: new Set(), inventory: null, buildPreview: null, buildPreviewPath: null, buildPreviewContent: null, buildPreviewOpenDirs: new Set(), buildChecks: {}, clusterStatusEnabled: false, clusterStatus: null, clusterStatusLoading: false, git: null, appFile: null, appContentHash: null, appReferences: null, sidecarEnvOverride: null, sidecarResourcesOverride: null, sidecarStartupOverride: null, defaults: null, defaultsContentHash: null, defaultsContainerProfile: null, defaultsSidecarDefinition: null, defaultsSidecarStartup: null, defaultsSidecarResources: null, defaultsSidecarEnvs: null, defaultsSidecarReferences: null, appView: 'effective', inspectedApp: null, inspection: null, inspectionEnv: null, inspectionError: '', assetPath: null, active: 'dashboard', specialValueRow: null, changedGroup: 'all', changedStatus: 'all', changedSelected: new Set(), changedExpanded: new Set(), changedDiffs: new Map() };
 const qs = (s) => document.querySelector(s);
 const qsa = (s) => Array.from(document.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -302,6 +302,10 @@ async function init() {
   });
   qs('#asset-structured')?.addEventListener('click', (e) => handleAssetStructuredClick(e));
   qs('#defaults-overview')?.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-edit-defaults-vars]') && !state.readOnly) return openDefaultsVarsEditor();
+    if (e.target.closest('[data-edit-defaults-container-envs]') && !state.readOnly) return openDefaultsContainerEnvsEditor();
+    const editProfile = e.target.closest('[data-edit-container-profile]');
+    if (editProfile && !state.readOnly) return openDefaultsContainerProfileEditor(editProfile.dataset.editContainerProfile);
     const editReferences = e.target.closest('[data-edit-sidecar-definition-references]');
     if (editReferences && !state.readOnly) return openDefaultsSidecarReferencesEditor(editReferences.dataset.editSidecarDefinitionReferences);
     const editEnvs = e.target.closest('[data-edit-sidecar-definition-envs]');
@@ -424,6 +428,7 @@ async function selectEnv(env, options = {}) {
   if (!state.envs.some((x) => x.name === env)) env = state.envs[0]?.name;
   if (!env) return;
   const changedEnv = state.env !== env;
+  if (changedEnv && !(await profileEditor.leave())) return;
   state.env = env; localStorage.setItem('activeEnv', env);
   if (changedEnv) resetSelectedDetails();
   renderEnvs();
@@ -813,6 +818,8 @@ function resetSelectedDetails() {
   state.inspection = null;
   state.inspectionEnv = null;
   state.inspectionError = '';
+  state.defaults = null;
+  state.defaultsContentHash = null;
   state.assetPath = null;
   state.assetOpenDirs = new Set();
   state.inventory = null;
@@ -958,11 +965,13 @@ function renderDefaultsOverview() {
   if (!host) return;
   if (state.inspectionError) {
     setHTML('#defaults-status', `<div class="alert alert-danger py-2 mb-0"><i class="ti ti-alert-circle me-2"></i>${esc(state.inspectionError)}</div>`);
+    if (profileEditor.active()) { profileEditor.render(); return; }
     host.innerHTML = emptyState('ti-alert-circle', 'Defaults snapshot unavailable', 'The Apps local source view remains usable.');
     return;
   }
   const inspection = state.inspection;
   if (!inspection) {
+    if (profileEditor.active()) { profileEditor.render(); return; }
     host.innerHTML = emptyState('ti-hourglass', 'Loading defaults');
     return;
   }
@@ -970,6 +979,7 @@ function renderDefaultsOverview() {
   setHTML('#defaults-status', effectiveError
     ? `<div class="alert alert-warning py-2 mb-0"><i class="ti ti-alert-triangle me-2"></i>Source catalogs are available, but effective evaluation failed: ${esc(effectiveError)}</div>`
     : `<div class="alert alert-success py-2 mb-0"><i class="ti ti-check me-2"></i>Source catalogs loaded for namespace <span class="font-monospace">${esc(inspection.namespace || '?')}</span>.</div>`);
+  if (profileEditor.active()) { profileEditor.render(); return; }
   const model = inspection.defaults?.model || {};
   const shared = inspection.shared_assets?.model || {};
   const sections = defaultsCatalogSections(model, shared);
@@ -978,11 +988,33 @@ function renderDefaultsOverview() {
   const rendered = sections.map((section) => {
     const items = section.items.filter((item) => !query || JSON.stringify(item).toLowerCase().includes(query) || section.label.toLowerCase().includes(query));
     visible += items.length;
-    if (!items.length) return '';
-    return `<div class="mb-4"><div class="d-flex align-items-center justify-content-between mb-2"><h3 class="h4 mb-0"><i class="ti ${section.icon} me-2 text-muted"></i>${esc(section.label)}</h3><span class="badge bg-secondary-lt">${items.length}</span></div><div class="row g-2">${items.map((item) => renderDefaultsCatalogItem(section.kind, item)).join('')}</div></div>`;
+    const emptyEditableSection = !query && !section.items.length && !state.readOnly && ['variable', 'container_env_defaults'].includes(section.kind);
+    if (!items.length && !emptyEditableSection) return '';
+    const action = defaultsSectionEditAction(section.kind);
+    const body = items.length
+      ? section.kind === 'variable' ? renderDefaultsVariablesTable(items) : `<div class="row g-2">${items.map((item) => renderDefaultsCatalogItem(section.kind, item)).join('')}</div>`
+      : emptyState('ti-variable', `No ${section.label.toLowerCase()}`, 'Use the editor to create the first entry.');
+    return `<div class="mb-4"><div class="d-flex align-items-center justify-content-between gap-2 mb-2"><h3 class="h4 mb-0"><i class="ti ${section.icon} me-2 text-muted"></i>${esc(section.label)}</h3><div class="d-flex align-items-center gap-2">${action}<span class="badge bg-secondary-lt">${items.length}</span></div></div>${body}</div>`;
   }).join('');
   setText('#defaults-filter-count', `${visible} visible`);
   host.innerHTML = rendered || emptyState('ti-search', 'No matching definitions', 'Try a different filter.');
+}
+
+function renderDefaultsVariablesTable(items) {
+  const rows = items.map((item) => {
+    const name = String(item.name || '?');
+    const usages = (state.inspection?.usage || []).filter((usage) => usage.kind === 'variable' && usage.name === name);
+    const value = item.value === undefined || item.value === null ? '' : String(item.value);
+    return `<tr><td class="font-monospace fw-semibold text-break">${esc(name)}</td><td class="font-monospace text-break">${value ? esc(value) : '<span class="text-muted">empty</span>'}</td><td class="text-end text-nowrap"><span class="badge ${usages.length ? 'bg-blue-lt' : 'bg-secondary-lt'}">${usages.length}</span></td></tr>`;
+  }).join('');
+  return `<div class="card card-sm"><div class="table-responsive"><table class="table table-sm table-vcenter mb-0"><thead><tr><th style="width: 34%">Name</th><th>Value</th><th class="text-end" style="width: 5rem">Uses</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
+function defaultsSectionEditAction(kind) {
+  if (state.readOnly) return '';
+  if (kind === 'variable') return `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-defaults-vars><i class="ti ti-pencil me-1"></i>Edit variables</button>`;
+  if (kind === 'container_env_defaults') return `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-defaults-container-envs><i class="ti ti-pencil me-1"></i>Edit container envs</button>`;
+  return '';
 }
 
 function defaultsCatalogSections(model, shared) {
@@ -1013,7 +1045,9 @@ function renderDefaultsCatalogItem(kind, item) {
   const summary = keys.slice(0, 7).map((key) => `<span class="badge bg-secondary-lt">${esc(key)}</span>`).join('');
   const usedBy = usages.slice(0, 6).map((usage) => `<button class="btn btn-sm btn-ghost-secondary" type="button" data-defaults-app="${esc(usage.app_file)}" title="${esc(usage.yaml_path)}"><i class="ti ti-apps me-1"></i>${esc(usage.app)}${usage.container ? ` / ${esc(usage.container)}` : ''}</button>`).join('');
   const assetLink = kind === 'shared_asset' && item.file ? `<button class="btn btn-sm btn-outline-secondary" type="button" data-defaults-asset="${esc(sharedAssetBrowserPath(item.file))}"><i class="ti ti-file me-1"></i>Open file</button>` : '';
-  const editAction = kind === 'sidecar_definition' && !state.readOnly ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition="${esc(name)}"><i class="ti ti-photo me-1"></i>Edit image</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-startup="${esc(name)}"><i class="ti ti-terminal-2 me-1"></i>Edit startup</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-resources="${esc(name)}"><i class="ti ti-cpu me-1"></i>Edit resources</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-envs="${esc(name)}"><i class="ti ti-braces me-1"></i>Edit envs</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-references="${esc(name)}"><i class="ti ti-link me-1"></i>Edit references</button>` : '';
+  const editAction = !state.readOnly && kind === 'container_profile'
+    ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-container-profile="${esc(name)}"><i class="ti ti-pencil me-1"></i>Edit profile</button>`
+    : kind === 'sidecar_definition' && !state.readOnly ? `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition="${esc(name)}"><i class="ti ti-photo me-1"></i>Edit image</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-startup="${esc(name)}"><i class="ti ti-terminal-2 me-1"></i>Edit startup</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-resources="${esc(name)}"><i class="ti ti-cpu me-1"></i>Edit resources</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-envs="${esc(name)}"><i class="ti ti-braces me-1"></i>Edit envs</button><button class="btn btn-sm btn-outline-primary" type="button" data-edit-sidecar-definition-references="${esc(name)}"><i class="ti ti-link me-1"></i>Edit references</button>` : '';
   return `<div class="col-12 col-lg-6"><div class="card card-sm h-100"><div class="card-body"><div class="d-flex align-items-start justify-content-between gap-2"><div class="fw-semibold font-monospace text-break">${esc(name)}</div><span class="badge ${usages.length ? 'bg-blue-lt' : 'bg-secondary-lt'}">${usages.length} use${usages.length === 1 ? '' : 's'}</span></div><div class="d-flex flex-wrap gap-1 mt-2">${summary || '<span class="text-muted small">No additional fields.</span>'}</div>${usedBy || assetLink || editAction ? `<div class="d-flex flex-wrap gap-1 mt-3">${usedBy}${assetLink}${editAction}</div>` : ''}</div></div></div>`;
 }
 
@@ -2757,8 +2791,25 @@ function openEditorModal(title, subtitle, body, options = {}) {
     onClosed: () => { state.editModalClose = null; },
   });
 }
-function openDefaultsVarsEditor() {
-  openEditorModal('Edit defaults vars', 'Top-level vars in apps/_defaults.yml used by {{var:NAME}} placeholders.', renderDefaultsVarsEditor(state.defaults?.vars || []));
+async function loadDefaultsEditorState() {
+  if (!state.env) throw new Error('Select an environment first.');
+  const defaults = await api(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults`);
+  state.defaults = defaults;
+  state.defaultsContentHash = defaults.content_hash || null;
+  return defaults;
+}
+
+async function openDefaultsVarsEditor() {
+  if (state.readOnly) return;
+  clearError();
+  try {
+    const defaults = await loadDefaultsEditorState();
+    openEditorModal('Edit defaults vars', 'Top-level vars in apps/_defaults.yml used by {{var:NAME}} placeholders.', renderDefaultsVarsEditor(defaults.vars || []));
+  } catch (e) { showError(e); }
+}
+
+async function openDefaultsContainerProfileEditor(name) {
+  return profileEditor.open(name);
 }
 
 async function openDefaultsSidecarDefinitionEditor(name) {
@@ -3244,16 +3295,24 @@ async function saveDefaultsVars() {
     value: row.querySelector('.defaults-var-value')?.value || '',
   })).filter((item) => item.name !== '');
   try {
-    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults/vars`, {items, expected_hash: state.assetContentHash});
+    const updated = await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults/vars`, {items, expected_hash: state.defaultsContentHash});
+    state.defaults = updated;
+    state.defaultsContentHash = updated.content_hash || null;
     state.editModalClose?.();
     state.editModalClose = null;
     await refreshRepositorySnapshot();
     await loadAssets();
-    await selectAsset(state.assetPath);
+    await loadInspection(true);
+    if (state.active === 'assets' && isDefaultsAsset(state.assetPath)) await selectAsset(state.assetPath);
   } catch (e) { showError(e); }
 }
-function openDefaultsContainerEnvsEditor() {
-  openEditorModal('Edit defaults container envs', 'Default container envs in apps/_defaults.yml grouped by container reference name or "*".', renderDefaultsContainerEnvsEditor(state.defaults?.container_envs || []));
+async function openDefaultsContainerEnvsEditor() {
+  if (state.readOnly) return;
+  clearError();
+  try {
+    const defaults = await loadDefaultsEditorState();
+    openEditorModal('Edit defaults container envs', 'Default container envs in apps/_defaults.yml grouped by container reference name or "*".', renderDefaultsContainerEnvsEditor(defaults.container_envs || []));
+  } catch (e) { showError(e); }
 }
 function renderDefaultsContainerEnvsEditor(groups) {
   const rows = (groups || []).map((group) => renderDefaultsEnvGroup(group)).join('');
@@ -3327,12 +3386,15 @@ async function saveDefaultsContainerEnvs() {
     })).filter((item) => item.name !== ''),
   })).filter((group) => group.container_ref_name !== '');
   try {
-    await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults/container-envs`, {groups, expected_hash: state.assetContentHash});
+    const updated = await apiPatch(`/api/v1/envs/${encodeURIComponent(state.env)}/defaults/container-envs`, {groups, expected_hash: state.defaultsContentHash});
+    state.defaults = updated;
+    state.defaultsContentHash = updated.content_hash || null;
     state.editModalClose?.();
     state.editModalClose = null;
     await refreshRepositorySnapshot();
     await loadAssets();
-    await selectAsset(state.assetPath);
+    await loadInspection(true);
+    if (state.active === 'assets' && isDefaultsAsset(state.assetPath)) await selectAsset(state.assetPath);
   } catch (e) { showError(e); }
 }
 function openSpecialEntriesEditor() {
@@ -4090,6 +4152,7 @@ async function selectAsset(path, options = {}) {
       ]);
       state.assetContentHash = defaults.content_hash || detail.content_hash || null;
       state.defaults = defaults;
+      state.defaultsContentHash = defaults.content_hash || null;
       setText('#asset-detail-path', detail.path);
       setHTML('#asset-detail-badges', renderAssetDetailBadges(selectedAsset, defaults));
       setHTML('#asset-structured', renderDefaultsPreview(defaults));
@@ -4125,23 +4188,15 @@ function renderAssetDetailBadges(asset, detail) {
 function renderDefaultsPreview(defaults) {
   const vars = defaults.vars || [];
   const groups = defaults.container_envs || [];
-  const editVars = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-defaults-vars><i class="ti ti-pencil me-1"></i>Edit vars</button>`;
-  const editEnvs = state.readOnly ? '' : `<button class="btn btn-sm btn-outline-primary" type="button" data-edit-defaults-container-envs><i class="ti ti-pencil me-1"></i>Edit container envs</button>`;
   return `
-    <div class="d-flex justify-content-end mb-3"><button class="btn btn-sm btn-outline-secondary" type="button" data-open-defaults-catalog><i class="ti ti-adjustments-horizontal me-1"></i>Open Defaults catalog</button></div>
+    <div class="alert alert-info py-2 mb-3"><div class="d-flex flex-wrap align-items-center justify-content-between gap-2"><span><i class="ti ti-info-circle me-2"></i>This is a read-only source summary. Edit definitions in the Defaults workspace.</span><button class="btn btn-sm btn-outline-primary" type="button" data-open-defaults-catalog><i class="ti ti-adjustments-horizontal me-1"></i>Open Defaults</button></div></div>
     <div class="overview-section mb-3">
-      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
-        <div class="overview-subtitle mb-0">Defaults local variables</div>
-        ${editVars}
-      </div>
-      ${vars.length ? `<div class="chip-row">${vars.map((item) => chip(item.name || '?', item.value || '')).join('')}</div>` : emptyState('ti-variable', 'No default vars', state.readOnly ? '' : 'Use Edit vars to add top-level defaults vars.')}
+      <div class="overview-subtitle mb-2">Defaults local variables</div>
+      ${vars.length ? `<div class="chip-row">${vars.map((item) => chip(item.name || '?', item.value || '')).join('')}</div>` : emptyState('ti-variable', 'No default vars')}
     </div>
     <div class="overview-section mb-3">
-      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
-        <div class="overview-subtitle mb-0">Defaults container envs</div>
-        ${editEnvs}
-      </div>
-      ${groups.length ? groups.map(renderDefaultsGroupPreview).join('') : emptyState('ti-variable', 'No container env defaults', state.readOnly ? '' : 'Use Edit container envs to add default envs.')}
+      <div class="overview-subtitle mb-2">Defaults container envs</div>
+      ${groups.length ? groups.map(renderDefaultsGroupPreview).join('') : emptyState('ti-variable', 'No container env defaults')}
     </div>`;
 }
 function renderSharedAssetsMetadata(document) {
@@ -4223,8 +4278,6 @@ function handleAssetStructuredClick(e) {
   const sharedAsset = e.target.closest('[data-defaults-asset]');
   if (sharedAsset) return selectAsset(sharedAsset.dataset.defaultsAsset);
   if (state.readOnly) return;
-  if (e.target.closest('[data-edit-defaults-vars]')) return openDefaultsVarsEditor();
-  if (e.target.closest('[data-edit-defaults-container-envs]')) return openDefaultsContainerEnvsEditor();
   if (e.target.closest('[data-edit-special-entries]')) return openSpecialEntriesEditor();
 }
 async function copySpecialEntryValue(button) {

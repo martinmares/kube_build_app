@@ -2022,6 +2022,98 @@ containers:
 	}
 }
 
+func TestUpdateDefaultsContainerProfileImagePreservesOtherFields(t *testing.T) {
+	root := t.TempDir()
+	defaultsPath := filepath.Join(root, "dev", "apps", "_defaults.yml")
+	original := `# catalog comment
+container_profiles:
+  - name: java-service
+    defaults:
+      image: "{{env:REGISTRY_URL}}/{{var:APP_NAME}}:{{env:RELEASE_ID}}"
+      # keep startup
+      startup:
+        command: ["/app/start-java.sh"]
+      resources:
+        cpu: {from: 100m, to: 350m}
+  - name: worker
+    defaults:
+      image: worker:1
+`
+	writeFile(t, defaultsPath, original)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := repo.DefaultsContainerProfile("dev", "java-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Image != "{{env:REGISTRY_URL}}/{{var:APP_NAME}}:{{env:RELEASE_ID}}" {
+		t.Fatalf("raw image = %q", current.Image)
+	}
+	if _, err := repo.UpdateDefaultsContainerProfile("dev", "java-service", DefaultsContainerProfileUpdate{Image: current.Image}, current.ContentHash); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(defaultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(content); got != original {
+		t.Fatalf("no-op update changed source:\n%s", got)
+	}
+
+	updated, err := repo.UpdateDefaultsContainerProfile("dev", "java-service", DefaultsContainerProfileUpdate{Image: "registry.example/java:2"}, current.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Image != "registry.example/java:2" {
+		t.Fatalf("updated image = %q", updated.Image)
+	}
+	content, err = os.ReadFile(defaultsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(content)
+	for _, preserved := range []string{"# catalog comment", "# keep startup", `command: ["/app/start-java.sh"]`, "cpu: {from: 100m, to: 350m}", "image: worker:1"} {
+		if !strings.Contains(got, preserved) {
+			t.Fatalf("updated source lost %q:\n%s", preserved, got)
+		}
+	}
+	if !strings.Contains(got, `image: "registry.example/java:2"`) {
+		t.Fatalf("updated source missing image:\n%s", got)
+	}
+	if _, err := repo.UpdateDefaultsContainerProfile("dev", "java-service", DefaultsContainerProfileUpdate{Image: "java:3"}, current.ContentHash); !IsConflictError(err) {
+		t.Fatalf("stale update error = %v, want conflict", err)
+	}
+}
+
+func TestDefaultsContainerProfileRejectsInvalidStructure(t *testing.T) {
+	root := t.TempDir()
+	defaultsPath := filepath.Join(root, "dev", "apps", "_defaults.yml")
+	writeFile(t, defaultsPath, `container_profiles:
+  - name: java-service
+    defaults: invalid
+`)
+	repo, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DefaultsContainerProfile("dev", "java-service"); err == nil || !strings.Contains(err.Error(), "defaults must be a mapping") {
+		t.Fatalf("invalid defaults error = %v", err)
+	}
+
+	writeFile(t, defaultsPath, `container_profiles:
+  - name: java-service
+    defaults: {}
+  - name: java-service
+    defaults: {}
+`)
+	if _, err := repo.DefaultsContainerProfile("dev", "java-service"); err == nil || !strings.Contains(err.Error(), "duplicate container profile") {
+		t.Fatalf("duplicate profile error = %v", err)
+	}
+}
+
 func TestUpdateDefaultsSidecarDefinitionImagePreservesOtherFields(t *testing.T) {
 	root := t.TempDir()
 	defaultsPath := filepath.Join(root, "dev", "apps", "_defaults.yml")

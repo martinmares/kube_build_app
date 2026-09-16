@@ -44,8 +44,8 @@ kube-edit-app serve --root ./environments --allow-write
 Recommended editing flow:
 
 1. Select an environment.
-2. Open `Apps` for app model edits or `Assets` for environment JSON/defaults/assets.
-3. Make a structured edit in write mode. Current editors cover local vars, defaults vars/container envs, replicas, autoscaling, resources, Java runtime, probes, ports/services/ingress, container envs and special env JSON entries.
+2. Open `Apps` for app model edits, `Defaults` for `_defaults.yml` and shared definitions, or `Assets` for environment JSON and files.
+3. Make a structured edit in write mode. Current editors cover local vars, defaults vars/container envs, container profiles (one tabbed form with a shared Save/Cancel for image, startup, envs, CPU/memory, HTTP probes and ports/services), shared sidecar definitions, references, replicas, autoscaling, resources, Java runtime, probes, ports/services/ingress, container envs and special env JSON entries. The `_defaults.yml` entry under Assets is a read-only source summary linking back to Defaults.
 4. Use inline validation feedback to fix invalid values before saving.
 5. Open `Build`, run validation and optionally render the build preview file tree.
 6. Open `Changed files`, expand inline diffs and select the files to accept.

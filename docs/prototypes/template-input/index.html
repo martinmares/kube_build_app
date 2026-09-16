@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Template-aware input - design preview</title><link rel="icon" href="data:,">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css">
+  <style>
+    .preview{max-width:920px}.template-editor{max-width:760px}.template-parts{min-height:40px}
+    .template-text{white-space:pre-wrap;overflow-wrap:anywhere}.template-token{max-width:100%;overflow-wrap:anywhere;white-space:normal}
+    .variable-list{max-height:260px;overflow-y:auto}
+  </style>
+</head>
+<body>
+<header class="navbar"><div class="container-xl gap-2"><span class="navbar-brand">kube-edit-app</span><div class="d-flex align-items-center gap-2"><span class="badge bg-yellow-lt">Design preview</span><button class="btn btn-sm" id="theme" type="button">Switch to light</button></div></div></header>
+<main class="container-xl py-4"><div class="preview">
+  <h1 class="h2 mb-2">Template-aware inputs</h1>
+  <p class="text-secondary mb-3">Two field types using one UI component. Sample data only; no repository access or YAML writes.</p>
+  <div class="alert alert-info py-2 mb-4"><strong>Template</strong> shows the exact source as read-only tokens. <strong>Raw value</strong> edits that same source text. Preview never replaces the stored source.</div>
+  <section class="card mb-4"><div class="card-header"><div><h2 class="card-title mb-1">HTTP service</h2><div class="text-secondary small">Single-reference numeric field</div></div></div><div class="card-body"><div class="template-editor" data-template-input data-field="port" data-label="Service port" data-value="{{var:DEFAULT_SERVICE_PORT}}" data-picker-mode="replace"></div></div></section>
+  <section class="card mb-4"><div class="card-header"><div><h2 class="card-title mb-1">Main container</h2><div class="text-secondary small">Compound text with multiple references</div></div></div><div class="card-body"><div class="template-editor" data-template-input data-field="image" data-label="Container image" data-value="{{TSM_REGISTRY_URL}}/{{var:APP_NAME}}:{{TSM_RELEASE_ID}}" data-picker-mode="insert"></div></div></section>
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-4"><label class="text-secondary small mb-0" for="context">Sample preview for</label><select class="form-select form-select-sm w-auto" id="context"><option value="">No application selected</option><option value="java-api">java-api / main</option><option value="worker">worker / main</option></select><span class="text-secondary small">dev</span></div>
+  <details><summary class="text-secondary">Try a scenario</summary><div class="d-flex flex-wrap gap-2 mt-3" id="scenarios">
+    <button class="btn btn-sm" data-field="port" data-value="80">Literal port</button>
+    <button class="btn btn-sm" data-field="port" data-value="{{var:UNKNOWN_PORT}}">Missing port variable</button>
+    <button class="btn btn-sm" data-field="port" data-value="{{DEFAULT_SERVICE_PORT}}">Legacy port passthrough</button>
+    <button class="btn btn-sm" data-field="image" data-value="{{env:TSM_REGISTRY_URL}}/{{var:APP_NAME}}:{{env:TSM_RELEASE_ID}}">Resolvable image</button>
+    <button class="btn btn-sm" data-field="image" data-value="registry.example/{{var:APP_NAME}}:latest">Mixed image</button>
+  </div></details>
+</div></main><script src="preview.js"></script>
+</body></html>

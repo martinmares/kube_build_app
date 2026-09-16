@@ -15,7 +15,7 @@
         <h1 class="navbar-brand navbar-brand-autodark pe-0 pe-md-3">
           <a href="{{.BasePath}}"><i class="ti ti-pencil-code me-2"></i>{{.AppName}}</a>
         </h1>
-        <div class="navbar-nav flex-row order-md-last align-items-center gap-2">
+        <div class="navbar-nav flex-row flex-wrap order-md-last align-items-center gap-2">
           <span class="badge bg-blue-lt"><i class="ti ti-stack-2 me-1"></i><span id="env-count">-</span> envs</span>
           <span class="badge bg-green-lt"><i class="ti ti-apps me-1"></i><span id="apps-count">-</span> apps</span>
           <span class="badge bg-cyan-lt"><i class="ti ti-files me-1"></i><span id="assets-count">-</span> assets</span>
@@ -322,5 +322,8 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/js/tabler.min.js"></script>
   <script src="{{.BasePath}}static/ui.js"></script>
+  <script src="{{.BasePath}}static/resource-stepper.js"></script>
+  <script src="{{.BasePath}}static/template-input.js"></script>
+  <script src="{{.BasePath}}static/profile-editor.js"></script>
 </body>
 </html>
