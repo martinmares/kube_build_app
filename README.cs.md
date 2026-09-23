@@ -1718,6 +1718,41 @@ downward_api:
           field_path: metadata.name
 ```
 
+`pod_info` a `downward_api.mounts` zpřístupňují metadata jako soubory. Pro
+zpřístupnění pod metadata pomocí environment proměnných použijte
+`envs[].field_path`. Znovupoužitelný opt-in profil udrží mapování na jednom
+místě. Definujte ho v `apps/_defaults.yml`:
+
+```yaml
+container_profiles:
+  - name: kubernetes-runtime-metadata
+    defaults:
+      envs:
+        - name: POD_NAME
+          field_path: metadata.name
+        - name: POD_NAMESPACE
+          field_path: metadata.namespace
+        - name: POD_IP
+          field_path: status.podIP
+        - name: NODE_NAME
+          field_path: spec.nodeName
+```
+
+Profil explicitně zapněte u každého containeru, který tyto proměnné potřebuje:
+
+```yaml
+containers:
+  - name: "{{var:APP_NAME}}"
+    image: "..."
+    profile_ref_names:
+      - kubernetes-runtime-metadata
+```
+
+Vygenerovaný container dostane `POD_NAME`, `POD_NAMESPACE`, `POD_IP` a
+`NODE_NAME` přes Kubernetes `valueFrom.fieldRef`. Proměnné pouze zpřístupní
+metadata procesu; jejich přidání do metrik nebo strukturovaných logů musí
+zajistit konfigurace aplikace nebo sběrné vrstvy.
+
 Pod name je jen runtime/audit metadata. Autorizace má používat normalizovanou workload identitu `namespace/serviceAccount` z projektovaného tokenu.
 
 ### 16. Runtime Assets

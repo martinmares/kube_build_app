@@ -1734,6 +1734,42 @@ downward_api:
           field_path: metadata.name
 ```
 
+`pod_info` and `downward_api.mounts` expose metadata as files. To expose pod
+metadata as environment variables, use `envs[].field_path`. A reusable
+opt-in profile keeps the mapping in one place. Define it in
+`apps/_defaults.yml`:
+
+```yaml
+container_profiles:
+  - name: kubernetes-runtime-metadata
+    defaults:
+      envs:
+        - name: POD_NAME
+          field_path: metadata.name
+        - name: POD_NAMESPACE
+          field_path: metadata.namespace
+        - name: POD_IP
+          field_path: status.podIP
+        - name: NODE_NAME
+          field_path: spec.nodeName
+```
+
+Enable the profile explicitly on each container that needs the variables:
+
+```yaml
+containers:
+  - name: "{{var:APP_NAME}}"
+    image: "..."
+    profile_ref_names:
+      - kubernetes-runtime-metadata
+```
+
+The generated container has `POD_NAME`, `POD_NAMESPACE`, `POD_IP` and
+`NODE_NAME` populated through Kubernetes `valueFrom.fieldRef`. These variables
+only expose the metadata to the process; application or collection-layer
+configuration is still responsible for adding it to metrics or structured
+logs.
+
 Pod name is runtime/audit metadata only. Authorization should use the normalized workload identity `namespace/serviceAccount` from the projected token.
 
 ### 16. Runtime Assets
