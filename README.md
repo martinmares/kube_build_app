@@ -809,6 +809,22 @@ inconsistent image and metadata versions. Without `--release-manifest`,
 `RELEASE_ID` continues to come only from the configured external variable
 sources.
 
+`--customer-release-name TSM-Core_RE61_SP_04.01` records the customer release
+on each generated Deployment Pod template as
+`cloud-app.cz/customer-release-name`. It is independent of the release manifest's
+image `release_id` and of deployment revisions such as `.r2`. When a
+`simple-idm-token-proxy` sidecar is used, configure its environment from that
+Pod annotation with the Downward API:
+
+```yaml
+envs:
+  - name: CUSTOMER_RELEASE_NAME
+    field_path: "metadata.annotations['cloud-app.cz/customer-release-name']"
+```
+
+The sidecar environment mapping is configured in the app model. Existing apps
+without the option keep their current manifests and proxy behavior.
+
 Image policy:
 
 ```bash

@@ -1623,7 +1623,7 @@ containers:
       memory: {from: "128Mi", to: "256Mi"}
 `)
 
-	_, err := Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath})
+	_, err := Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath, CustomerReleaseName: "TSM-Core_RE61_SP_04.01"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1634,6 +1634,24 @@ containers:
 	}
 	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "image"); got != "registry.release/api:2.4" {
 		t.Fatalf("image = %q, want registry.release/api:2.4", got)
+	}
+	if got := digString(deployment, "spec", "template", "metadata", "annotations", customerReleaseAnnotation); got != "TSM-Core_RE61_SP_04.01" {
+		t.Fatalf("customer release annotation = %q", got)
+	}
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
+name: api
+pod_annotations:
+  cloud-app.cz/customer-release-name: different-release
+containers:
+  - name: api
+    image: registry.local/api:latest
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+	_, err = Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath, CustomerReleaseName: "TSM-Core_RE61_SP_04.01"})
+	if err == nil || !strings.Contains(err.Error(), "conflicts with customer release name") {
+		t.Fatalf("conflicting pod annotation should fail, got %v", err)
 	}
 }
 

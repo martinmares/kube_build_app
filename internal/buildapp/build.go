@@ -26,38 +26,42 @@ import (
 )
 
 const appLabel = "app.kubernetes.io/name"
+const customerReleaseAnnotation = "cloud-app.cz/customer-release-name"
+
+var customerReleaseNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type Options struct {
-	Environment        string
-	Namespace          string
-	Root               string
-	ResourcePolicyRoot string
-	Target             string
-	Profile            string
-	ProfilesFile       string
-	Inventory          bool
-	DecryptSecured     bool
-	EncjsonPath        string
-	EncjsonLegacyPath  string
-	EncjsonKeydir      string
-	EnvFile            string
-	EnvURL             string
-	EnvURLHeaders      []string
-	EnvURLInsecure     bool
-	VarsSources        []string
-	LegacyApplyEnv     bool
-	HelmEscapeAssets   bool
-	ReleaseManifest    string
-	ImageOverrides     []string
-	ImagePolicy        string
-	ImageReference     string
-	ForceImageTag      string
-	ForceImagePrefix   string
-	SyncProfile        string
-	SyncPrefix         string
-	SyncSet            string
-	Down               []string
-	YAMLIndent         int
+	Environment         string
+	Namespace           string
+	Root                string
+	ResourcePolicyRoot  string
+	Target              string
+	Profile             string
+	ProfilesFile        string
+	Inventory           bool
+	DecryptSecured      bool
+	EncjsonPath         string
+	EncjsonLegacyPath   string
+	EncjsonKeydir       string
+	EnvFile             string
+	EnvURL              string
+	EnvURLHeaders       []string
+	EnvURLInsecure      bool
+	VarsSources         []string
+	LegacyApplyEnv      bool
+	HelmEscapeAssets    bool
+	ReleaseManifest     string
+	CustomerReleaseName string
+	ImageOverrides      []string
+	ImagePolicy         string
+	ImageReference      string
+	ForceImageTag       string
+	ForceImagePrefix    string
+	SyncProfile         string
+	SyncPrefix          string
+	SyncSet             string
+	Down                []string
+	YAMLIndent          int
 }
 
 type Result struct {
@@ -636,6 +640,10 @@ var cgroupExporterDefaultVars = []envVar{
 }
 
 func Build(opts Options) (Result, error) {
+	if opts.CustomerReleaseName != "" &&
+		(len(opts.CustomerReleaseName) > 128 || !customerReleaseNamePattern.MatchString(opts.CustomerReleaseName)) {
+		return Result{}, fmt.Errorf("customer release name must be 1-128 characters: letters, digits, dot, underscore or hyphen")
+	}
 	if strings.TrimSpace(opts.Environment) == "" {
 		return Result{}, errors.New("environment is required")
 	}
@@ -760,7 +768,7 @@ func Build(opts Options) (Result, error) {
 			result.ServiceAccounts = append(result.ServiceAccounts, outPath)
 			result.Events = append(result.Events, BuildEvent{Type: "serviceaccount", App: app.Name, Name: effectiveServiceAccountName(app), Path: outPath})
 		}
-		deployment, err := renderDeployment(app, vars["NAMESPACE"], resolvedAssets, appSharedAssets, rolloutAnnotations)
+		deployment, err := renderDeployment(app, vars["NAMESPACE"], resolvedAssets, appSharedAssets, rolloutAnnotations, opts.CustomerReleaseName)
 		if err != nil {
 			return Result{}, err
 		}
@@ -4013,7 +4021,7 @@ func cloneAssetsMap(items map[string][]resolvedAsset) map[string][]resolvedAsset
 	return out
 }
 
-func renderDeployment(app appModel, namespace string, assets map[string][]resolvedAsset, sharedAssets []resolvedAsset, rolloutAnnotations map[string]string) (map[string]any, error) {
+func renderDeployment(app appModel, namespace string, assets map[string][]resolvedAsset, sharedAssets []resolvedAsset, rolloutAnnotations map[string]string, customerReleaseName string) (map[string]any, error) {
 	labels := map[string]any{appLabel: app.Name}
 	for key, value := range app.Labels {
 		labels[key] = value
@@ -4108,6 +4116,12 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 			return nil, fmt.Errorf("pod annotation %q conflicts with computed rollout checksum", key)
 		}
 		podAnnotations[key] = value
+	}
+	if customerReleaseName != "" {
+		if existing, ok := podAnnotations[customerReleaseAnnotation]; ok && fmt.Sprint(existing) != customerReleaseName {
+			return nil, fmt.Errorf("%s: pod annotation %q conflicts with customer release name", app.Name, customerReleaseAnnotation)
+		}
+		podAnnotations[customerReleaseAnnotation] = customerReleaseName
 	}
 	if len(podAnnotations) > 0 {
 		templateMetadata["annotations"] = podAnnotations

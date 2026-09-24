@@ -16,46 +16,47 @@ import (
 )
 
 type cliOptions struct {
-	envName            string
-	namespace          string
-	root               string
-	resourcePolicyRoot string
-	target             string
-	profile            string
-	profilesFile       string
-	inventory          bool
-	decryptSecured     bool
-	envFile            string
-	envURL             string
-	envURLHeaders      []string
-	envURLInsecure     bool
-	varsSources        []string
-	legacyApplyEnv     bool
-	helmEscapeAssets   bool
-	releaseManifest    string
-	imageOverrides     []string
-	imagePolicy        string
-	imageReference     string
-	forceImageTag      string
-	forceImagePrefix   string
-	syncProfile        string
-	syncPrefix         string
-	syncSet            string
-	down               []string
-	yamlIndent         int
-	list               bool
-	summary            bool
-	summaryFormat      string
-	verbose            bool
-	logFormat          string
-	color              string
-	debug              bool
-	showVersion        bool
-	skeletonEnv        string
-	skeletonNS         string
-	skeletonRegistry   string
-	skeletonRelease    string
-	force              bool
+	envName             string
+	namespace           string
+	root                string
+	resourcePolicyRoot  string
+	target              string
+	profile             string
+	profilesFile        string
+	inventory           bool
+	decryptSecured      bool
+	envFile             string
+	envURL              string
+	envURLHeaders       []string
+	envURLInsecure      bool
+	varsSources         []string
+	legacyApplyEnv      bool
+	helmEscapeAssets    bool
+	releaseManifest     string
+	customerReleaseName string
+	imageOverrides      []string
+	imagePolicy         string
+	imageReference      string
+	forceImageTag       string
+	forceImagePrefix    string
+	syncProfile         string
+	syncPrefix          string
+	syncSet             string
+	down                []string
+	yamlIndent          int
+	list                bool
+	summary             bool
+	summaryFormat       string
+	verbose             bool
+	logFormat           string
+	color               string
+	debug               bool
+	showVersion         bool
+	skeletonEnv         string
+	skeletonNS          string
+	skeletonRegistry    string
+	skeletonRelease     string
+	force               bool
 }
 
 func main() {
@@ -102,6 +103,7 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.PersistentFlags().BoolVar(&opts.legacyApplyEnv, "legacy-apply-env", false, "resolve legacy {{VAR}} placeholders in generated deployment and external service manifests")
 	root.PersistentFlags().BoolVar(&opts.helmEscapeAssets, "helm-escape-assets", false, "escape remaining {{VAR}} placeholders in text assets")
 	root.PersistentFlags().StringVarP(&opts.releaseManifest, "release-manifest", "r", "", "release manifest YAML path")
+	root.PersistentFlags().StringVar(&opts.customerReleaseName, "customer-release-name", "", "customer release name recorded on generated Pod templates")
 	root.PersistentFlags().StringArrayVar(&opts.imageOverrides, "image", nil, "override image as app/container=image; repeatable or comma-separated")
 	root.PersistentFlags().StringVar(&opts.imagePolicy, "image-policy", "fallback", "image override policy: fallback or strict")
 	root.PersistentFlags().StringVar(&opts.imageReference, "image-reference", "auto", "release image reference: auto, digest, or tag")
@@ -401,33 +403,34 @@ func writeFileNoClobber(path string, content []byte, force bool) error {
 
 func toBuildOptions(opts *cliOptions) buildapp.Options {
 	return buildapp.Options{
-		Environment:        opts.envName,
-		Namespace:          opts.namespace,
-		Root:               opts.root,
-		ResourcePolicyRoot: opts.resourcePolicyRoot,
-		Target:             opts.target,
-		Profile:            opts.profile,
-		ProfilesFile:       opts.profilesFile,
-		Inventory:          opts.inventory,
-		DecryptSecured:     opts.decryptSecured,
-		EnvFile:            opts.envFile,
-		EnvURL:             opts.envURL,
-		EnvURLHeaders:      opts.envURLHeaders,
-		EnvURLInsecure:     opts.envURLInsecure,
-		VarsSources:        opts.varsSources,
-		LegacyApplyEnv:     opts.legacyApplyEnv,
-		HelmEscapeAssets:   opts.helmEscapeAssets,
-		ReleaseManifest:    opts.releaseManifest,
-		ImageOverrides:     opts.imageOverrides,
-		ImagePolicy:        opts.imagePolicy,
-		ImageReference:     opts.imageReference,
-		ForceImageTag:      opts.forceImageTag,
-		ForceImagePrefix:   opts.forceImagePrefix,
-		SyncProfile:        opts.syncProfile,
-		SyncPrefix:         opts.syncPrefix,
-		SyncSet:            opts.syncSet,
-		Down:               opts.down,
-		YAMLIndent:         opts.yamlIndent,
+		Environment:         opts.envName,
+		Namespace:           opts.namespace,
+		Root:                opts.root,
+		ResourcePolicyRoot:  opts.resourcePolicyRoot,
+		Target:              opts.target,
+		Profile:             opts.profile,
+		ProfilesFile:        opts.profilesFile,
+		Inventory:           opts.inventory,
+		DecryptSecured:      opts.decryptSecured,
+		EnvFile:             opts.envFile,
+		EnvURL:              opts.envURL,
+		EnvURLHeaders:       opts.envURLHeaders,
+		EnvURLInsecure:      opts.envURLInsecure,
+		VarsSources:         opts.varsSources,
+		LegacyApplyEnv:      opts.legacyApplyEnv,
+		HelmEscapeAssets:    opts.helmEscapeAssets,
+		ReleaseManifest:     opts.releaseManifest,
+		CustomerReleaseName: opts.customerReleaseName,
+		ImageOverrides:      opts.imageOverrides,
+		ImagePolicy:         opts.imagePolicy,
+		ImageReference:      opts.imageReference,
+		ForceImageTag:       opts.forceImageTag,
+		ForceImagePrefix:    opts.forceImagePrefix,
+		SyncProfile:         opts.syncProfile,
+		SyncPrefix:          opts.syncPrefix,
+		SyncSet:             opts.syncSet,
+		Down:                opts.down,
+		YAMLIndent:          opts.yamlIndent,
 	}
 }
 
