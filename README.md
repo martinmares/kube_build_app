@@ -809,21 +809,42 @@ inconsistent image and metadata versions. Without `--release-manifest`,
 `RELEASE_ID` continues to come only from the configured external variable
 sources.
 
-`--customer-release-name TSM-Core_RE61_SP_04.01` records the customer release
-on each generated Deployment Pod template as
-`cloud-app.cz/customer-release-name`. It is independent of the release manifest's
-image `release_id` and of deployment revisions such as `.r2`. When a
-`simple-idm-token-proxy` sidecar is used, configure its environment from that
-Pod annotation with the Downward API:
+`--release-manifest` reads the image `release_id` from the manifest content.
+`--customer-release-id TSM-Core_RE61_SP_04.01` supplies the independent
+customer release ID. The generated Deployment metadata carries
+`app.kubernetes.io/release-id` and, when supplied,
+`app.kubernetes.io/customer-release-id` labels. Both values must fit Kubernetes
+label syntax (at most 63 characters). Neither label is added to the Deployment
+selector or Pod template.
 
-```yaml
-envs:
-  - name: CUSTOMER_RELEASE_NAME
-    field_path: "metadata.annotations['cloud-app.cz/customer-release-name']"
+With a release manifest, the build also creates one stable ConfigMap per sync set,
+for example `release-context-dev`, with `RELEASE_ID` and optional
+`CUSTOMER_RELEASE_ID` data. Every regular container, including sidecars, gets
+explicit `configMapKeyRef` environment entries. The customer entry is optional
+and remains in the Pod template even when no customer ID is assigned. Init
+containers are not injected. Updating the ConfigMap does not change existing
+container environments or trigger a Deployment rollout; a newly created Pod
+reads the current values. The ConfigMap has sync order 100, before Deployments
+at order 200. Remove old manual Downward API entries for these two ENV names
+from app models; conflicting entries fail the build.
+
+The defaults can be adjusted independently:
+
+```bash
+kube-build-app build -e test --release-manifest release.yml \
+  --release-context-name tsm-release-context \
+  --release-id-env-name RELEASE_ID \
+  --customer-release-id-env-name CUSTOMER_RELEASE_ID
 ```
 
-The sidecar environment mapping is configured in the app model. Existing apps
-without the option keep their current manifests and proxy behavior.
+`--no-release-context-configmap` uses an externally managed ConfigMap while
+keeping ENV references. `--no-release-context-env` keeps ConfigMap generation
+but skips injection. Both flags together disable the runtime release context.
+When renaming ENV variables, configure `simple-idm-token-proxy` with
+`SIMPLE_IDM_TOKEN_PROXY_RELEASE_ID_ENV_NAME` and
+`SIMPLE_IDM_TOKEN_PROXY_CUSTOMER_RELEASE_ID_ENV_NAME` accordingly. Existing
+Pods retain the context with which they started; a one-time rollout occurs when
+switching from the old Pod-label/Downward API scheme to stable references.
 
 Image policy:
 

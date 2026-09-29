@@ -1,6 +1,7 @@
 package buildapp
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -1623,7 +1625,7 @@ containers:
       memory: {from: "128Mi", to: "256Mi"}
 `)
 
-	_, err := Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath, CustomerReleaseName: "TSM-Core_RE61_SP_04.01"})
+	_, err := Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath, CustomerReleaseID: "TSM-Core_RE61_SP_04.01"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1635,13 +1637,47 @@ containers:
 	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "image"); got != "registry.release/api:2.4" {
 		t.Fatalf("image = %q, want registry.release/api:2.4", got)
 	}
-	if got := digString(deployment, "spec", "template", "metadata", "annotations", customerReleaseAnnotation); got != "TSM-Core_RE61_SP_04.01" {
-		t.Fatalf("customer release annotation = %q", got)
+	if got := digString(deployment, "metadata", "labels", releaseIDLabel); got != "2.4" {
+		t.Fatalf("release ID label = %q", got)
+	}
+	if got := digString(deployment, "metadata", "labels", customerReleaseIDLabel); got != "TSM-Core_RE61_SP_04.01" {
+		t.Fatalf("customer release ID label = %q", got)
+	}
+	if got := digString(deployment, "spec", "template", "metadata", "labels", releaseIDLabel); got != "" {
+		t.Fatalf("Pod template release ID = %q, want absent", got)
+	}
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "env", "0", "valueFrom", "configMapKeyRef", "name"); got != "release-context-test" {
+		t.Fatalf("release context ref = %q", got)
+	}
+	context := loadYAML(t, filepath.Join(target, "assets", "shared", "release-context-test.yml"))
+	if got := digString(context, "data", "RELEASE_ID"); got != "2.4" {
+		t.Fatalf("context release ID = %q", got)
+	}
+	if got := digString(context, "data", "CUSTOMER_RELEASE_ID"); got != "TSM-Core_RE61_SP_04.01" {
+		t.Fatalf("context customer ID = %q", got)
+	}
+	if got := digString(deployment, "spec", "selector", "matchLabels", releaseIDLabel); got != "" {
+		t.Fatalf("release ID must not be added to selector: %q", got)
+	}
+	_, err = Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment = loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "metadata", "labels", releaseIDLabel); got != "2.4" {
+		t.Fatalf("dev release ID label = %q", got)
+	}
+	if got := digString(deployment, "metadata", "labels", customerReleaseIDLabel); got != "" {
+		t.Fatalf("dev customer release ID label must be absent, got %q", got)
+	}
+	context = loadYAML(t, filepath.Join(target, "assets", "shared", "release-context-test.yml"))
+	if got := digString(context, "data", "CUSTOMER_RELEASE_ID"); got != "" {
+		t.Fatalf("dev customer ID = %q", got)
 	}
 	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `
 name: api
-pod_annotations:
-  cloud-app.cz/customer-release-name: different-release
+labels:
+  app.kubernetes.io/customer-release-id: different-release
 containers:
   - name: api
     image: registry.local/api:latest
@@ -1649,9 +1685,130 @@ containers:
       cpu: {from: "100m", to: "200m"}
       memory: {from: "128Mi", to: "256Mi"}
 `)
-	_, err = Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath, CustomerReleaseName: "TSM-Core_RE61_SP_04.01"})
-	if err == nil || !strings.Contains(err.Error(), "conflicts with customer release name") {
-		t.Fatalf("conflicting pod annotation should fail, got %v", err)
+	_, err = Build(Options{Environment: "test", Root: root, Target: target, ReleaseManifest: manifestPath, CustomerReleaseID: "TSM-Core_RE61_SP_04.01"})
+	if err == nil || !strings.Contains(err.Error(), "conflicts with computed release ID") {
+		t.Fatalf("conflicting release label should fail, got %v", err)
+	}
+}
+
+func TestReleaseContextPatchChangesOnlyAffectedPodTemplate(t *testing.T) {
+	root := t.TempDir()
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{"environment": map[string]any{"NAMESPACE": "nac-test"}})
+	for _, app := range []string{"api", "worker"} {
+		writeFile(t, filepath.Join(envDir, "apps", app+".yml"), "name: "+app+"\ncontainers:\n  - name: "+app+"\n    image: registry.local/"+app+":latest\n    resources:\n      cpu: {from: \"100m\", to: \"200m\"}\n      memory: {from: \"128Mi\", to: \"256Mi\"}\n")
+	}
+	first := filepath.Join(root, "first.yml")
+	second := filepath.Join(root, "second.yml")
+	writeFile(t, first, "release_id: 2026.09.11.01\nimages:\n  - app_name: api\n    container_name: api\n    image: registry.release/api\n    tag: v1\n  - app_name: worker\n    container_name: worker\n    image: registry.release/worker\n    tag: v1\n")
+	writeFile(t, second, "release_id: 2026.09.11.02\nimages:\n  - app_name: api\n    container_name: api\n    image: registry.release/api\n    tag: v2\n  - app_name: worker\n    container_name: worker\n    image: registry.release/worker\n    tag: v1\n")
+	oldTarget, newTarget := filepath.Join(root, "old"), filepath.Join(root, "new")
+	for _, build := range []struct{ manifest, customer, target string }{{first, "RE_2026.09.11.01", oldTarget}, {second, "RE_2026.09.11.01.patch1", newTarget}} {
+		if _, err := Build(Options{Environment: "test", Root: root, Target: build.target, ReleaseManifest: build.manifest, CustomerReleaseID: build.customer, SyncProfile: "kube-deploy-sync"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, app := range []string{"api", "worker"} {
+		oldDeployment := loadYAML(t, filepath.Join(oldTarget, "deployments", app+"-deployment.yml"))
+		newDeployment := loadYAML(t, filepath.Join(newTarget, "deployments", app+"-deployment.yml"))
+		oldTemplate := oldDeployment["spec"].(map[string]any)["template"]
+		newTemplate := newDeployment["spec"].(map[string]any)["template"]
+		if equal := reflect.DeepEqual(oldTemplate, newTemplate); equal != (app == "worker") {
+			t.Fatalf("%s Pod template equal = %v", app, equal)
+		}
+	}
+	oldContext := loadYAML(t, filepath.Join(oldTarget, "assets", "shared", "release-context-test.yml"))
+	newContext := loadYAML(t, filepath.Join(newTarget, "assets", "shared", "release-context-test.yml"))
+	if reflect.DeepEqual(oldContext["data"], newContext["data"]) {
+		t.Fatal("release context data did not change")
+	}
+	if got := digString(newContext, "metadata", "annotations", "kube-build-app.io/sync-order"); got != "100" {
+		t.Fatalf("release context sync order = %q", got)
+	}
+	devTarget := filepath.Join(root, "dev")
+	if _, err := Build(Options{Environment: "test", Root: root, Target: devTarget, ReleaseManifest: first, SyncProfile: "kube-deploy-sync"}); err != nil {
+		t.Fatal(err)
+	}
+	devDeployment := loadYAML(t, filepath.Join(devTarget, "deployments", "worker-deployment.yml"))
+	oldDeployment := loadYAML(t, filepath.Join(oldTarget, "deployments", "worker-deployment.yml"))
+	if !reflect.DeepEqual(devDeployment["spec"].(map[string]any)["template"], oldDeployment["spec"].(map[string]any)["template"]) {
+		t.Fatal("first customer release ID changed worker Pod template")
+	}
+	contextPath := filepath.Join(devTarget, "assets", "shared", "release-context-test.yml")
+	before, err := os.ReadFile(contextPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Build(Options{Environment: "test", Root: root, Target: devTarget, ReleaseManifest: first, SyncProfile: "kube-deploy-sync"}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(contextPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("repeated build changed release context ConfigMap")
+	}
+}
+
+func TestReleaseContextOptionsAndManualEnvConflict(t *testing.T) {
+	root := t.TempDir()
+	envDir := filepath.Join(root, "test")
+	target := filepath.Join(root, "out")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{"environment": map[string]any{"NAMESPACE": "nac-test"}})
+	writeFile(t, filepath.Join(root, "release.yml"), "release_id: 2.4\n")
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    image: registry.local/api:latest
+    envs:
+      - name: RELEASE_ID
+        field_path: metadata.labels['app.kubernetes.io/release-id']
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+	opts := Options{Environment: "test", Root: root, Target: target, ReleaseManifest: filepath.Join(root, "release.yml")}
+	if _, err := Build(opts); err == nil || !strings.Contains(err.Error(), `ENV "RELEASE_ID" conflicts`) {
+		t.Fatalf("ENV conflict = %v", err)
+	}
+	opts.ReleaseContextName = "custom-context"
+	opts.ReleaseIDEnvName = "APP_RELEASE_ID"
+	opts.CustomerReleaseIDEnvName = "APP_CUSTOMER_RELEASE_ID"
+	opts.DisableReleaseContextConfigMap = true
+	if _, err := Build(opts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "assets", "shared", "custom-context.yml")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected generated ConfigMap: %v", err)
+	}
+	deployment := loadYAML(t, filepath.Join(target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "env", "1", "name"); got != "APP_RELEASE_ID" {
+		t.Fatalf("custom ENV = %q", got)
+	}
+	opts.DisableReleaseContextEnv = true
+	opts.DisableReleaseContextConfigMap = false
+	otherTarget := filepath.Join(root, "other")
+	opts.Target = otherTarget
+	if _, err := Build(opts); err != nil {
+		t.Fatal(err)
+	}
+	deployment = loadYAML(t, filepath.Join(otherTarget, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "env", "1", "name"); got != "" {
+		t.Fatalf("unexpected injected ENV = %q", got)
+	}
+}
+
+func TestReleaseIDLabelsRejectInvalidValues(t *testing.T) {
+	for _, value := range []string{"a/b", "a_", strings.Repeat("a", 64)} {
+		if err := validateReleaseLabelValue("release manifest ID", value); err == nil {
+			t.Fatalf("accepted invalid release ID %q", value)
+		}
+	}
+	for _, value := range []string{"2026.09.10.02", "TSM-Core_RE42_SP02"} {
+		if err := validateReleaseLabelValue("release manifest ID", value); err != nil {
+			t.Fatalf("rejected valid release ID %q: %v", value, err)
+		}
 	}
 }
 

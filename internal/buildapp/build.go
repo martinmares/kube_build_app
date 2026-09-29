@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -26,42 +27,52 @@ import (
 )
 
 const appLabel = "app.kubernetes.io/name"
-const customerReleaseAnnotation = "cloud-app.cz/customer-release-name"
+const releaseIDLabel = "app.kubernetes.io/release-id"
+const customerReleaseIDLabel = "app.kubernetes.io/customer-release-id"
+const defaultReleaseIDEnvName = "RELEASE_ID"
+const defaultCustomerReleaseIDEnvName = "CUSTOMER_RELEASE_ID"
 
-var customerReleaseNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var releaseLabelValuePattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`)
+var releaseContextNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+var releaseContextEnvNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type Options struct {
-	Environment         string
-	Namespace           string
-	Root                string
-	ResourcePolicyRoot  string
-	Target              string
-	Profile             string
-	ProfilesFile        string
-	Inventory           bool
-	DecryptSecured      bool
-	EncjsonPath         string
-	EncjsonLegacyPath   string
-	EncjsonKeydir       string
-	EnvFile             string
-	EnvURL              string
-	EnvURLHeaders       []string
-	EnvURLInsecure      bool
-	VarsSources         []string
-	LegacyApplyEnv      bool
-	HelmEscapeAssets    bool
-	ReleaseManifest     string
-	CustomerReleaseName string
-	ImageOverrides      []string
-	ImagePolicy         string
-	ImageReference      string
-	ForceImageTag       string
-	ForceImagePrefix    string
-	SyncProfile         string
-	SyncPrefix          string
-	SyncSet             string
-	Down                []string
-	YAMLIndent          int
+	Environment                    string
+	Namespace                      string
+	Root                           string
+	ResourcePolicyRoot             string
+	Target                         string
+	Profile                        string
+	ProfilesFile                   string
+	Inventory                      bool
+	DecryptSecured                 bool
+	EncjsonPath                    string
+	EncjsonLegacyPath              string
+	EncjsonKeydir                  string
+	EnvFile                        string
+	EnvURL                         string
+	EnvURLHeaders                  []string
+	EnvURLInsecure                 bool
+	VarsSources                    []string
+	LegacyApplyEnv                 bool
+	HelmEscapeAssets               bool
+	ReleaseManifest                string
+	CustomerReleaseID              string
+	ReleaseContextName             string
+	ReleaseIDEnvName               string
+	CustomerReleaseIDEnvName       string
+	DisableReleaseContextConfigMap bool
+	DisableReleaseContextEnv       bool
+	ImageOverrides                 []string
+	ImagePolicy                    string
+	ImageReference                 string
+	ForceImageTag                  string
+	ForceImagePrefix               string
+	SyncProfile                    string
+	SyncPrefix                     string
+	SyncSet                        string
+	Down                           []string
+	YAMLIndent                     int
 }
 
 type Result struct {
@@ -640,9 +651,8 @@ var cgroupExporterDefaultVars = []envVar{
 }
 
 func Build(opts Options) (Result, error) {
-	if opts.CustomerReleaseName != "" &&
-		(len(opts.CustomerReleaseName) > 128 || !customerReleaseNamePattern.MatchString(opts.CustomerReleaseName)) {
-		return Result{}, fmt.Errorf("customer release name must be 1-128 characters: letters, digits, dot, underscore or hyphen")
+	if err := validateReleaseLabelValue("customer release ID", opts.CustomerReleaseID); err != nil {
+		return Result{}, err
 	}
 	if strings.TrimSpace(opts.Environment) == "" {
 		return Result{}, errors.New("environment is required")
@@ -668,6 +678,27 @@ func Build(opts Options) (Result, error) {
 	vars, err := loadBuildVars(envDir, opts)
 	if err != nil {
 		return Result{}, err
+	}
+	releaseID := ""
+	if strings.TrimSpace(opts.ReleaseManifest) != "" {
+		manifest, err := loadReleaseManifest(opts.ReleaseManifest)
+		if err != nil {
+			return Result{}, err
+		}
+		releaseID = strings.TrimSpace(manifest.ReleaseID)
+		if err := validateReleaseLabelValue("release manifest ID", releaseID); err != nil {
+			return Result{}, err
+		}
+	}
+	if opts.CustomerReleaseID != "" && releaseID == "" {
+		return Result{}, errors.New("customer release ID requires a release manifest with release_id")
+	}
+	var releaseContext *releaseContextSpec
+	if releaseID != "" {
+		releaseContext, err = newReleaseContextSpec(opts, releaseID)
+		if err != nil {
+			return Result{}, err
+		}
 	}
 
 	appFiles, err := listAppFiles(appsDir)
@@ -726,6 +757,23 @@ func Build(opts Options) (Result, error) {
 		result.Events = append(result.Events, BuildEvent{Type: "namespace_override", Name: vars["NAMESPACE"]})
 	}
 	result.Events = append(result.Events, BuildEvent{Type: "shared_assets", Count: len(sharedAssets)})
+	if releaseContext != nil && !opts.DisableReleaseContextConfigMap {
+		for _, asset := range sharedAssets {
+			if asset.VolumeName == releaseContext.Name {
+				return Result{}, fmt.Errorf("release context ConfigMap %q conflicts with an existing shared asset", releaseContext.Name)
+			}
+		}
+		if err := os.MkdirAll(sharedAssetsDir, 0o755); err != nil {
+			return Result{}, err
+		}
+		outPath := filepath.Join(sharedAssetsDir, releaseContext.Name+".yml")
+		object := renderReleaseContextConfigMap(*releaseContext, vars["NAMESPACE"], opts.CustomerReleaseID, sharedAssetsWave)
+		if err := writeRenderedObject(outPath, object, opts, syncMetadataSpec{ID: syncObjectID(opts, "ConfigMap", vars["NAMESPACE"], releaseContext.Name), Order: 100}); err != nil {
+			return Result{}, err
+		}
+		result.Assets = append(result.Assets, outPath)
+		result.Events = append(result.Events, BuildEvent{Type: "asset", Kind: "release-context", Name: releaseContext.Name, Path: outPath})
+	}
 	for _, asset := range sharedAssets {
 		if asset.Kind != "configmap" && asset.Kind != "" {
 			continue
@@ -768,7 +816,7 @@ func Build(opts Options) (Result, error) {
 			result.ServiceAccounts = append(result.ServiceAccounts, outPath)
 			result.Events = append(result.Events, BuildEvent{Type: "serviceaccount", App: app.Name, Name: effectiveServiceAccountName(app), Path: outPath})
 		}
-		deployment, err := renderDeployment(app, vars["NAMESPACE"], resolvedAssets, appSharedAssets, rolloutAnnotations, opts.CustomerReleaseName)
+		deployment, err := renderDeployment(app, vars["NAMESPACE"], resolvedAssets, appSharedAssets, rolloutAnnotations, releaseID, opts.CustomerReleaseID, releaseContext, !opts.DisableReleaseContextEnv)
 		if err != nil {
 			return Result{}, err
 		}
@@ -4021,10 +4069,126 @@ func cloneAssetsMap(items map[string][]resolvedAsset) map[string][]resolvedAsset
 	return out
 }
 
-func renderDeployment(app appModel, namespace string, assets map[string][]resolvedAsset, sharedAssets []resolvedAsset, rolloutAnnotations map[string]string, customerReleaseName string) (map[string]any, error) {
+func validateReleaseLabelValue(name, value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) > 63 || !releaseLabelValuePattern.MatchString(value) {
+		return fmt.Errorf("%s %q must be a Kubernetes label value of at most 63 characters (letters, digits, dot, underscore or hyphen; start and end with a letter or digit)", name, value)
+	}
+	return nil
+}
+
+func setReleaseLabel(labels map[string]any, appName, key, value string) error {
+	if value == "" {
+		return nil
+	}
+	if existing, ok := labels[key]; ok && fmt.Sprint(existing) != value {
+		return fmt.Errorf("%s: label %q conflicts with computed release ID", appName, key)
+	}
+	labels[key] = value
+	return nil
+}
+
+type releaseContextSpec struct {
+	Name                     string
+	ReleaseID                string
+	ReleaseIDEnvName         string
+	CustomerReleaseIDEnvName string
+}
+
+func newReleaseContextSpec(opts Options, releaseID string) (*releaseContextSpec, error) {
+	name := strings.TrimSpace(opts.ReleaseContextName)
+	if name == "" {
+		name = "release-context-" + syncMetadataSet(opts)
+	}
+	if len(name) > 63 || !releaseContextNamePattern.MatchString(name) {
+		return nil, fmt.Errorf("release context ConfigMap name %q must be a DNS label of at most 63 characters; use --release-context-name to override", name)
+	}
+	releaseEnv := strings.TrimSpace(opts.ReleaseIDEnvName)
+	if releaseEnv == "" {
+		releaseEnv = defaultReleaseIDEnvName
+	}
+	customerEnv := strings.TrimSpace(opts.CustomerReleaseIDEnvName)
+	if customerEnv == "" {
+		customerEnv = defaultCustomerReleaseIDEnvName
+	}
+	if !releaseContextEnvNamePattern.MatchString(releaseEnv) || !releaseContextEnvNamePattern.MatchString(customerEnv) || releaseEnv == customerEnv {
+		return nil, fmt.Errorf("release context ENV names %q and %q must be distinct valid environment variable names", releaseEnv, customerEnv)
+	}
+	return &releaseContextSpec{Name: name, ReleaseID: releaseID, ReleaseIDEnvName: releaseEnv, CustomerReleaseIDEnvName: customerEnv}, nil
+}
+
+func renderReleaseContextConfigMap(ctx releaseContextSpec, namespace, customerReleaseID string, argoCDWave int) map[string]any {
+	data := map[string]any{defaultReleaseIDEnvName: ctx.ReleaseID}
+	if customerReleaseID != "" {
+		data[defaultCustomerReleaseIDEnvName] = customerReleaseID
+	}
+	metadata := map[string]any{"name": ctx.Name, "namespace": namespace}
+	if argoCDWave != 0 {
+		metadata["annotations"] = map[string]any{"argocd.argoproj.io/sync-wave": fmt.Sprint(argoCDWave * -1)}
+	}
+	return map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata, "data": data}
+}
+
+func addReleaseContextEnvs(container map[string]any, appName string, ctx releaseContextSpec) error {
+	var envs []map[string]any
+	if current, ok := container["env"]; ok {
+		switch values := current.(type) {
+		case []map[string]any:
+			envs = values
+		case []any:
+			for _, value := range values {
+				entry, valid := value.(map[string]any)
+				if !valid {
+					return fmt.Errorf("%s/%v: cannot inject release context into unsupported raw env list", appName, container["name"])
+				}
+				envs = append(envs, entry)
+			}
+		default:
+			return fmt.Errorf("%s/%v: cannot inject release context into unsupported raw env list", appName, container["name"])
+		}
+	}
+	for _, item := range []struct {
+		name, key string
+		optional  bool
+	}{
+		{ctx.ReleaseIDEnvName, defaultReleaseIDEnvName, false},
+		{ctx.CustomerReleaseIDEnvName, defaultCustomerReleaseIDEnvName, true},
+	} {
+		ref := map[string]any{"name": ctx.Name, "key": item.key}
+		if item.optional {
+			ref["optional"] = true
+		}
+		computed := map[string]any{"name": item.name, "valueFrom": map[string]any{"configMapKeyRef": ref}}
+		found := false
+		for _, existing := range envs {
+			if existing["name"] != item.name {
+				continue
+			}
+			if !reflect.DeepEqual(existing, computed) {
+				return fmt.Errorf("%s/%v: ENV %q conflicts with generated release context reference", appName, container["name"], item.name)
+			}
+			found = true
+			break
+		}
+		if !found {
+			envs = append(envs, computed)
+		}
+	}
+	container["env"] = envs
+	return nil
+}
+
+func renderDeployment(app appModel, namespace string, assets map[string][]resolvedAsset, sharedAssets []resolvedAsset, rolloutAnnotations map[string]string, releaseID, customerReleaseID string, releaseContext *releaseContextSpec, injectReleaseContextEnv bool) (map[string]any, error) {
 	labels := map[string]any{appLabel: app.Name}
 	for key, value := range app.Labels {
 		labels[key] = value
+	}
+	for _, identity := range []struct{ key, value string }{{releaseIDLabel, releaseID}, {customerReleaseIDLabel, customerReleaseID}} {
+		if err := setReleaseLabel(labels, app.Name, identity.key, identity.value); err != nil {
+			return nil, err
+		}
 	}
 	workloadAssets := workloadIdentityAssets(app)
 	workloadAssets = append(workloadAssets, downwardAPIAssets(app)...)
@@ -4042,6 +4206,13 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 		sidecarAssets = append(sidecarAssets, workloadAssets...)
 		sidecarAssets = append(sidecarAssets, runtimeAssetMountAssets(app, sidecar.Name, true)...)
 		containers = append(containers, renderContainer(app, sidecar, sidecarAssets, sharedAssets, app.Tools))
+	}
+	if releaseContext != nil && injectReleaseContextEnv {
+		for _, container := range containers {
+			if err := addReleaseContextEnvs(container, app.Name, *releaseContext); err != nil {
+				return nil, err
+			}
+		}
 	}
 	initAssets := assets
 	if len(workloadAssets) > 0 {
@@ -4116,12 +4287,6 @@ func renderDeployment(app appModel, namespace string, assets map[string][]resolv
 			return nil, fmt.Errorf("pod annotation %q conflicts with computed rollout checksum", key)
 		}
 		podAnnotations[key] = value
-	}
-	if customerReleaseName != "" {
-		if existing, ok := podAnnotations[customerReleaseAnnotation]; ok && fmt.Sprint(existing) != customerReleaseName {
-			return nil, fmt.Errorf("%s: pod annotation %q conflicts with customer release name", app.Name, customerReleaseAnnotation)
-		}
-		podAnnotations[customerReleaseAnnotation] = customerReleaseName
 	}
 	if len(podAnnotations) > 0 {
 		templateMetadata["annotations"] = podAnnotations

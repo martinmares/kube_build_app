@@ -16,47 +16,52 @@ import (
 )
 
 type cliOptions struct {
-	envName             string
-	namespace           string
-	root                string
-	resourcePolicyRoot  string
-	target              string
-	profile             string
-	profilesFile        string
-	inventory           bool
-	decryptSecured      bool
-	envFile             string
-	envURL              string
-	envURLHeaders       []string
-	envURLInsecure      bool
-	varsSources         []string
-	legacyApplyEnv      bool
-	helmEscapeAssets    bool
-	releaseManifest     string
-	customerReleaseName string
-	imageOverrides      []string
-	imagePolicy         string
-	imageReference      string
-	forceImageTag       string
-	forceImagePrefix    string
-	syncProfile         string
-	syncPrefix          string
-	syncSet             string
-	down                []string
-	yamlIndent          int
-	list                bool
-	summary             bool
-	summaryFormat       string
-	verbose             bool
-	logFormat           string
-	color               string
-	debug               bool
-	showVersion         bool
-	skeletonEnv         string
-	skeletonNS          string
-	skeletonRegistry    string
-	skeletonRelease     string
-	force               bool
+	envName                   string
+	namespace                 string
+	root                      string
+	resourcePolicyRoot        string
+	target                    string
+	profile                   string
+	profilesFile              string
+	inventory                 bool
+	decryptSecured            bool
+	envFile                   string
+	envURL                    string
+	envURLHeaders             []string
+	envURLInsecure            bool
+	varsSources               []string
+	legacyApplyEnv            bool
+	helmEscapeAssets          bool
+	releaseManifest           string
+	customerReleaseID         string
+	releaseContextName        string
+	releaseIDEnvName          string
+	customerReleaseIDEnvName  string
+	noReleaseContextConfigMap bool
+	noReleaseContextEnv       bool
+	imageOverrides            []string
+	imagePolicy               string
+	imageReference            string
+	forceImageTag             string
+	forceImagePrefix          string
+	syncProfile               string
+	syncPrefix                string
+	syncSet                   string
+	down                      []string
+	yamlIndent                int
+	list                      bool
+	summary                   bool
+	summaryFormat             string
+	verbose                   bool
+	logFormat                 string
+	color                     string
+	debug                     bool
+	showVersion               bool
+	skeletonEnv               string
+	skeletonNS                string
+	skeletonRegistry          string
+	skeletonRelease           string
+	force                     bool
 }
 
 func main() {
@@ -103,7 +108,12 @@ func newRootCommand(info appinfo.Info, opts *cliOptions) *cobra.Command {
 	root.PersistentFlags().BoolVar(&opts.legacyApplyEnv, "legacy-apply-env", false, "resolve legacy {{VAR}} placeholders in generated deployment and external service manifests")
 	root.PersistentFlags().BoolVar(&opts.helmEscapeAssets, "helm-escape-assets", false, "escape remaining {{VAR}} placeholders in text assets")
 	root.PersistentFlags().StringVarP(&opts.releaseManifest, "release-manifest", "r", "", "release manifest YAML path")
-	root.PersistentFlags().StringVar(&opts.customerReleaseName, "customer-release-name", "", "customer release name recorded on generated Pod templates")
+	root.PersistentFlags().StringVar(&opts.customerReleaseID, "customer-release-id", "", "customer release ID recorded in deployment metadata and release context")
+	root.PersistentFlags().StringVar(&opts.releaseContextName, "release-context-name", "", "stable release context ConfigMap name; defaults to release-context-<sync-set>")
+	root.PersistentFlags().StringVar(&opts.releaseIDEnvName, "release-id-env-name", "RELEASE_ID", "container ENV name for release ID")
+	root.PersistentFlags().StringVar(&opts.customerReleaseIDEnvName, "customer-release-id-env-name", "CUSTOMER_RELEASE_ID", "container ENV name for customer release ID")
+	root.PersistentFlags().BoolVar(&opts.noReleaseContextConfigMap, "no-release-context-configmap", false, "do not generate release context ConfigMap")
+	root.PersistentFlags().BoolVar(&opts.noReleaseContextEnv, "no-release-context-env", false, "do not inject release context ENV references")
 	root.PersistentFlags().StringArrayVar(&opts.imageOverrides, "image", nil, "override image as app/container=image; repeatable or comma-separated")
 	root.PersistentFlags().StringVar(&opts.imagePolicy, "image-policy", "fallback", "image override policy: fallback or strict")
 	root.PersistentFlags().StringVar(&opts.imageReference, "image-reference", "auto", "release image reference: auto, digest, or tag")
@@ -403,34 +413,39 @@ func writeFileNoClobber(path string, content []byte, force bool) error {
 
 func toBuildOptions(opts *cliOptions) buildapp.Options {
 	return buildapp.Options{
-		Environment:         opts.envName,
-		Namespace:           opts.namespace,
-		Root:                opts.root,
-		ResourcePolicyRoot:  opts.resourcePolicyRoot,
-		Target:              opts.target,
-		Profile:             opts.profile,
-		ProfilesFile:        opts.profilesFile,
-		Inventory:           opts.inventory,
-		DecryptSecured:      opts.decryptSecured,
-		EnvFile:             opts.envFile,
-		EnvURL:              opts.envURL,
-		EnvURLHeaders:       opts.envURLHeaders,
-		EnvURLInsecure:      opts.envURLInsecure,
-		VarsSources:         opts.varsSources,
-		LegacyApplyEnv:      opts.legacyApplyEnv,
-		HelmEscapeAssets:    opts.helmEscapeAssets,
-		ReleaseManifest:     opts.releaseManifest,
-		CustomerReleaseName: opts.customerReleaseName,
-		ImageOverrides:      opts.imageOverrides,
-		ImagePolicy:         opts.imagePolicy,
-		ImageReference:      opts.imageReference,
-		ForceImageTag:       opts.forceImageTag,
-		ForceImagePrefix:    opts.forceImagePrefix,
-		SyncProfile:         opts.syncProfile,
-		SyncPrefix:          opts.syncPrefix,
-		SyncSet:             opts.syncSet,
-		Down:                opts.down,
-		YAMLIndent:          opts.yamlIndent,
+		Environment:                    opts.envName,
+		Namespace:                      opts.namespace,
+		Root:                           opts.root,
+		ResourcePolicyRoot:             opts.resourcePolicyRoot,
+		Target:                         opts.target,
+		Profile:                        opts.profile,
+		ProfilesFile:                   opts.profilesFile,
+		Inventory:                      opts.inventory,
+		DecryptSecured:                 opts.decryptSecured,
+		EnvFile:                        opts.envFile,
+		EnvURL:                         opts.envURL,
+		EnvURLHeaders:                  opts.envURLHeaders,
+		EnvURLInsecure:                 opts.envURLInsecure,
+		VarsSources:                    opts.varsSources,
+		LegacyApplyEnv:                 opts.legacyApplyEnv,
+		HelmEscapeAssets:               opts.helmEscapeAssets,
+		ReleaseManifest:                opts.releaseManifest,
+		CustomerReleaseID:              opts.customerReleaseID,
+		ReleaseContextName:             opts.releaseContextName,
+		ReleaseIDEnvName:               opts.releaseIDEnvName,
+		CustomerReleaseIDEnvName:       opts.customerReleaseIDEnvName,
+		DisableReleaseContextConfigMap: opts.noReleaseContextConfigMap,
+		DisableReleaseContextEnv:       opts.noReleaseContextEnv,
+		ImageOverrides:                 opts.imageOverrides,
+		ImagePolicy:                    opts.imagePolicy,
+		ImageReference:                 opts.imageReference,
+		ForceImageTag:                  opts.forceImageTag,
+		ForceImagePrefix:               opts.forceImagePrefix,
+		SyncProfile:                    opts.syncProfile,
+		SyncPrefix:                     opts.syncPrefix,
+		SyncSet:                        opts.syncSet,
+		Down:                           opts.down,
+		YAMLIndent:                     opts.yamlIndent,
 	}
 }
 
