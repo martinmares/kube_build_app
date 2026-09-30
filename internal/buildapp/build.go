@@ -695,6 +695,13 @@ func Build(opts Options) (Result, error) {
 	}
 	var releaseContext *releaseContextSpec
 	if releaseID != "" {
+		if strings.TrimSpace(opts.ReleaseContextName) == "" {
+			name, err := releaseContextNameFromDefaults(filepath.Join(appsDir, "_defaults.yml"))
+			if err != nil {
+				return Result{}, err
+			}
+			opts.ReleaseContextName = name
+		}
 		releaseContext, err = newReleaseContextSpec(opts, releaseID)
 		if err != nil {
 			return Result{}, err
@@ -3328,6 +3335,7 @@ func mergeDefaults(defaultsContent, appContent string) (string, error) {
 
 	removeMappingValue(defaultsNode, "container_profiles")
 	removeMappingValue(defaultsNode, "sidecar_definitions")
+	removeMappingValue(defaultsNode, "release_context_name")
 	merged := mergeMappingNodes(defaultsNode, appNode)
 	mergedVars, err := mergeVarsFromNodes(defaultsNode, appNode)
 	if err != nil {
@@ -4100,7 +4108,7 @@ type releaseContextSpec struct {
 func newReleaseContextSpec(opts Options, releaseID string) (*releaseContextSpec, error) {
 	name := strings.TrimSpace(opts.ReleaseContextName)
 	if name == "" {
-		name = "release-context-" + syncMetadataSet(opts)
+		name = "release-context"
 	}
 	if len(name) > 63 || !releaseContextNamePattern.MatchString(name) {
 		return nil, fmt.Errorf("release context ConfigMap name %q must be a DNS label of at most 63 characters; use --release-context-name to override", name)
@@ -4117,6 +4125,28 @@ func newReleaseContextSpec(opts Options, releaseID string) (*releaseContextSpec,
 		return nil, fmt.Errorf("release context ENV names %q and %q must be distinct valid environment variable names", releaseEnv, customerEnv)
 	}
 	return &releaseContextSpec{Name: name, ReleaseID: releaseID, ReleaseIDEnvName: releaseEnv, CustomerReleaseIDEnvName: customerEnv}, nil
+}
+
+func releaseContextNameFromDefaults(path string) (string, error) {
+	content, err := readOptionalFile(path)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(content) == "" {
+		return "", nil
+	}
+	node, err := parseYAMLMapping(content)
+	if err != nil {
+		return "", fmt.Errorf("_defaults.yml: %w", err)
+	}
+	value := mappingValue(node, "release_context_name")
+	if value == nil {
+		return "", nil
+	}
+	if value.Kind != yaml.ScalarNode || value.Tag != "!!str" || strings.TrimSpace(value.Value) == "" {
+		return "", errors.New("_defaults.yml release_context_name must be a nonempty string")
+	}
+	return strings.TrimSpace(value.Value), nil
 }
 
 func renderReleaseContextConfigMap(ctx releaseContextSpec, namespace, customerReleaseID string, argoCDWave int) map[string]any {

@@ -1646,10 +1646,10 @@ containers:
 	if got := digString(deployment, "spec", "template", "metadata", "labels", releaseIDLabel); got != "" {
 		t.Fatalf("Pod template release ID = %q, want absent", got)
 	}
-	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "env", "0", "valueFrom", "configMapKeyRef", "name"); got != "release-context-test" {
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "env", "0", "valueFrom", "configMapKeyRef", "name"); got != "release-context" {
 		t.Fatalf("release context ref = %q", got)
 	}
-	context := loadYAML(t, filepath.Join(target, "assets", "shared", "release-context-test.yml"))
+	context := loadYAML(t, filepath.Join(target, "assets", "shared", "release-context.yml"))
 	if got := digString(context, "data", "RELEASE_ID"); got != "2.4" {
 		t.Fatalf("context release ID = %q", got)
 	}
@@ -1670,7 +1670,7 @@ containers:
 	if got := digString(deployment, "metadata", "labels", customerReleaseIDLabel); got != "" {
 		t.Fatalf("dev customer release ID label must be absent, got %q", got)
 	}
-	context = loadYAML(t, filepath.Join(target, "assets", "shared", "release-context-test.yml"))
+	context = loadYAML(t, filepath.Join(target, "assets", "shared", "release-context.yml"))
 	if got := digString(context, "data", "CUSTOMER_RELEASE_ID"); got != "" {
 		t.Fatalf("dev customer ID = %q", got)
 	}
@@ -1717,8 +1717,8 @@ func TestReleaseContextPatchChangesOnlyAffectedPodTemplate(t *testing.T) {
 			t.Fatalf("%s Pod template equal = %v", app, equal)
 		}
 	}
-	oldContext := loadYAML(t, filepath.Join(oldTarget, "assets", "shared", "release-context-test.yml"))
-	newContext := loadYAML(t, filepath.Join(newTarget, "assets", "shared", "release-context-test.yml"))
+	oldContext := loadYAML(t, filepath.Join(oldTarget, "assets", "shared", "release-context.yml"))
+	newContext := loadYAML(t, filepath.Join(newTarget, "assets", "shared", "release-context.yml"))
 	if reflect.DeepEqual(oldContext["data"], newContext["data"]) {
 		t.Fatal("release context data did not change")
 	}
@@ -1734,7 +1734,7 @@ func TestReleaseContextPatchChangesOnlyAffectedPodTemplate(t *testing.T) {
 	if !reflect.DeepEqual(devDeployment["spec"].(map[string]any)["template"], oldDeployment["spec"].(map[string]any)["template"]) {
 		t.Fatal("first customer release ID changed worker Pod template")
 	}
-	contextPath := filepath.Join(devTarget, "assets", "shared", "release-context-test.yml")
+	contextPath := filepath.Join(devTarget, "assets", "shared", "release-context.yml")
 	before, err := os.ReadFile(contextPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1748,6 +1748,41 @@ func TestReleaseContextPatchChangesOnlyAffectedPodTemplate(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("repeated build changed release context ConfigMap")
+	}
+}
+
+func TestReleaseContextNameFromDefaultsAndCLIOverride(t *testing.T) {
+	root := t.TempDir()
+	envDir := filepath.Join(root, "test")
+	writeJSON(t, filepath.Join(envDir, "env.unsecured.json"), map[string]any{"environment": map[string]any{"NAMESPACE": "nac-test"}})
+	writeFile(t, filepath.Join(root, "release.yml"), "release_id: 2.4\n")
+	writeFile(t, filepath.Join(envDir, "apps", "_defaults.yml"), "release_context_name: release-context-test\n")
+	writeFile(t, filepath.Join(envDir, "apps", "api.yml"), `name: api
+containers:
+  - name: api
+    image: registry.local/api:latest
+    resources:
+      cpu: {from: "100m", to: "200m"}
+      memory: {from: "128Mi", to: "256Mi"}
+`)
+	opts := Options{Environment: "test", Root: root, Target: filepath.Join(root, "from-defaults"), ReleaseManifest: filepath.Join(root, "release.yml")}
+	if _, err := Build(opts); err != nil {
+		t.Fatal(err)
+	}
+	deployment := loadYAML(t, filepath.Join(opts.Target, "deployments", "api-deployment.yml"))
+	if got := digString(deployment, "spec", "template", "spec", "containers", "0", "env", "0", "valueFrom", "configMapKeyRef", "name"); got != "release-context-test" {
+		t.Fatalf("defaults release context ref = %q", got)
+	}
+	loadYAML(t, filepath.Join(opts.Target, "assets", "shared", "release-context-test.yml"))
+
+	opts.Target = filepath.Join(root, "from-cli")
+	opts.ReleaseContextName = "release-context-cli"
+	if _, err := Build(opts); err != nil {
+		t.Fatal(err)
+	}
+	loadYAML(t, filepath.Join(opts.Target, "assets", "shared", "release-context-cli.yml"))
+	if _, err := os.Stat(filepath.Join(opts.Target, "assets", "shared", "release-context-test.yml")); !os.IsNotExist(err) {
+		t.Fatalf("defaults ConfigMap generated despite CLI override: %v", err)
 	}
 }
 

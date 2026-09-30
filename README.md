@@ -817,8 +817,8 @@ customer release ID. The generated Deployment metadata carries
 label syntax (at most 63 characters). Neither label is added to the Deployment
 selector or Pod template.
 
-With a release manifest, the build also creates one stable ConfigMap per sync set,
-for example `release-context-dev`, with `RELEASE_ID` and optional
+With a release manifest, the build also creates one stable ConfigMap named
+`release-context` by default, with `RELEASE_ID` and optional
 `CUSTOMER_RELEASE_ID` data. Every regular container, including sidecars, gets
 explicit `configMapKeyRef` environment entries. The customer entry is optional
 and remains in the Pod template even when no customer ID is assigned. Init
@@ -828,7 +828,10 @@ reads the current values. The ConfigMap has sync order 100, before Deployments
 at order 200. Remove old manual Downward API entries for these two ENV names
 from app models; conflicting entries fail the build.
 
-The defaults can be adjusted independently:
+Set `release_context_name: release-context-dev` at the top level of
+`<environment>/apps/_defaults.yml` to give a build a stable name when multiple
+environment repositories target the same namespace. `--release-context-name`
+overrides this setting. The other defaults can be adjusted independently:
 
 ```bash
 kube-build-app build -e test --release-manifest release.yml \
