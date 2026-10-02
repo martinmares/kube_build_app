@@ -2842,6 +2842,8 @@ func validateImagePrefix(prefix string) error {
 }
 
 type releaseManifest struct {
+	APIVersion   string         `yaml:"apiVersion"`
+	Kind         string         `yaml:"kind"`
 	ReleaseID    string         `yaml:"release_id"`
 	CreatedAt    string         `yaml:"created_at"`
 	Bundle       *releaseBundle `yaml:"bundle"`
@@ -2902,6 +2904,9 @@ func loadReleaseManifest(path string) (releaseManifest, error) {
 }
 
 func (m *releaseManifest) normalizeAndValidate() error {
+	if (m.APIVersion != "" || m.Kind != "") && (m.APIVersion != "oci-toolbox/v1" || m.Kind != "ImageRelease") {
+		return fmt.Errorf("unsupported release format %q / %q", m.APIVersion, m.Kind)
+	}
 	m.ReleaseID = strings.TrimSpace(m.ReleaseID)
 	m.CreatedAt = strings.TrimSpace(m.CreatedAt)
 	m.RegistryBase = strings.TrimSpace(m.RegistryBase)
