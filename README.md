@@ -195,6 +195,7 @@ If `-t/--target` is omitted, the default output directory is:
 Preferred modern commands:
 
 ```bash
+kube-build-app examples
 kube-build-app build -e test -R environments -t deploy/test
 kube-build-app validate -e test -R environments
 kube-build-app summary -e test -R environments
@@ -205,6 +206,27 @@ kube-build-app scaffold app api -e test -R environments
 kube-build-app import -f deployment.yml -o environments/test/apps/api.yml
 kube-build-app completion zsh
 ```
+
+### Examples Command
+
+Run `kube-build-app examples` for a self-contained English guide with runnable
+commands and clearly marked JSON/YAML input files. It covers a first build,
+inspection, defaults and references, app ports and probes, variable sources,
+external resource policies, release images, sync metadata, scaffolding, and
+importing an existing Deployment.
+
+Terminal output uses color when available; redirected output is plain text.
+Use `--color always` or `--color never` to override this, for example:
+
+```bash
+kube-build-app examples | less
+kube-build-app examples > examples.txt
+kube-build-app examples --color never
+```
+
+The catalog uses placeholder paths and registry names for workflows requiring
+your own environment. The included smoke fixture example can run directly from
+the source checkout.
 
 ### External Resource Policy
 
